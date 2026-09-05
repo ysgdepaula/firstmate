@@ -1689,10 +1689,12 @@ _fm_status_open_decision_origins() {  # <status-file>
 # replayed by a whole-log re-read is dropped rather than re-steered or
 # re-presented. Every consumer that decides whether a line is a FINISH asks the
 # pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
-# the away-mode supervisor's wedge aging, bin/fm-crew-state.sh's status-log
-# fallback, and a secondmate's parent-channel ledger - so the classifier and the
-# authoritative current-state reader cannot disagree about whether a task is
-# finished. A consumer deciding whether to suppress a LIVE presentation asks
+# the away-mode supervisor's wedge aging, both of bin/fm-crew-state.sh's
+# status-log paths (its verb mapping and its ci-ready gate), a secondmate's
+# parent-channel ledger, and bin/fm-captain-hold.sh's open-decision retirement -
+# so the classifier and the authoritative current-state reader cannot disagree
+# about whether a task is finished, and nothing retires a captain's open decision
+# on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
 # status_done_guard_holds instead, because a line whose reminder budget is spent
 # is deliberately firstmate's to see and must stay recoverable.
 FM_DONE_GUARD_REMINDER_MAX_DEFAULT=2
