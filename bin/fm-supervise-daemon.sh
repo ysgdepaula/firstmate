@@ -1403,9 +1403,13 @@ handle_wake() {  # <reason> <state>
         last=$(last_status_line "$state/$task.status")
         # Clear wedge aging only for terminal (or legacy free-text) captain lines.
         # Nonterminal progress verbs keep possible-wedge markers even if free text
-        # once looked captain-relevant or was written into a seen marker.
+        # once looked captain-relevant or was written into a seen marker. A done:
+        # that does not satisfy its task's pull-request delivery contract is not a
+        # finish either (fm-classify-lib.sh's done contract guard), so an idle pane
+        # behind one keeps aging toward a wedge instead of reading as complete.
         _clear_wedge=0
-        if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+        if [ -n "$last" ] && status_is_captain_relevant "$last" \
+          && ! status_done_contract_unmet "$state/$task.status" "$last"; then
           if status_is_terminal_verb "$last"; then
             _clear_wedge=1
           else

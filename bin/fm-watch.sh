@@ -1329,6 +1329,35 @@ signal_files_actionable() {  # <status-file> ...
   return "$found"
 }
 
+# 0 when every file in this signal batch belongs to a task whose newest status
+# line is a done: the PR-delivery contract guard already withheld and steered back
+# to its worker (fm-classify-lib.sh's "PR-delivery done contract guard" owns that
+# verdict and the durable instruction behind it). That is positive absorb
+# evidence of the same kind as a provably-working verdict: the worker holds a
+# steering-inbox record telling it exactly what its done: must carry, and firstmate
+# has nothing to do with the event that produced this wake. The inbox's own
+# re-ring ladder escalates as a stale wake if the worker never acknowledges it, so
+# absorbing here defers the wake rather than swallowing it.
+# Strict on purpose: a batch that also references any other file, or a task whose
+# log has moved on past the withheld line, falls through to the existing proofs
+# exactly as before. A bare turn-end marker for the same task rides along, because
+# it is that same worker's same turn boundary.
+signal_done_guard_steered() {  # <file> ...
+  local f base task
+  [ "$#" -gt 0 ] || return 1
+  for f in "$@"; do
+    base=${f##*/}
+    case "$base" in
+      *.status)     task=${base%.status} ;;
+      *.turn-ended) task=${base%.turn-ended} ;;
+      *)            return 1 ;;
+    esac
+    [ -n "$task" ] || return 1
+    status_done_guard_holds "$STATE/$task.status" || return 1
+  done
+  return 0
+}
+
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
 # fm-push-transition-lib.sh because push and poll paths must write one format.
 # Mark each actionable status log through the endpoint captured by the heartbeat
@@ -1820,19 +1849,22 @@ EOF
     #     (even via an interactive menu that wrote no done: status), waiting on a
     #     decision, or wedged. Absorbing such a turn-end is exactly the
     #     swallowed-finish this change guards against.
-    # Positive evidence is either an authoritative provably-working verdict or, in a
-    # home that opts in with config/turnend-churn-absorb and for a BARE turn-end
-    # alone, a pane that rendered something since the previous poll
-    # (signal_turnend_panes_churned) - the only proof available to a harness whose
-    # busy state has no verified semantic source, bounded so it cannot defer that
-    # task's turn-ends forever. Absorb stays evidence-driven: with neither proof the
-    # wake surfaces exactly as before.
+    # Positive evidence is a durable steer the PR-delivery done contract guard
+    # already issued for every task in the batch (signal_done_guard_steered), an
+    # authoritative provably-working verdict, or, in a home that opts in with
+    # config/turnend-churn-absorb and for a BARE turn-end alone, a pane that
+    # rendered something since the previous poll (signal_turnend_panes_churned) -
+    # the only proof available to a harness whose busy state has no verified
+    # semantic source, bounded so it cannot defer that task's turn-ends forever.
+    # Absorb stays evidence-driven: with none of those proofs the wake surfaces
+    # exactly as before.
     # Actionable -> enqueue, advance .seen-* markers, exit. Benign (a no-verb wake
     # whose crew is still executing) in always-on mode -> advance the markers so it
-    # will not re-fire, log, and keep blocking without enqueuing. Both evidence
-    # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
-    # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
-    # status span, and the capture only once the authoritative verdict comes up short.
+    # will not re-fire, log, and keep blocking without enqueuing. The last two
+    # evidence checks are costly (a bounded no-mistakes call, then a pane capture),
+    # so the || ordering evaluates them ONLY for a non-afk signal with no
+    # captain-relevant status span whose batch the free guard read did not already
+    # account for, and the capture only once the authoritative verdict comes up short.
     FM_SIGNAL_SURFACE_ENDPOINTS=''
     FM_SIGNAL_NEEDS_DECISION_FILES=''
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
@@ -1849,7 +1881,8 @@ EOF
     # exact same "signal:$files" wake it always has.
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      || { ! signal_done_guard_steered $files \
+           && ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"

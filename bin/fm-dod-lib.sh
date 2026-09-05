@@ -10,6 +10,11 @@
 # mode is refused rather than silently rendered as the pipeline contract.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# fm_dod_done_form is the one owner of the exact terminal `done:` status line
+# each delivery mode requires. Every brief renders it from here, and the
+# supervisor's PR-delivery done contract guard (bin/fm-classify-lib.sh) quotes
+# it back to a worker that reports done without it, so the form a worker is held
+# to and the form it was told are the same string.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -190,16 +195,35 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
 EOF
 }
 
+# The exact terminal `done:` status line one delivery mode requires, and the
+# single statement of that form. fm_dod_block renders it into every generated
+# brief and promotion, and bin/fm-classify-lib.sh's done contract guard quotes
+# it back when a worker's `done:` misses it. An unknown mode is refused rather
+# than defaulted, so a new mode cannot silently inherit another's contract.
+fm_dod_done_form() {  # <mode> <task-id>
+  case "$1" in
+    no-mistakes) printf 'done: PR {url} checks green' ;;
+    direct-PR)   printf 'done: PR {url}' ;;
+    local-only)  printf 'done: ready in branch fm/%s' "$2" ;;
+    *)
+      echo "error: fm_dod_done_form: unknown delivery mode '$1'" >&2
+      return 1 ;;
+  esac
+}
+
 fm_dod_block() {  # <mode> <task-id>
-  local mode=$1 id=$2
+  local mode=$1 id=$2 done_form
+  done_form=$(fm_dod_done_form "$mode" "$id") || return 1
   case "$mode" in
     direct-PR)
       cat <<EOF
 # Definition of done
 Delivery contract: mode=direct-PR
+Terminal status line for this mode, exact form: \`$done_form\`.
+That line is the ONLY \`done:\` this task accepts. A \`done:\` carrying no real PR URL is not read as a completion: it is sent straight back to you with this contract while the task stays recorded as working.
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append the terminal status line above carrying that PR's real URL and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;
@@ -207,10 +231,11 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=local-only
+Terminal status line for this mode, exact form: \`$done_form\`.
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$id\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch fm/$id\` to the status file and stop.
+When it is implemented and committed, append the terminal status line above to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
       ;;
@@ -218,9 +243,11 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
+Terminal status line for this mode, exact form: \`$done_form\`.
+That line is the ONLY \`done:\` that completes this task. An earlier \`done:\` is an implementation handoff, not a completion: it is not read as done, and it is sent straight back to you with this contract while the task stays recorded as working.
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
+That handoff line is what puts you into the pipeline: act on the instruction that comes back and run /no-mistakes to validate and ship a PR.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
@@ -245,7 +272,7 @@ Two firstmate-specific rules layer on top of that guidance:
 - NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide.
   It auto-resolves every gate including ask-user findings with no escalation, and answering your own ask-user finding is a hard rule violation.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append the terminal status line above carrying that PR's real URL and stop. You are finished.
 EOF
       ;;
     *)

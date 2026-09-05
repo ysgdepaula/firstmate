@@ -27,7 +27,7 @@
 # A missing, malformed, identity-mismatched, or past-end classified position reads
 # from byte 0, preferring a bounded duplicate over a lost event.
 #
-# There are five documented exceptions. The absorb classification
+# There are six documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -48,7 +48,11 @@
 # fm_pids_with_cwd_under) is the exception to the no-globals rule as well: it
 # publishes its result, and its opt-in single-cycle reuse, in module globals, so a
 # caller must run it in the shell that owns the cycle rather than inside a command
-# substitution. Its own block below owns that contract.
+# substitution. Its own block below owns that contract. status_done_guard_defer
+# (see "PR-delivery done contract guard" below) writes a steering-inbox record and
+# its own reminder budget, because a done: that does not satisfy its task's
+# pull-request delivery contract is withheld from the actionable set only when the
+# worker has provably been steered back to that contract in its place.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -1230,6 +1234,7 @@ EOF
   fi
   if [ "$rc" -eq 0 ]; then
     rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
+      "$state/.$task.done-guard" \
       "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
   fi
   fm_lock_release "$lock" || rc=1
@@ -1644,6 +1649,209 @@ _fm_status_open_decision_origins() {  # <status-file>
   printf '%s' "$origins"
 }
 
+# --- PR-delivery done contract guard ----------------------------------------
+#
+# A ship task recorded as mode=no-mistakes or mode=direct-PR delivers through a
+# pull request, so the `done:` that completes it MUST carry that PR's link.
+# bin/fm-dod-lib.sh's fm_dod_done_form owns the exact form each mode's brief
+# states, and this guard holds the worker to that same string. A `done:` with no
+# link is not a completion: it is a worker that stopped at "my local tests pass".
+# Presenting one as a done is what let three workers in a single night be
+# recorded as finished with no pipeline run and no pull request.
+#
+# The guard is mechanical rather than advisory. status_span_first_actionable_record
+# withholds such a line from the actionable set and instead enqueues ONE contract
+# reminder into that task's own steering inbox (bin/fm-task-inbox-lib.sh), so the
+# worker is steered back onto its delivery path and the task keeps reading as
+# working. That reminder write and the budget record below are this library's
+# SIXTH documented exception to the pure-read contract in the file header.
+#
+# Firstmate is woken only when the reminder does not take, along two independent
+# bounded paths:
+#   - the reminder is an ORDINARY inbox record, so the watcher's existing re-ring
+#     ladder escalates it as a stale wake once the worker has left it
+#     unacknowledged for FM_TASK_INBOX_GRACE_SECS * (FM_TASK_INBOX_RING_MAX + 1),
+#     about six minutes on the defaults (bin/fm-task-inbox-lib.sh owns the ladder);
+#   - the guard spends at most FM_DONE_GUARD_REMINDER_MAX reminders per task, so a
+#     worker that keeps re-reporting a linkless done has its next such line
+#     presented to firstmate unchanged instead of absorbed again.
+# An inbox that cannot be written, or a budget that cannot be persisted, also
+# presents the line: the guard withholds a captain event only when it has provably
+# steered the worker in its place.
+#
+# local-only is deliberately out of scope. It has no pull request, its own
+# terminal form is unchanged, and nothing here reads or writes its state. A task
+# with no recorded delivery mode - a scout, a secondmate, an adopted or foreign
+# log - is untouched for the same reason.
+FM_DONE_GUARD_REMINDER_MAX_DEFAULT=2
+
+fm_done_guard_reminder_max() {
+  local m=${FM_DONE_GUARD_REMINDER_MAX:-$FM_DONE_GUARD_REMINDER_MAX_DEFAULT}
+  case "$m" in ''|*[!0-9]*) m=$FM_DONE_GUARD_REMINDER_MAX_DEFAULT ;; esac
+  printf '%s' "$m"
+}
+
+# The delivery mode recorded for the task whose status log this is, read from the
+# sibling <id>.meta bin/fm-spawn.sh publishes (that script owns the field). Prints
+# nothing when there is no readable regular meta and no mode= line in it, which is
+# the ordinary shape for a scout, a secondmate, and a foreign log.
+status_task_delivery_mode() {  # <status-file>
+  local f=$1 dir base meta
+  dir=$(dirname "$f")
+  base=$(basename "$f")
+  meta="$dir/${base%.status}.meta"
+  [ -f "$meta" ] && [ -r "$meta" ] && [ ! -L "$meta" ] || return 0
+  grep '^mode=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2-
+}
+
+# 0 when a status line carries a task pull-request link. bin/fm-pr-lib.sh's
+# fm_pr_url_parse is the ONE definition of what such a URL is on each supported
+# forge, so this only splits the line into candidate words and asks it, rather
+# than restating a second URL shape here. That library is sourced inside a
+# subshell because sourcing it resets its FM_PR_* globals, which a caller of this
+# classifier may be holding.
+status_line_has_pr_link() {  # <status-line>
+  local line=$1
+  case "$line" in *https://*) ;; *) return 1 ;; esac
+  (
+    # shellcheck source=/dev/null
+    . "$_FM_CLASSIFY_LIB_DIR/fm-pr-lib.sh" 2>/dev/null || exit 1
+    while IFS= read -r word; do
+      case "$word" in https://*) ;; *) continue ;; esac
+      # Trailing sentence punctuation is prose, not part of the URL.
+      while :; do
+        case "$word" in
+          *.|*,|*\;|*:|*!|*\)|*\]|*\}) word=${word%?} ;;
+          *) break ;;
+        esac
+      done
+      fm_pr_url_parse "$word" && exit 0
+    done <<EOF
+$(printf '%s' "$line" | tr '[:space:]' '\n')
+EOF
+    exit 1
+  )
+}
+
+# 0 when this line is a `done:` its task's PR-delivery contract requires to carry
+# a pull-request link and it does not. A pure read of the line plus the task's
+# recorded delivery mode, so every presentation path can ask it without side
+# effects; only status_done_guard_defer below acts on the answer.
+status_done_contract_unmet() {  # <status-file> <status-line>
+  local f=$1 line=$2 mode
+  [ -n "$line" ] || return 1
+  [ "$(status_line_verb "$line")" = 'done' ] || return 1
+  status_line_has_pr_link "$line" && return 1
+  mode=$(status_task_delivery_mode "$f")
+  case "$mode" in
+    no-mistakes|direct-PR) return 0 ;;
+  esac
+  return 1
+}
+
+# The task's reminder-budget record, alongside its status log the same way the
+# open-decisions cursor is: "<reminders spent><TAB><line already reminded for>".
+_fm_done_guard_path() {  # <status-file>
+  local f=$1 dir base
+  dir=$(dirname "$f")
+  base=$(basename "$f")
+  printf '%s/.%s.done-guard' "$dir" "${base%.status}"
+}
+
+# Read the budget record into FM_DONE_GUARD_COUNT / FM_DONE_GUARD_LINE. A missing,
+# unreadable, or malformed record reads as a fresh budget, which spends a reminder
+# rather than losing one.
+_fm_done_guard_read() {  # <status-file>
+  local guard count='' line=''
+  FM_DONE_GUARD_COUNT=0
+  FM_DONE_GUARD_LINE=''
+  guard=$(_fm_done_guard_path "$1")
+  [ -f "$guard" ] && [ -r "$guard" ] && [ ! -L "$guard" ] || return 0
+  IFS=$(printf '\t') read -r count line < "$guard" 2>/dev/null || return 0
+  case "$count" in ''|*[!0-9]*) return 0 ;; esac
+  FM_DONE_GUARD_COUNT=$count
+  FM_DONE_GUARD_LINE=$line
+}
+
+# Forget the budget once the contract is satisfied, so a later task that reuses
+# this log starts from a full budget.
+status_done_guard_clear() {  # <status-file>
+  rm -f -- "$(_fm_done_guard_path "$1")" 2>/dev/null || true
+}
+
+# 0 when this task's newest status line is a linkless done the guard has already
+# withheld and steered back to the worker. Pure, and the evidence a supervisor
+# uses to absorb the wake that line produced: the worker holds a durable
+# instruction, so there is nothing for firstmate to do with the same event.
+status_done_guard_holds() {  # <status-file>
+  _fm_done_guard_read "$1"
+  [ -n "$FM_DONE_GUARD_LINE" ] || return 1
+  [ "$FM_DONE_GUARD_LINE" = "$(last_status_line "$1")" ]
+}
+
+# The reminder body: the worker's own line, its recorded contract, and the exact
+# form fm_dod_done_form owns, then a pointer to the brief rather than a second
+# copy of what that mode's Definition of done already says.
+_fm_done_guard_reminder_text() {  # <task-id> <mode> <status-line>
+  local id=$1 mode=$2 line=$3 form
+  if ! command -v fm_dod_done_form >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "$_FM_CLASSIFY_LIB_DIR/fm-dod-lib.sh" 2>/dev/null || return 1
+  fi
+  form=$(fm_dod_done_form "$mode" "$id") || return 1
+  cat <<EOF
+Firstmate contract check: your last status line was NOT accepted as done.
+
+  you appended:    $line
+  this task ships: mode=$mode
+  required form:   $form
+
+This task delivers through a pull request, so a done: with no real PR URL is not a completion.
+That line has not been presented to firstmate as done, and this task is still recorded as working.
+Re-read the "Definition of done" section of your brief: it states exactly what must happen before the required line above is true.
+Finish that, then append the required line carrying the real PR URL. Do not append another done: before then.
+EOF
+}
+
+# Act on one linkless done. Returns 0 when the line is withheld from the
+# actionable set because the worker has provably been steered, and 1 when it must
+# be presented to firstmate instead - a spent budget, an inbox that could not be
+# written, or a budget that could not be persisted.
+# NOT a pure read: this writes a steering-inbox record and the budget above.
+status_done_guard_defer() {  # <status-file> <status-line>
+  local f=$1 line=$2 state id guard mode text max
+  state=$(dirname "$f")
+  id=$(basename "$f")
+  id=${id%.status}
+  _fm_done_guard_read "$f"
+  # One append is classified by more than one cursor (the signal path and the
+  # heartbeat backstop each keep their own), so a repeat of the exact line already
+  # reminded for is absorbed without spending a second reminder on it.
+  [ "$FM_DONE_GUARD_LINE" = "$line" ] && return 0
+  max=$(fm_done_guard_reminder_max)
+  [ "$FM_DONE_GUARD_COUNT" -lt "$max" ] || return 1
+  mode=$(status_task_delivery_mode "$f")
+  text=$(_fm_done_guard_reminder_text "$id" "$mode" "$line") || return 1
+  if command -v fm_task_inbox_write >/dev/null 2>&1; then
+    fm_task_inbox_write "$state" "$id" "$text" > /dev/null || return 1
+  else
+    # A consumer that never loads the steering-inbox library still has to be able
+    # to steer, so it is loaded here instead - in a separate shell pinned to THIS
+    # task's state directory, because that library's own dependencies resolve a
+    # state root at load time and must not reach for another home's on behalf of
+    # a caller that never declared one. A prefix assignment on an external command
+    # keeps that pin out of the calling shell entirely.
+    # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+    FM_STATE_OVERRIDE=$state "${BASH:-bash}" -c '
+      . "$1/fm-task-inbox-lib.sh" 2>/dev/null || exit 1
+      fm_task_inbox_write "$2" "$3" "$4" > /dev/null
+    ' _ "$_FM_CLASSIFY_LIB_DIR" "$state" "$id" "$text" || return 1
+  fi
+  guard=$(_fm_done_guard_path "$f")
+  printf '%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$line" > "$guard" 2>/dev/null || return 1
+  return 0
+}
+
 status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file full_file prefix_file result
   local line verb key origins='' folded=0 rc=1 failed=0 prefix_lines=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
@@ -1728,6 +1936,16 @@ EOF
         rc=0
         ;;
       *)
+        # A ship task delivering through a pull request must carry that link on
+        # its done: line. A linkless one is steered back to the worker instead of
+        # being presented as a completion (see the done contract guard above).
+        if [ "$verb" = 'done' ]; then
+          if status_done_contract_unmet "$f" "$line"; then
+            status_done_guard_defer "$f" "$line" && continue
+          else
+            status_done_guard_clear "$f"
+          fi
+        fi
         [ -n "$events" ] && events="${events} ; "
         events="${events}${line}"
         rc=0
