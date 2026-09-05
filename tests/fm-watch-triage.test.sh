@@ -3843,7 +3843,7 @@ test_live_validation_in_a_mate_home_is_not_run_evidence() {
 # it, so the exclusion is proven against the shape firstmate actually produces.
 test_firstmate_own_nm_query_is_not_crew_progress() {
   local dir state fakebin out drain_out capture_file window key pane_hash sig wt back
-  local wpid pid=""
+  local wpid saved_path pid=""
   dir=$(make_case wedge-own-nm-query); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-own-query"; wt="$dir/wt"
@@ -3920,8 +3920,15 @@ test_firstmate_own_nm_query_is_not_crew_progress() {
   # Round 2 - firstmate's OWN bounded query into the same worktree, run through the
   # production launcher. Same worktree, same executable name, same live process; the
   # unchanged escalation must still fire.
-  ( PATH="$fakebin:$PATH"; fm_nm_run_bounded "$wt" 300 120 >/dev/null 2>&1 ) &
+  # The launcher is a shell function, so `env` cannot hand it the fake `no-mistakes`:
+  # PATH has to be set in the shell that calls it. Set it in this function's own
+  # scope and restore it immediately after the launch, so the launcher still resolves
+  # the fake binary without a subshell-local PATH.
+  saved_path=$PATH
+  PATH="$fakebin:$PATH"
+  fm_nm_run_bounded "$wt" 300 120 >/dev/null 2>&1 &
   pid=$!
+  PATH=$saved_path
   ownq_await_candidate || { ownq_reap_worktree; fail "firstmate's own bounded query never became visible"; }
   ownq_arm_threshold
   ownq_start; wpid=$!
@@ -4142,6 +4149,7 @@ exit 0
 SH
   chmod +x "$fakebin/lsof"
 
+  # shellcheck disable=SC2016 # The driver body must expand in the child bash, not here.
   out=$(env PATH="$fakebin:$PATH" FM_FAKE_LSOF_COUNT_FILE="$dir/armed.count" \
     FM_FAKE_LSOF_DIR="$dir/wt" bash -c '
       . "$1"
@@ -4167,6 +4175,7 @@ SH
 
   # Teardown's leaked-descendant reap never arms the cache because it kills what it
   # finds, so nothing may be remembered for it - including a failure.
+  # shellcheck disable=SC2016 # The driver body must expand in the child bash, not here.
   env PATH="$fakebin:$PATH" FM_FAKE_LSOF_COUNT_FILE="$dir/unarmed.count" \
     FM_FAKE_LSOF_DIR="$dir/wt" bash -c '
       . "$1"
