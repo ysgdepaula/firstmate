@@ -27,7 +27,7 @@
 # A missing, malformed, identity-mismatched, or past-end classified position reads
 # from byte 0, preferring a bounded duplicate over a lost event.
 #
-# There are four documented exceptions. The absorb classification
+# There are five documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -43,7 +43,12 @@
 # same meta file and then the live process table, including the parent of each
 # candidate so firstmate's own bounded queries never read as crew progress, for the
 # same callers under the same rule: it answers whether a validation run is bound to
-# this task's worktree when no run step could be attributed at all.
+# this task's worktree when no run step could be attributed at all. The cwd-binding
+# scan that probe and bin/fm-teardown.sh both read (fm_cwd_scan_capture and
+# fm_pids_with_cwd_under) is the exception to the no-globals rule as well: it
+# publishes its result, and its opt-in single-cycle reuse, in module globals, so a
+# caller must run it in the shell that owns the cycle rather than inside a command
+# substitution. Its own block below owns that contract.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
