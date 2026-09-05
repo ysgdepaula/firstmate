@@ -27,7 +27,7 @@
 # A missing, malformed, identity-mismatched, or past-end classified position reads
 # from byte 0, preferring a bounded duplicate over a lost event.
 #
-# There are three documented exceptions. The absorb classification
+# There are four documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -39,7 +39,10 @@
 # stays bounded by new appends instead of re-reading each task's whole lifetime
 # log every time. crew_worktree_written_since reads the task's meta file and walks
 # a bounded slice of its worktree instead of a status file, so callers run it only
-# at the moment they would otherwise escalate.
+# at the moment they would otherwise escalate. crew_nm_run_process_alive reads that
+# same meta file and then the live process table, for the same callers under the
+# same rule: it answers whether a validation run is bound to this task's worktree
+# when no run step could be attributed at all.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -1882,6 +1885,151 @@ crew_worktree_written_since() {  # <id> <state> <anchor-file>
       -type f -newer "$anchor" -print -quit 2>/dev/null || true)
   fi
   [ -n "$hit" ]
+}
+
+# Wall-clock seconds the live-run probe below may spend in its one process scan,
+# and the executable basename that identifies a no-mistakes invocation. Same rule
+# as the worktree walk's bound above and for the same reason: the scan runs
+# synchronously inside the caller's poll loop at the exact moment an escalation
+# would otherwise fire, so an unbounded scan against a wedged process table would
+# stall the supervisor that exists to notice a wedge. Hitting the bound reads as
+# no evidence, so the caller's escalation schedule is untouched. A value that is
+# not a positive integer is not a bound at all, so the default applies at the
+# point of use.
+FM_NM_PROCESS_TIMEOUT=${FM_NM_PROCESS_TIMEOUT:-10}
+FM_NM_PROCESS_NAME=${FM_NM_PROCESS_NAME:-no-mistakes}
+
+# Subcommands that name SHARED no-mistakes infrastructure rather than one task's
+# own validation run. This is a safety exclusion, not an optimization: the daemon
+# and its log sink serve every lane in the home at once, so their liveness says
+# nothing about whether THIS task is progressing. Were one ever started from
+# inside a task worktree, counting it as progress would silence that task's wedge
+# detector for as long as the home runs at all. Defaulted with the plain form so
+# an explicitly empty value stays empty, the documented way to ask for no
+# exclusion at all.
+FM_NM_PROCESS_SHARED_SUBCOMMANDS=${FM_NM_PROCESS_SHARED_SUBCOMMANDS-'daemon'}
+
+# Every pid whose CURRENT WORKING DIRECTORY is <dir> or under it, from one
+# system-wide `lsof -a -d cwd` scan (never the recursive +D file-tree walk, which
+# lsof itself documents as slow). Never $$, the calling shell's own pid.
+#
+# A process's working directory is a kernel fact rather than anything a tool
+# renders, which is what makes it a sound BINDING between a process and one task:
+# a task worktree path is unique per task and never shared, so a pid reported here
+# cannot belong to another task or to the primary checkout.
+#
+# <timeout-secs> is optional. Omitted, the scan is unbounded, which is what a
+# caller acting on the complete process list (teardown's leaked-descendant reap)
+# needs. Given, the scan runs under that wall-clock bound and a scan that outlives
+# it reports failure like any other unusable result, which is what a caller
+# running inside a poll loop needs.
+#
+# 0 with the matching pids on stdout, 0 with empty output when provably nothing
+# matches, and 1 when the scan could not establish a safe result at all (no lsof,
+# an lsof error or timeout, or output this parser does not recognize). Callers
+# distinguish those two zero cases themselves; the shared owner deliberately does
+# not decide what "no holder" means for them.
+fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
+  local dir=$1 bound=${2-} out pid path line
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  dir=$(cd "$dir" && pwd -P) || return 1
+  case "$bound" in
+    ''|*[!0-9]*|0) out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
+    *) out=$(fm_run_timed "$bound" lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
+  esac
+  [ -n "$out" ] || return 0
+  pid=
+  while IFS= read -r line; do
+    case "$line" in
+      p*)
+        pid=${line#p}
+        case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+        ;;
+      fcwd) [ -n "$pid" ] || return 1 ;;
+      n*)
+        [ -n "$pid" ] || return 1
+        path=${line#n}
+        case "$path" in
+          "$dir"|"$dir"/*)
+            [ -n "$pid" ] && [ "$pid" != "$$" ] && printf '%s\n' "$pid"
+            ;;
+        esac
+        ;;
+      '') ;;
+      *) return 1 ;;
+    esac
+  done <<EOF
+$out
+EOF
+}
+
+# 0 when a live no-mistakes validation process is bound to <id>'s own worktree:
+# positive, mechanical evidence that this task is progressing even though its pane
+# has gone quiet and no run step could be attributed to it.
+#
+# This is the fourth liveness input the wedge detector has, after pane quietness,
+# the run step, and the worktree write probe above, and it exists because the run
+# step is not always readable. bin/fm-crew-state.sh attributes a run only through a
+# bounded `no-mistakes axi status` call; when that call times out or answers for
+# another branch there is no run step at all, and a crew sitting in a long fix or
+# review round behind a static pane reads exactly like a wedged one - the
+# 2026-09-02 case of a crew escalated as a possible wedge, twice, while its own
+# `no-mistakes axi respond --action fix` had been running for eleven minutes.
+#
+# Two independent signals must BOTH hold, because a false positive here silences a
+# wedge alarm, which is the unsafe direction:
+#   - the process's working directory is under this task's recorded worktree, the
+#     kernel fact that binds it to this task and nothing else, and
+#   - its executable is the no-mistakes binary, which is what makes it a validation
+#     run rather than an unrelated process the crew happened to leave behind.
+# Shared no-mistakes infrastructure is excluded by subcommand even when it
+# satisfies both, per FM_NM_PROCESS_SHARED_SUBCOMMANDS above.
+#
+# 1 for every other outcome, including an id with no recorded worktree, a worktree
+# that is gone, a secondmate task (which records a provisioned firstmate home, not
+# a code tree, exactly as the worktree probe excludes), a scan that cannot run
+# because lsof is absent, and a scan that fails or times out. Absence of evidence
+# is never absorption: every one of those leaves the caller's existing escalation
+# schedule exactly as it was, so a genuinely wedged crew still escalates on the
+# unchanged schedule and a home without lsof loses nothing it had before.
+#
+# Not a pure status-file read (see the header): one bounded process scan plus one
+# `ps` read per bound pid, which callers must reach only when they are otherwise
+# about to escalate, never on every poll.
+crew_nm_run_process_alive() {  # <id> <state>
+  local id=$1 state=$2 wt kind bound pids pid cmd exe base rest sub shared word
+  local -a shared_words=()
+  [ -n "$id" ] || return 1
+  wt=$(grep '^worktree=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 1
+  kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ "$kind" != secondmate ] || return 1
+  command -v lsof >/dev/null 2>&1 || return 1
+  bound=$FM_NM_PROCESS_TIMEOUT
+  case "$bound" in ''|*[!0-9]*|0) bound=10 ;; esac
+  read -r -a shared_words <<< "$FM_NM_PROCESS_SHARED_SUBCOMMANDS"
+  pids=$(fm_pids_with_cwd_under "$wt" "$bound") || return 1
+  [ -n "$pids" ] || return 1
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    cmd=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
+    [ -n "$cmd" ] || continue
+    exe=${cmd%%[[:space:]]*}
+    base=${exe##*/}
+    [ "$base" = "$FM_NM_PROCESS_NAME" ] || continue
+    rest=${cmd#"$exe"}
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    sub=${rest%%[[:space:]]*}
+    shared=0
+    for word in ${shared_words[@]+"${shared_words[@]}"}; do
+      if [ "$sub" = "$word" ]; then shared=1; break; fi
+    done
+    [ "$shared" -eq 0 ] || continue
+    return 0
+  done <<EOF
+$pids
+EOF
+  return 1
 }
 
 # 0 (benign/absorb) if EVERY task referenced by a no-verb "signal:" wake is provably

@@ -2,7 +2,7 @@
 
 Audience: maintainer verification.
 
-This record supports current session-start, turn-end, watcher-continuity, and wedge-alarm guarantees.
+This record supports current session-start, turn-end, watcher-continuity, wedge-deferral, and wedge-alarm guarantees.
 Operator behavior and active limits remain in the linked current guides.
 Task-specific chronology, temporary paths, run identifiers, and delivery transcripts remain in private reports or PR evidence.
 
@@ -537,3 +537,50 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+## Live validation-run wedge deferral
+
+The wedge detector defers an escalation when a live `no-mistakes` process is bound to the task's own worktree (`crew_nm_run_process_alive` in `bin/fm-classify-lib.sh`).
+Two of that probe's inputs are emitted by the validation tool rather than derived from firstmate's own state - the executable name a run presents in the process table, and the first argument that distinguishes shared infrastructure from one task's run - so both were confirmed against real running processes rather than against a stub.
+
+Checked on 2026-09-05 with no-mistakes v1.57.0 (0fcbbff), Darwin 25.5.0, and lsof 4.91.
+
+A real fix round belonging to another lane was in flight at the time.
+
+```sh
+ps -eo pid,args | grep '[n]o-mistakes'
+```
+
+Observed output, truncated to the fields the probe reads:
+
+```
+  896 /Users/ydeep/.no-mistakes/bin/no-mistakes daemon run --root ...
+  992 /Users/ydeep/.no-mistakes/bin/no-mistakes daemon log-sink --root ...
+27529 no-mistakes axi respond --action fix --findings ...
+```
+
+Both process shapes present the binary as the `no-mistakes` basename of their first argv field, whether invoked through PATH or through an absolute install path, which is what `FM_NM_PROCESS_NAME` matches.
+The shared daemon and its log sink present `daemon` as their first argument, which is what `FM_NM_PROCESS_SHARED_SUBCOMMANDS` excludes.
+
+```sh
+lsof -a -d cwd -Fpn -p 27529
+lsof -a -d cwd -Fpn -p 896
+```
+
+Observed output:
+
+```
+p27529
+fcwd
+n/Users/ydeep/.treehouse/firstmate-7bab20/4/firstmate
+p896
+fcwd
+n/Users/ydeep/.no-mistakes
+```
+
+The fix round's working directory is its own task worktree, and the shared daemon's is the no-mistakes home, so the working-directory binding alone already separates one task's run from home-wide infrastructure; the subcommand exclusion is the second, independent guard.
+
+Driving the probe against each of those directories in turn returned a deferral for the task worktree that owned the run and an escalation for the no-mistakes home.
+
+The portable logic - both signals required, either one alone escalating, and the shared-subcommand exclusion - is pinned without a real validation run by `test_live_validation_run_defers_the_wedge_escalation` in `tests/fm-watch-triage.test.sh`, which drives real processes and asserts each half of the conjunction separately.
+Re-run the commands above after a no-mistakes upgrade that changes how a run is launched.

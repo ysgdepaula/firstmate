@@ -2357,6 +2357,113 @@ test_live_declared_wait_churn_honors_the_resurface_throttle() {
   pass "a parked live worker surfaces once, absorbs pane churn for the whole re-surface window, then re-surfaces when it elapses"
 }
 
+# --- a declared wait whose pane flaps busy: the cadence is the DECLARATION's ----
+# The 2026-09-04/05 alarm loop, and the last of the three forms the original report
+# named. The two forms above are about pane HASH churn under a wait; this one is
+# about the pane's BUSY verdict changing under it. A parked worker's pane reads busy
+# for a poll or two whenever its harness redraws a footer or it holds a foreground
+# poll in view, and every such poll used to clear the whole pause bookkeeping,
+# throttle included, because a busy pane was read as "real work resumed". The next
+# quiet poll then read as the FIRST sight of a brand-new wait and alarmed again, so
+# one standing wait re-alarmed far inside its own cadence - observed twice within ten
+# minutes on a wait that had already stood for hours.
+#
+# Nothing about a pane's rendering ends the worker's declared wait; only the worker's
+# own status log does, and the stale loop already clears everything the moment that
+# log stops declaring one. The contract pinned here: the first sight surfaces, the
+# declaration-scoped cadence then survives every busy/at-rest transition and every
+# watcher generation (each round below is a fresh watcher process), the window still
+# re-surfaces once when its cadence elapses, and a genuinely NEW declaration still
+# surfaces at once - so this is a throttle that holds, not an alarm that was removed.
+#
+# The busy rounds also pin the third reported form directly: a pane that is busy
+# under a declared wait whose completed-turn bound has NOT been crossed (a scout
+# holding a foreground review poll) is absorbed on the long cadence, with no wedge
+# timer and no escalation count. The over-the-bound half of that case is
+# test_busy_declared_pause_is_rechecked_not_wedge_escalated above.
+test_declared_wait_cadence_survives_pane_busy_transitions() {
+  local dir state fakebin out capture_file statusf window key sig throttle wakes bare
+  dir=$(make_case declared-wait-busy-flap); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/parked.status"
+  window="test:fm-parked"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
+  printf 'paused: awaiting the captain arbitration\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  throttle="$state/.paused-resurfaced-$key"
+  # A completed turn that is NOT past the busy-turn bound, so the busy rounds below
+  # take the flap path rather than the crossed-bound path the test above covers.
+  touch "$state/parked.turn-ended"
+  prime_turnend_seen "$state/parked.turn-ended"
+
+  printf 'parked, elapsed 1s' > "$capture_file"
+  printf '%s' "$(hash_text "parked, elapsed 1s")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "first sight of a parked live worker did not surface"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the first surface"
+  [ -e "$throttle" ] || fail "the first surface recorded no re-surface throttle"
+
+  # The pane now reads BUSY under the same standing wait, first on a changed hash and
+  # then on a stable one - the two branches that each used to wipe the throttle.
+  printf 'holding the review poll\nCtrl+c:cancel\n' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "a busy poll under a standing declared wait exited instead of absorbing"
+  [ -e "$throttle" ] || fail "a busy poll on a changed hash cleared the declared wait's re-surface throttle"
+  [ -e "$state/.paused-$key" ] || fail "a busy poll on a changed hash cleared the declared wait's pause flag"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "a second busy poll under the same wait exited instead of absorbing"
+  [ -e "$throttle" ] || fail "a busy poll on a stable hash cleared the declared wait's re-surface throttle"
+  [ -e "$state/.paused-$key" ] || fail "a busy poll on a stable hash cleared the declared wait's pause flag"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a busy pane under a declared wait below the turn bound started the wedge timer"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a busy pane under a declared wait below the turn bound advanced the escalation count"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 0 ] || fail "busy polls under a standing declared wait alarmed $wakes time(s)"
+
+  # Back at rest on a new hash: this is the poll that used to read as a first sight
+  # and produce the duplicate alarm.
+  printf 'parked, elapsed 9s' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "an at-rest poll after a busy transition re-alarmed a standing declared wait"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 0 ] \
+    || fail "a declared wait re-alarmed $wakes time(s) inside its own cadence after a busy transition"
+  [ -e "$throttle" ] || fail "the at-rest poll after a busy transition cleared the re-surface throttle"
+
+  # Absorbing must never become silence: once the cadence elapses the same wait
+  # re-surfaces exactly once, on its plain window identity.
+  set_mtime "$(( $(date +%s) - 2000 ))" "$throttle"
+  printf 'parked, elapsed 20s' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "a declared wait did not re-surface once its cadence elapsed"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 1 ] || fail "an elapsed cadence produced $wakes wakes instead of one"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the elapsed-cadence re-surface"
+
+  # The discriminator: a genuinely NEW declaration, raised right after another busy
+  # transition, must still surface at once. A pane transition preserving the cadence
+  # is the fix; a pane transition preserving it for a wait the worker has replaced
+  # would be the alarm going missing instead.
+  printf 'holding the review poll again\nCtrl+c:cancel\n' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "the second busy transition exited instead of absorbing"
+  printf 'paused: awaiting the captain on the replacement call\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  printf 'parked on the replacement call' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "a replacement declared wait inherited the previous wait's cadence across a busy transition"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  bare=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 1 ] || fail "a replacement declared wait produced $wakes wakes instead of one"
+  [ "$bare" -eq 1 ] || fail "a replacement declared wait changed the wake identity: $(cat "$state/.wake-queue")"
+  pass "a declared wait keeps ONE cadence across busy/at-rest pane transitions and watcher generations, still re-surfaces when it elapses, and a replacement wait still surfaces at once"
+}
+
 test_secondmate_paused_resurfaces_in_normal_mode() {
   local dir state fakebin out capture_file statusf window key pane_hash sig pid back
   dir=$(make_case secondmate-paused-resurface); state="$dir/state"; fakebin="$dir/fakebin"
@@ -3419,6 +3526,168 @@ test_write_deferral_resurfaces_on_the_bounded_cadence() {
   pass "a write deferral re-surfaces once on the bounded pause cadence, so a churning worktree cannot stay invisible"
 }
 
+# --- a live validation run is progress, not a wedge ---------------------------
+# The second of the three forms the original report named. A crew whose own
+# `no-mistakes axi respond --action fix` had been running for eleven minutes was
+# escalated as a possible wedge, twice, because nothing the wedge detector reads
+# could see that run: the pane was static (the crew's turn was over), the worktree
+# had not been touched during the quiet window, and fm-crew-state.sh attributes a
+# run only through a bounded `no-mistakes axi status` call that had not answered for
+# this branch. A live process bound to the task's own worktree is mechanical proof
+# of progress that none of those three can supply, so it defers the escalation on
+# the same bounded cadence the worktree-write evidence uses.
+#
+# Real processes, no harness: each round below starts an actual process and asserts
+# the verdict the watcher reaches. The two signals are driven APART deliberately,
+# because either one alone would be unsafe - a bare cwd match would defer on any
+# leftover process the crew forgot to reap, and a bare name match would let one
+# lane's validation silence every other lane's wedge detector - so each half is
+# shown to escalate on its own and only the conjunction defers.
+test_live_validation_run_defers_the_wedge_escalation() {
+  local dir state fakebin out capture_file window key pane_hash sig wt back
+  local pid=""
+  dir=$(make_case wedge-live-validation); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-validating"; wt="$dir/wt"
+  # Deliberately EMPTY: the worktree write probe must find nothing, or it would
+  # defer first and this test would pass without ever reaching the run probe.
+  mkdir -p "$wt"
+  printf 'idle, run in progress' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/validating.meta"
+  printf 'working: implementing\n' > "$state/validating.status"
+  sig=$(seen_sig "$state/validating.status"); printf '%s' "$sig" > "$state/.seen-validating_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, run in progress")
+
+  # Re-arm the same at-threshold idle window before every round, so each round asks
+  # the same question of the escalator and only the process situation differs. The
+  # keep-chain variant re-arms the window WITHOUT dropping the open deferral chain,
+  # which is how the bounded re-surface is reached. Helpers carry this test's own
+  # prefix because a bash function defined here outlives the test that defined it.
+  nmrun_arm_window() {
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    back=$(( $(date +%s) - 500 ))
+    echo "$back" > "$state/.stale-since-$key"
+    set_mtime "$back" "$state/.stale-since-$key"
+    : > "$out"
+  }
+  nmrun_arm_threshold() {
+    nmrun_arm_window
+    rm -f "$state/.wedge-escalations-$key" "$state/.writing-since-$key" \
+      "$state/.writing-resurfaced-$key"
+  }
+  nmrun_arm_keeping_chain() { nmrun_arm_window; }
+
+  nmrun_round() {  # -> 0 the watcher exited (a wake), 1 it absorbed
+    local wpid
+    # Each round is its own watcher generation, exactly as a real supervision turn
+    # re-arms one; the successor flag is what says so, and without it a later
+    # generation announces the previous one's exit as a recovery wake before the
+    # stale scan this test is asking about ever runs.
+    # `env` rather than a bare assignment prefix, so a round can add one more
+    # VAR=value of its own: an assignment prefix is recognized before expansion,
+    # so a "$@" element would become the command word instead.
+    env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_WATCH_HANDLING_SUCCESSOR=1 \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" >> "$out" &
+    wpid=$!
+    if wait_for_exit "$wpid" 100; then return 0; fi
+    reap "$wpid"; return 1
+  }
+
+  # Wait until <pid> is really visible to ps, so a round never asserts on a process
+  # that has not been scheduled yet.
+  nmrun_await_proc() {  # <pid>
+    local i=0
+    while [ "$i" -lt 100 ]; do
+      LC_ALL=C ps -p "$1" -o args= 2>/dev/null | grep -q . && return 0
+      i=$((i + 1))
+    done
+    return 1
+  }
+
+  # Round 1 - nothing running. The unchanged escalation must still fire, or every
+  # later assertion in this test would be vacuous.
+  nmrun_arm_threshold
+  nmrun_round || fail "an idle pane with no live run did not wedge-escalate at the threshold"
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "the baseline escalation was not flagged a possible wedge: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the baseline escalation"
+
+  # Round 2 - a live process in the worktree that is NOT the validation binary.
+  # The cwd binding alone must not defer anything.
+  ( cd "$wt" && exec -a some-leftover-tool /bin/sleep 120 ) &
+  pid=$!
+  nmrun_await_proc "$pid" || { kill "$pid" 2>/dev/null; fail "the non-validation process never became visible"; }
+  nmrun_arm_threshold
+  nmrun_round || { kill "$pid" 2>/dev/null; fail "a non-validation process in the worktree suppressed the wedge escalation"; }
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "a non-validation process in the worktree changed the escalation: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the non-validation escalation"
+
+  # Round 3 - the validation binary, running OUTSIDE this task's worktree. The name
+  # alone must not defer anything either: that is another lane's run.
+  ( cd "$dir" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  nmrun_await_proc "$pid" || { kill "$pid" 2>/dev/null; fail "the out-of-worktree validation process never became visible"; }
+  nmrun_arm_threshold
+  nmrun_round || { kill "$pid" 2>/dev/null; fail "a validation run in ANOTHER directory suppressed this task's wedge escalation"; }
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "an unrelated validation run changed this task's escalation: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the unrelated-run escalation"
+
+  # Round 4 - both signals: the validation binary, bound to this task's worktree.
+  # Now the escalation is deferred, labeled as a recheck rather than a wedge, and the
+  # escalation counter is left alone.
+  ( cd "$wt" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  nmrun_await_proc "$pid" || { kill "$pid" 2>/dev/null; fail "the bound validation process never became visible"; }
+  nmrun_arm_threshold
+  if nmrun_round; then
+    grep -F "possible wedge" "$out" >/dev/null \
+      && { kill "$pid" 2>/dev/null; fail "a task with a live validation run was escalated as a possible wedge: $(cat "$out")"; }
+  fi
+  [ ! -e "$state/.wedge-escalations-$key" ] \
+    || { kill "$pid" 2>/dev/null; fail "a deferred validation run advanced the wedge escalation counter"; }
+  [ -e "$state/.writing-since-$key" ] \
+    || { kill "$pid" 2>/dev/null; fail "a deferred validation run opened no bounded deferral chain"; }
+
+  # Round 5 - the deferral is bounded, not silence: age the chain past the cadence
+  # and the same pane re-surfaces once, named as a validation recheck.
+  back=$(( $(date +%s) - 2000 ))
+  set_mtime "$back" "$state/.writing-since-$key"
+  nmrun_arm_keeping_chain
+  nmrun_round || { kill "$pid" 2>/dev/null; fail "a long-running validation deferral never re-surfaced on its bounded cadence"; }
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "running its own validation" "$out" >/dev/null \
+    || fail "the validation-run recheck was not labeled as such: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null \
+    && fail "a validation-run recheck was mislabeled a possible wedge: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the validation-run recheck"
+
+  # Round 6 - the exclusion for SHARED no-mistakes infrastructure, driven through its
+  # documented knob: a process the home runs for every lane at once is not evidence
+  # that THIS task is progressing, so it must escalate exactly like round 1.
+  ( cd "$wt" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  nmrun_await_proc "$pid" || { kill "$pid" 2>/dev/null; fail "the shared-infrastructure process never became visible"; }
+  nmrun_arm_threshold
+  nmrun_round FM_NM_PROCESS_SHARED_SUBCOMMANDS=120 \
+    || { kill "$pid" 2>/dev/null; fail "shared no-mistakes infrastructure suppressed the wedge escalation"; }
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "a shared-infrastructure process changed the escalation: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the shared-infrastructure escalation"
+
+  pass "a live validation run bound to the task defers the wedge escalation on the bounded cadence, while a leftover process, another lane's run, and shared infrastructure all still escalate"
+}
+
 # The worktree recorded for a secondmate is a provisioned firstmate home, and that
 # home runs its OWN supervision inside itself: its watcher beacon, pane hashes and
 # heartbeats keep state/ churning whether or not the mate produced anything. Reading
@@ -4173,6 +4442,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
+test_declared_wait_cadence_survives_pane_busy_transitions
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_captain_held_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
@@ -4183,6 +4453,7 @@ test_paused_authoritative_working_preserves_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_wedge_escalation_deferred_while_worktree_is_written
 test_write_deferral_resurfaces_on_the_bounded_cadence
+test_live_validation_run_defers_the_wedge_escalation
 test_secondmate_home_supervision_churn_is_not_write_evidence
 test_timer_repair_drops_a_finished_write_deferral_chain
 test_terminal_first_sight_drops_a_finished_write_deferral_chain
