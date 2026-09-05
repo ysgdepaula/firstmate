@@ -94,6 +94,27 @@ write_origin_meta() {  # <home> <id> [kind]
     "spawn_gen=fixture-$id"
 }
 
+# A home whose configured backlog keeps no Done archive at all, so a purged row
+# leaves nothing to read there.
+write_no_archive_config() {  # <home>
+  local home=$1
+  printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\ndone_keep = 10\n' \
+    > "$home/.tasks.toml"
+}
+
+# Purge <id> from the backlog through tasks-axi's own Done retention, which
+# moves every retained row into this home's configured archive.
+archive_out_of_backlog() {  # <home> <id>
+  local home=$1 id=$2
+  tasks_in "$home" add sample-retention-filler "Filler work" --repo sample >/dev/null \
+    || fail "could not create the retention filler"
+  tasks_in "$home" "done" sample-retention-filler --keep 0 >/dev/null \
+    || fail "could not run retention over the Done rows"
+  if tasks_in "$home" show "$id" >/dev/null 2>&1; then
+    fail "retention did not push $id out of the backlog"
+  fi
+}
+
 # --- markdown-to-beads migration resolution ----------------------------------
 #
 # A home on the Beads backend no longer carries the legacy markdown ids a scout
@@ -2111,6 +2132,161 @@ SH
   pass "cleanup refuses a ship row when its captain hold cannot be read"
 }
 
+
+# Retention pushes an answered captain call out of the backlog and into the
+# configured Done archive, so an inventory recorded several passes ago names a
+# task tasks-axi can no longer show. Both gates must still pass on the archived
+# answer, name the entry they treated as purged and the record that proved it,
+# and keep the live entries checked exactly as before.
+test_purged_inventory_entry_passes_on_its_archived_answer() {
+  local home id call show archive
+  home=$(make_home purged-archived-answer)
+  id=sample-retention-review
+  call=sample-purged-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample retention" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the retention investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample retention review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  printf 'Captain, 2026-09-05: "north."\n' > "$home/decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/decision.txt" >/dev/null \
+    || fail "could not record the captain answer"
+  run_captain "$home" complete "$id" "$call" >/dev/null \
+    || fail "completion gate failed while the answered call was still in the backlog"
+
+  archive_out_of_backlog "$home" "$call"
+  archive="$home/data/done-archive.md"
+  assert_grep "- [x] $call -" "$archive" "retention did not move the answered call into the archive"
+  assert_grep "Resolution recorded by fm-captain-hold." "$archive" \
+    "the archived row lost the captain answer this gate reads"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the completion gate refused an answered captain call that retention archived"
+  assert_grep "purged: captain-held task $call" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "its archived captain answer in $archive" "$home/verify.err" \
+    "the gate did not name the record that proved the purged entry"
+  assert_no_grep "captain-held task  is" "$home/verify.err" \
+    "the gate emitted a refusal naming no task at all"
+
+  # The vecu command: re-attesting the same finished investigation must pass too.
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err" \
+    || fail "re-attesting a finished investigation refused because of a purged entry"
+  assert_grep "purged: captain-held task $call" "$home/none.err" \
+    "completion did not name the purged entry it accepted"
+  show=$(tasks_in "$home" list --state "done" --fields body) \
+    || fail "could not read the backlog after the purged-entry completion"
+  assert_not_contains "$show" "$call" "the purged call reappeared in the live backlog"
+  pass "an answered captain call archived by retention still passes the completion gate"
+}
+
+# The second record that outlives the row: the origin's own keyed status close.
+# A home that keeps no Done archive has nothing to read there, so the status log
+# is what proves the call was closed.
+test_purged_inventory_entry_passes_on_its_status_close() {
+  local home id call
+  home=$(make_home purged-status-close)
+  id=sample-statusonly-review
+  call=sample-status-closed-call
+  write_no_archive_config "$home"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample status closes" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the status-close investigation fixture"
+  write_origin_meta "$home" "$id"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf '# Sample status review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the completion gate refused a call the origin's status log records as closed"
+  assert_grep "purged: captain-held task $call" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "resolved close for [key=$call]" "$home/verify.err" \
+    "the gate did not name the status record that proved the purged entry"
+  pass "a purged captain call passes on the origin's recorded status close"
+}
+
+# No record either way is still a refusal, and the refusal must be usable: it
+# names the entry (never an empty task), both records it looked in, and the
+# exact commands that make the call durable again.
+test_unprovable_inventory_entry_is_refused_by_name() {
+  local home id call rc
+  home=$(make_home purged-no-evidence)
+  id=sample-noevidence-review
+  call=sample-unprovable-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample gaps" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the no-evidence investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample gap review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the gate accepted an inventory entry with no record of any close"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_no_grep "captain-held task  is" "$home/verify.err" \
+    "the refusal named no task at all"
+  assert_grep "hold $call" "$home/verify.err" "the refusal offered no hold repair command"
+  assert_grep "answer $call" "$home/verify.err" "the refusal offered no answer repair command"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an inventory entry with no record of any close"
+  assert_no_grep "captain-held task  is" "$home/none.err" "completion named no task at all"
+  pass "an inventory entry with no closing record is refused by name with its repair"
+}
+
+# The tolerance must not become a way to close a captain call by closing the row
+# without recording what the captain said and waiting for retention: a bare
+# tasks-axi close leaves no resolution record, and an archived row without one
+# proves nothing. This is the same rule the live check applies, unchanged.
+test_purged_entry_without_a_recorded_answer_is_still_refused() {
+  local home id call rc
+  home=$(make_home purged-unanswered)
+  id=sample-unanswered-review
+  call=sample-unanswered-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample closes" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the unanswered investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample close review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the row outside the owner"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "- [x] $call -" "$home/data/done-archive.md" "retention did not archive the closed row"
+  assert_no_grep "Resolution recorded by fm-captain-hold." "$home/data/done-archive.md" \
+    "the fixture recorded an answer it was supposed to skip"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an archived row with no recorded captain answer passed the gate"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the unprovable entry"
+  pass "an archived captain call closed with no recorded answer is still refused"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -2135,6 +2311,11 @@ test_teardown_never_closes_a_captain_held_task
 test_interrupted_cleanup_keeps_the_captain_call_recoverable
 test_teardown_retains_captain_calls_in_a_relocated_backlog
 test_teardown_refuses_a_ship_when_the_captain_hold_cannot_be_read
+test_purged_inventory_entry_passes_on_its_archived_answer
+test_purged_inventory_entry_passes_on_its_status_close
+test_unprovable_inventory_entry_is_refused_by_name
+test_purged_entry_without_a_recorded_answer_is_still_refused
+
 test_verify_resolves_a_hold_migrated_to_beads_notes
 test_verify_resolves_a_hold_migrated_under_the_configured_prefix
 test_marker_noted_row_wins_over_a_prefix_namesake

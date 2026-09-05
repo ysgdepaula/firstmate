@@ -138,6 +138,36 @@ fm_backlog_file() {  # <data-dir>
   fi
 }
 
+# The markdown backend's configured Done archive for this home, absolute, or
+# return 1 when no config names one. Retention moves a Done row out of the
+# backlog into this file, so it is where a task closed several passes ago still
+# has a durable record. Resolution mirrors tasks-axi's own precedence and its
+# working directory: the backlog root's `.tasks.toml` first, then the user
+# config, and a relative path is taken from the root the mutations run in.
+fm_backlog_archive_file() {  # <data-dir>
+  local data root archive=''
+  data=$(fm_backlog_data_absolute "$1") || {
+    FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
+    return 1
+  }
+  root=$(fm_backlog_root "$data") || return 1
+  archive=$(fm_tasks_axi_archive_from_toml "$root/.tasks.toml") || archive=''
+  if [ -z "$archive" ] && [ -n "${HOME:-}" ]; then
+    archive=$(fm_tasks_axi_archive_from_toml "$HOME/.tasks-axi/config.toml") || archive=''
+  fi
+  [ -n "$archive" ] || return 1
+  case "$archive" in
+    /*) printf '%s\n' "$archive" ;;
+    *)
+      if [ "$root" = / ]; then
+        printf '/%s\n' "$archive"
+      else
+        printf '%s/%s\n' "$root" "$archive"
+      fi
+      ;;
+  esac
+}
+
 # The directory a backlog's own `.tasks.toml` is resolved from.
 fm_backlog_root() {  # <data-dir>
   local data parent

@@ -101,26 +101,29 @@ fm_tasks_axi_mv_has_multi_id() {
   printf '%s\n' "$output" | grep -F -- '[<id>...]' >/dev/null
 }
 
-fm_tasks_axi_backend_from_toml() {  # <toml-path>
-  local toml=$1
+# One quoted string value out of a tasks-axi config. <table> is the table the
+# key must sit in, empty for the root table. This is the single toml reader:
+# every key firstmate needs from a tasks-axi config comes through it.
+fm_tasks_axi_toml_string() {  # <toml-path> <table-or-empty> <key>
+  local toml=$1 table=$2 key=$3
   [ -f "$toml" ] || return 1
-  LC_ALL=C awk '
+  LC_ALL=C awk -v want_table="$table" -v want_key="$key" '
     function trim(value) {
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
       return value
     }
-    BEGIN { root=1; found=0; single=sprintf("%c", 39) }
+    BEGIN { table=""; found=0; single=sprintf("%c", 39) }
     {
       line=$0
       sub(/[[:space:]]*#.*/, "", line)
       line=trim(line)
       if (line ~ /^\[[^]]+\]$/) {
-        root=0
+        table=substr(line, 2, length(line) - 2)
         next
       }
-      if (root && line ~ /^backend[[:space:]]*=/) {
-        sub(/^backend[[:space:]]*=[[:space:]]*/, "", line)
+      if (table == want_table && line ~ "^" want_key "[[:space:]]*=") {
+        sub("^" want_key "[[:space:]]*=[[:space:]]*", "", line)
         line=trim(line)
         if ((substr(line, 1, 1) == "\"" && substr(line, length(line), 1) == "\"") ||
             (substr(line, 1, 1) == single && substr(line, length(line), 1) == single)) {
@@ -132,6 +135,17 @@ fm_tasks_axi_backend_from_toml() {  # <toml-path>
     }
     END { if (!found) exit 1 }
   ' "$toml"
+}
+
+fm_tasks_axi_backend_from_toml() {  # <toml-path>
+  fm_tasks_axi_toml_string "$1" '' backend
+}
+
+# The markdown backend's configured Done archive, verbatim from the config.
+# tasks-axi has no built-in default archive, so an unset key means this home
+# keeps no archive and the caller has no historical record to read.
+fm_tasks_axi_archive_from_toml() {  # <toml-path>
+  fm_tasks_axi_toml_string "$1" markdown archive
 }
 
 # Resolve the active tasks-axi backend with the same precedence as tasks-axi.

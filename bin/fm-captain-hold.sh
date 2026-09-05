@@ -115,6 +115,26 @@
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
 # entry must still be durable and no keyed status decision may be open.
+#
+# PURGED INVENTORY ENTRIES. Backlog retention keeps only the configured recent
+# Done rows, so an inventory entry whose captain call was answered several
+# review passes ago legitimately names no task at all. That is not the same
+# fact as a live captain call going missing, and refusing it would strand a
+# finished investigation with no way forward. The policy is unchanged - an
+# entry is accepted only on a record proving the captain's call was closed -
+# and only WHERE that record is read moves. Both gates accept such an entry on
+# either of the two records that outlive the row, and name on stderr which
+# entry was treated as purged and which record proved it:
+#   - the closed row in the Done archive `.tasks.toml` names, carrying the same
+#     resolution record the live check requires (bin/fm-backlog-transition-lib.sh
+#     owns resolving that archive path); or
+#   - a `resolved` close for `[key=<entry>]` in the origin's own status log, read
+#     through bin/fm-classify-lib.sh's status_key_closing_verb so the durable
+#     `captain-held` transfer is never mistaken for one.
+# Neither record reads prose, and an entry with no such record is still refused:
+# that refusal names the entry, both records it looked in, and the exact hold
+# and answer commands that make the call durable again.
+#
 # Metadata compatibility: the attestation keeps the historical
 # `decisions_reviewed=1` and `decision_keys=` keys, and an inventory entry that
 # names no existing task resolves through the legacy `<origin>-decision-<entry>`
@@ -435,6 +455,9 @@ resolution_block() {  # <mode>
 # surviving even when a date gate has expired) or a recorded captain answer.
 verify_hold_durable() {  # <task-id>
   local id=$1 show state hold_kind body
+  # A caller that lost its resolution must never reach here with nothing: the
+  # message would name no task and read as a live row simply going missing.
+  [ -n "$id" ] || fail "internal error: a captain-call durability check was asked about an unnamed task"
   show=$(task_show "$id") || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -637,7 +660,10 @@ resolve_migrated_entry() {  # <origin-or-empty> <entry>
 # beads backend - the migrated row the markdown-to-beads hold migration wrote.
 # Prints "<resolved id> <how>", where <how> is exact, legacy, migrated-note or
 # migrated-prefix, so a caller can record which evidence carried the attestation.
-resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
+# Returns 1 having printed nothing when no identity resolves, so a caller decides
+# what an unresolvable entry means instead of every caller inheriting one
+# verdict, and 2 when a migrated-hold scan refused rather than resolved.
+resolve_entry() {  # <origin-or-empty> <entry>
   local origin=$1 entry=$2 legacy migrated rc
   if task_show "$entry" >/dev/null 2>&1; then
     printf '%s exact' "$entry"
@@ -656,11 +682,119 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
     0) printf '%s' "$migrated"; return 0 ;;
     2) return 2 ;;
   esac
+  return 1
+}
+
+# The named reason an entry resolves to nothing, for a caller that must refuse.
+unresolved_entry_reason() {  # <origin-or-empty> <entry>
+  local origin=$1 entry=$2
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
-    legacy=$(legacy_hold_id "$origin" "$entry")
-    fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
+    printf 'no captain-held task %s and no migrated hold for it in this home'"'"'s configured backlog (data directory %s); the nearest legacy identity %s also resolves to nothing' \
+      "$entry" "$DATA" "$(legacy_hold_id "$origin" "$entry")"
+    return 0
   fi
-  fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA)"
+  printf 'no captain-held task %s and no migrated hold for it in this home'"'"'s configured backlog (data directory %s)' \
+    "$entry" "$DATA"
+}
+
+# --- purged inventory entries -----------------------------------------------
+# The contract these implement is "PURGED INVENTORY ENTRIES" in this file's
+# header.
+
+# Set by entry_purge_evidence to the phrase naming the record that proved it.
+CAPTAIN_PURGE_EVIDENCE=
+
+# Set by verify_inventory_entry to the live row it resolved and how, so a gate
+# can record which evidence carried the attestation; both stay empty when the
+# entry was accepted as purged instead.
+CAPTAIN_RESOLVED_ID=
+CAPTAIN_RESOLVED_HOW=
+
+# The archived rows for one task id: the closed row plus its indented body, so
+# body_has_resolution_record applies to the archive exactly as it applies to a
+# live row. Only `- [x]` rows count, so an archive that somehow holds an open
+# row proves nothing.
+archived_task_record() {  # <archive-file> <task-id>
+  local archive=$1 id=$2
+  [ -f "$archive" ] && [ -r "$archive" ] && [ ! -L "$archive" ] || return 1
+  LC_ALL=C awk -v id="$id" '
+    BEGIN { want = "- [x] " id " -"; found = 0; capture = 0 }
+    /^- \[/ {
+      capture = (index($0, want) == 1)
+      if (capture) { found = 1; print }
+      next
+    }
+    /^[^[:space:]]/ { capture = 0; next }
+    capture { print }
+    END { if (!found) exit 1 }
+  ' "$archive"
+}
+
+# Historical proof that an entry the backlog no longer carries was already
+# closed with the captain's answer.
+entry_purge_evidence() {  # <origin> <entry>
+  local origin=$1 entry=$2 archive record verb resolve
+  CAPTAIN_PURGE_EVIDENCE=
+  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
+    && record=$(archived_task_record "$archive" "$entry") \
+    && body_has_resolution_record "$record"; then
+    CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
+    return 0
+  fi
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  verb=$(status_key_closing_verb "$STATE/$origin.status" "$entry")
+  if [ "$verb" = "$resolve" ]; then
+    CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$entry] in $STATE/$origin.status"
+    return 0
+  fi
+  return 1
+}
+
+# What to do about an entry that resolves to nothing and has no closing record.
+# The captain call may genuinely still be open, so this names the entry and the
+# exact two commands that make it durable again rather than leaving the gate
+# unpassable.
+purged_entry_repair() {  # <origin> <entry> <archive-note>
+  local origin=$1 entry=$2 archive_note=$3
+  printf '%s; %s and %s records no resolved close for [key=%s].\n' \
+    "$(unresolved_entry_reason "$origin" "$entry")" \
+    "$archive_note" "$STATE/$origin.status" "$entry"
+  printf 'Re-record that captain call, then re-run this gate:\n'
+  printf "  %s hold %s --title '<what the captain must choose>' --reason '<why it is held>' --origin %s\n" \
+    "$0" "$entry" "$origin"
+  printf '  %s answer %s --decision-file <file holding the captain answer>\n' "$0" "$entry"
+  printf 'Drop %s from decision_keys= in %s only when it never named a captain call.' \
+    "$entry" "$STATE/$origin.meta"
+}
+
+# One inventory entry's durability check. Deliberately not called through a
+# command substitution: a lost resolution must abort here with its own named
+# entry, never pass an unnamed task down to the durability check.
+verify_inventory_entry() {  # <origin> <entry>
+  local origin=$1 entry=$2 resolved archive archive_note rc=0
+  CAPTAIN_RESOLVED_ID=
+  CAPTAIN_RESOLVED_HOW=
+  resolved=$(resolve_entry "$origin" "$entry") || rc=$?
+  if [ "$rc" = 0 ]; then
+    CAPTAIN_RESOLVED_ID=${resolved%% *}
+    CAPTAIN_RESOLVED_HOW=${resolved##* }
+    verify_hold_durable "$CAPTAIN_RESOLVED_ID"
+    return 0
+  fi
+  # A refused migrated-hold scan is read uncertainty, not an absent row, so it
+  # never reaches the purge tolerance: resolve_entry has already named it.
+  [ "$rc" = 1 ] || exit 1
+  if entry_purge_evidence "$origin" "$entry"; then
+    printf 'purged: captain-held task %s is no longer in %s; accepted on %s\n' \
+      "$entry" "$CAPTAIN_BACKLOG_FILE" "$CAPTAIN_PURGE_EVIDENCE" >&2
+    return 0
+  fi
+  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
+    archive_note="it carries no archived captain answer in $archive"
+  else
+    archive_note="this home's backlog keeps no Done archive to read"
+  fi
+  fail "$(purged_entry_repair "$origin" "$entry" "$archive_note")"
 }
 
 body_hold_set_timestamp() {  # <decoded-task-body>
@@ -1222,15 +1356,9 @@ command_complete() {
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      if ! resolved=$(resolve_entry "$origin" "$entry"); then
-        # resolve_entry has already refused on stderr naming the entry.
-        exit 1
-      fi
-      resolved_how=${resolved##* }
-      resolved=${resolved%% *}
-      verify_hold_durable "$resolved"
-      if [ "$resolved_how" = migrated-prefix ]; then
-        attested_by_prefix="${attested_by_prefix}${attested_by_prefix:+ }$entry=$resolved"
+      verify_inventory_entry "$origin" "$entry"
+      if [ "$CAPTAIN_RESOLVED_HOW" = migrated-prefix ]; then
+        attested_by_prefix="${attested_by_prefix}${attested_by_prefix:+ }$entry=$CAPTAIN_RESOLVED_ID"
       fi
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
@@ -1286,11 +1414,7 @@ command_verify() {
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      if ! resolved=$(resolve_entry "$origin" "$entry"); then
-        # resolve_entry has already refused on stderr naming the entry.
-        exit 1
-      fi
-      verify_hold_durable "${resolved%% *}"
+      verify_inventory_entry "$origin" "$entry"
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
