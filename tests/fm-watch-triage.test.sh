@@ -4116,6 +4116,101 @@ SH
   pass "a cwd capture is discarded at the top of every poll cycle, so evidence that disappears escalates on the next probe"
 }
 
+# A scan that could not run at all is a fact about the CYCLE, not about whichever
+# window asked first: the scan is system-wide, so re-running it before the cycle
+# turns over cannot answer differently and only pays the same bound again. The
+# failure is therefore remembered for the cycle exactly as a success is, and the
+# half that must never change is what a remembered failure MEANS - no evidence,
+# never "no processes" - so every consumer keeps failing closed toward escalation.
+# Driven through the capture interface a cycle owner actually arms and reads, and
+# then through the real escalation gate, where an absorb rather than an escalation
+# is the failure this guards against.
+test_failed_cwd_scan_is_remembered_for_its_poll_cycle() {
+  local dir state fakebin out watch_out scans window key pane_hash sig back
+  dir=$(make_case cwd-scan-failure-memo); state="$dir/state"; fakebin="$dir/fakebin"
+  watch_out="$dir/watch.out"
+  mkdir -p "$dir/wt"
+  # Fails unless FM_FAKE_LSOF_OK is exported, so a memo that is honored and a scan
+  # that is genuinely retaken produce different, observable answers.
+  cat > "$fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'scan\n' >> "$FM_FAKE_LSOF_COUNT_FILE"
+[ -n "${FM_FAKE_LSOF_OK:-}" ] || exit 1
+printf 'p1\nfcwd\nn%s\n' "$FM_FAKE_LSOF_DIR"
+exit 0
+SH
+  chmod +x "$fakebin/lsof"
+
+  out=$(env PATH="$fakebin:$PATH" FM_FAKE_LSOF_COUNT_FILE="$dir/armed.count" \
+    FM_FAKE_LSOF_DIR="$dir/wt" bash -c '
+      . "$1"
+      fm_cwd_scan_cache_reset
+      fm_cwd_scan_capture 5 && printf "the first failing capture reported success\n"
+      [ -z "$FM_CWD_SCAN_OUT" ] || printf "a failed capture left output behind\n"
+      fm_cwd_scan_capture 5 && printf "a remembered failure reported success\n"
+      [ -z "$FM_CWD_SCAN_OUT" ] || printf "a remembered failure produced output\n"
+      fm_pids_with_cwd_under "$2" 5 && printf "a consumer read the remembered failure as no processes\n"
+      export FM_FAKE_LSOF_OK=1
+      fm_cwd_scan_capture 5 && printf "the failure was re-scanned inside its own cycle\n"
+      fm_cwd_scan_cache_reset
+      fm_cwd_scan_capture 5 || printf "the cycle reset did not discard the remembered failure\n"
+      printf "driver-finished\n"
+    ' _ "$ROOT/bin/fm-classify-lib.sh" "$dir/wt")
+  case "$out" in
+    *driver-finished*) ;;
+    *) fail "the capture driver did not run to completion: $out" ;;
+  esac
+  [ "$out" = "driver-finished" ] || fail "the remembered failure changed a caller's answer: $out"
+  scans=$(LC_ALL=C wc -l < "$dir/armed.count" | tr -d '[:space:]')
+  [ "$scans" = 2 ] || fail "an armed cycle ran $scans scans instead of one failing scan and one after the reset"
+
+  # Teardown's leaked-descendant reap never arms the cache because it kills what it
+  # finds, so nothing may be remembered for it - including a failure.
+  env PATH="$fakebin:$PATH" FM_FAKE_LSOF_COUNT_FILE="$dir/unarmed.count" \
+    FM_FAKE_LSOF_DIR="$dir/wt" bash -c '
+      . "$1"
+      fm_pids_with_cwd_under "$2" && printf "an unarmed consumer read a failed scan as no processes\n"
+      fm_pids_with_cwd_under "$2" && printf "an unarmed consumer read a failed scan as no processes\n"
+    ' _ "$ROOT/bin/fm-classify-lib.sh" "$dir/wt" > "$dir/unarmed.out" 2>&1
+  [ ! -s "$dir/unarmed.out" ] || fail "the unarmed contract changed: $(cat "$dir/unarmed.out")"
+  scans=$(LC_ALL=C wc -l < "$dir/unarmed.count" | tr -d '[:space:]')
+  [ "$scans" = 2 ] || fail "an unarmed caller ran $scans scans instead of re-scanning on every call"
+
+  # The escalation gate itself: a window past the threshold whose scan cannot run
+  # has no evidence, so it must still escalate rather than be absorbed.
+  window="test:fm-scan-failed"
+  printf 'idle, run in progress' > "$dir/pane.txt"
+  pane_hash=$(hash_text "idle, run in progress")
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$dir/wt" > "$state/failed.meta"
+  printf 'working: implementing\n' > "$state/failed.status"
+  sig=$(seen_sig "$state/failed.status"); printf '%s' "$sig" > "$state/.seen-failed_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  back=$(( $(date +%s) - 500 ))
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+  env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_WATCH_HANDLING_SUCCESSOR=1 FM_FAKE_LSOF_COUNT_FILE="$dir/watch.count" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$watch_out" &
+  local wpid=$!
+  if ! wait_for_exit "$wpid" 120; then
+    reap "$wpid"
+    fail "a window whose cwd scan could not run was absorbed instead of escalated: $(cat "$watch_out")"
+  fi
+  grep -F "possible wedge" "$watch_out" >/dev/null \
+    || fail "the window whose scan failed did not escalate: $(cat "$watch_out")"
+  [ -e "$state/.writing-since-$key" ] \
+    && fail "a failed scan opened a deferral chain, so it was read as evidence"
+  scans=$(LC_ALL=C wc -l < "$dir/watch.count" | tr -d '[:space:]')
+  [ "$scans" = 1 ] || fail "the escalating cycle ran $scans scans instead of one"
+  pass "a cwd scan that cannot run is remembered as a failure for its cycle and still escalates"
+}
+
 # A write deferral is a bounded chain, not a permanent one: its .writing-since
 # marker ages the whole chain so a churning worktree still re-surfaces once per
 # PAUSE_RESURFACE_SECS. That only holds while the chain belongs to the CURRENT quiet
@@ -4838,6 +4933,7 @@ test_live_validation_in_a_mate_home_is_not_run_evidence
 test_firstmate_own_nm_query_is_not_crew_progress
 test_cwd_scan_is_captured_once_per_poll_cycle
 test_cwd_scan_capture_does_not_outlive_its_poll_cycle
+test_failed_cwd_scan_is_remembered_for_its_poll_cycle
 test_timer_repair_drops_a_finished_write_deferral_chain
 test_terminal_first_sight_drops_a_finished_write_deferral_chain
 test_triage_log_size_cap_accepts_spaced_wc_counts

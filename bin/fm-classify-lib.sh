@@ -1934,12 +1934,16 @@ FM_NM_PROCESS_SHARED_SUBCOMMANDS=${FM_NM_PROCESS_SHARED_SUBCOMMANDS-'daemon'}
 # escalation that should have fired, the unsafe direction, so the memo's lifetime
 # is exactly one cycle and no longer.
 #
-# Only a SUCCESSFUL scan is remembered. A missing lsof, an error, or a timeout is
-# not "no processes": it is left uncaptured so the next caller in the same cycle
-# re-scans and every caller keeps reporting the same no-evidence failure it does
-# today.
+# A FAILED scan is remembered too, as a failure rather than as a result. The scan
+# is system-wide, so a missing lsof, an error or a timeout is a fact about the
+# cycle and not about the window that happened to ask first; re-running it inside
+# the same cycle cannot answer differently and only pays the same wall-clock bound
+# again. What a remembered failure never becomes is "no processes": every caller
+# still gets the same no-evidence failure it gets today, so no escalation schedule
+# changes and only the cost of learning it moves from once per caller to once per
+# cycle.
 FM_CWD_SCAN_CACHE_ARMED=0
-FM_CWD_SCAN_CACHE_VALID=0
+FM_CWD_SCAN_CACHE_STATE=
 FM_CWD_SCAN_CACHE_OUT=
 FM_CWD_SCAN_OUT=
 
@@ -1948,7 +1952,7 @@ FM_CWD_SCAN_OUT=
 # assembled list on every call never call it at all.
 fm_cwd_scan_cache_reset() {
   FM_CWD_SCAN_CACHE_ARMED=1
-  FM_CWD_SCAN_CACHE_VALID=0
+  FM_CWD_SCAN_CACHE_STATE=
   FM_CWD_SCAN_CACHE_OUT=
 }
 
@@ -1958,18 +1962,25 @@ fm_cwd_scan_cache_reset() {
 # substitution, or the memo would be written in a subshell and thrown away.
 # <timeout-secs> is optional, exactly as in fm_pids_with_cwd_under below.
 fm_cwd_scan_capture() {  # [timeout-secs]
-  local bound=${1-}
-  if [ "${FM_CWD_SCAN_CACHE_ARMED:-0}" = 1 ] && [ "${FM_CWD_SCAN_CACHE_VALID:-0}" = 1 ]; then
-    FM_CWD_SCAN_OUT=$FM_CWD_SCAN_CACHE_OUT
-    return 0
+  local bound=${1-} armed=${FM_CWD_SCAN_CACHE_ARMED:-0} rc=0
+  if [ "$armed" = 1 ]; then
+    case "${FM_CWD_SCAN_CACHE_STATE:-}" in
+      ok) FM_CWD_SCAN_OUT=$FM_CWD_SCAN_CACHE_OUT; return 0 ;;
+      failed) FM_CWD_SCAN_OUT=; return 1 ;;
+    esac
   fi
   case "$bound" in
-    ''|*[!0-9]*|0) FM_CWD_SCAN_OUT=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
-    *) FM_CWD_SCAN_OUT=$(fm_run_timed "$bound" lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
+    ''|*[!0-9]*|0) FM_CWD_SCAN_OUT=$(lsof -a -d cwd -Fpn 2>/dev/null) || rc=1 ;;
+    *) FM_CWD_SCAN_OUT=$(fm_run_timed "$bound" lsof -a -d cwd -Fpn 2>/dev/null) || rc=1 ;;
   esac
-  if [ "${FM_CWD_SCAN_CACHE_ARMED:-0}" = 1 ]; then
+  if [ "$rc" != 0 ]; then
+    FM_CWD_SCAN_OUT=
+    if [ "$armed" = 1 ]; then FM_CWD_SCAN_CACHE_STATE=failed; fi
+    return 1
+  fi
+  if [ "$armed" = 1 ]; then
     FM_CWD_SCAN_CACHE_OUT=$FM_CWD_SCAN_OUT
-    FM_CWD_SCAN_CACHE_VALID=1
+    FM_CWD_SCAN_CACHE_STATE=ok
   fi
 }
 
