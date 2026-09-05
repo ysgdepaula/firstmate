@@ -554,10 +554,12 @@ ps -eo pid,args | grep '[n]o-mistakes'
 Observed output, truncated to the fields the probe reads:
 
 ```
-  896 /Users/ydeep/.no-mistakes/bin/no-mistakes daemon run --root ...
-  992 /Users/ydeep/.no-mistakes/bin/no-mistakes daemon log-sink --root ...
+  896 ~/.no-mistakes/bin/no-mistakes daemon run --root ...
+  992 ~/.no-mistakes/bin/no-mistakes daemon log-sink --root ...
 27529 no-mistakes axi respond --action fix --findings ...
 ```
+
+Home and worktree paths are shown redacted; what the probe reads is the basename of the first argv field and the first argument, both preserved above verbatim.
 
 Both process shapes present the binary as the `no-mistakes` basename of their first argv field, whether invoked through PATH or through an absolute install path, which is what `FM_NM_PROCESS_NAME` matches.
 The shared daemon and its log sink present `daemon` as their first argument, which is what `FM_NM_PROCESS_SHARED_SUBCOMMANDS` excludes.
@@ -572,10 +574,10 @@ Observed output:
 ```
 p27529
 fcwd
-n/Users/ydeep/.treehouse/firstmate-7bab20/4/firstmate
+n<task-worktree>
 p896
 fcwd
-n/Users/ydeep/.no-mistakes
+n~/.no-mistakes
 ```
 
 The fix round's working directory is its own task worktree, and the shared daemon's is the no-mistakes home, so the working-directory binding alone already separates one task's run from home-wide infrastructure; the subcommand exclusion is the second, independent guard.
