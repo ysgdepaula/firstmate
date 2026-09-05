@@ -134,6 +134,14 @@
 #   - a `resolved` close for `[key=<entry>]` in the origin's own status log, read
 #     through bin/fm-classify-lib.sh's status_key_closing_verb so the durable
 #     `captain-held` transfer is never mistaken for one.
+# The two are ordered, not independent: a row actually found in the archive is
+# authoritative about itself, so a row closed with no resolution record refuses
+# by name under the identity it was found beneath and the status log is never
+# read behind it. Rotating a backlog can therefore never turn a refusal into an
+# acceptance. The status log is consulted only when the archive holds no row for
+# the entry under any identity. An archive path that exists but cannot be opened
+# is not evidence that it holds no row either: it refuses naming that archive as
+# unreadable, while a path retention has never written to is simply empty.
 # An entry reaches that tolerance only once the backlog is proved to carry no
 # row under either identity, through the same guarded probe `open` asks: a row
 # that cannot be READ is read uncertainty, not a purge, and refuses with the
@@ -718,6 +726,10 @@ unresolved_entry_reason() {  # <origin-or-empty> <entry>
 # Set by entry_purge_evidence to the phrase naming the record that proved it.
 CAPTAIN_PURGE_EVIDENCE=
 
+# Set by entry_purge_evidence when nothing proves the entry: the truthful account
+# of what was searched and what it held, so a refusal never states a fact about a
+# record it never read.
+CAPTAIN_PURGE_REFUSAL=
 # Set by verify_inventory_entry to the live row it resolved and how, so a gate
 # can record which evidence carried the attestation; both stay empty when the
 # entry was accepted as purged instead.
@@ -751,13 +763,25 @@ require_entry_purged() {  # <origin-or-empty> <entry>
   fi
 }
 
+# True when nothing at all sits at the archive path, so "it holds no row" is a
+# fact rather than a guess: retention has simply never rotated anything here.
+archive_path_empty() {  # <archive-file>
+  [ ! -e "$1" ] && [ ! -L "$1" ]
+}
+
+# True when the Done archive can be opened as this home's own regular file. A
+# path that cannot be opened is not evidence that it holds no row.
+archive_readable() {  # <archive-file>
+  [ -f "$1" ] && [ -r "$1" ] && [ ! -L "$1" ]
+}
+
 # The archived rows for one task id: the closed row plus its indented body, so
 # body_has_resolution_record applies to the archive exactly as it applies to a
 # live row. Only `- [x]` rows count, so an archive that somehow holds an open
 # row proves nothing.
 archived_task_record() {  # <archive-file> <task-id>
   local archive=$1 id=$2
-  [ -f "$archive" ] && [ -r "$archive" ] && [ ! -L "$archive" ] || return 1
+  archive_readable "$archive" || return 1
   LC_ALL=C awk -v id="$id" '
     BEGIN { want = "- [x] " id " -"; found = 0; capture = 0 }
     /^- \[/ {
@@ -771,67 +795,100 @@ archived_task_record() {  # <archive-file> <task-id>
   ' "$archive"
 }
 
-# An archived row carrying its captain answer, for one exact task id.
-archived_answer_present() {  # <archive-file> <task-id>
+# The archive's verdict on one exact task id: `answered` when its closed row
+# carries the captain's resolution record, `unanswered` when the row is there
+# without one, `absent` when the archive holds no such row.
+archived_identity_verdict() {  # <archive-file> <task-id>
   local record
-  record=$(archived_task_record "$1" "$2") || return 1
-  body_has_resolution_record "$record"
+  if ! record=$(archived_task_record "$1" "$2"); then
+    printf 'absent'
+    return 0
+  fi
+  if body_has_resolution_record "$record"; then
+    printf 'answered'
+    return 0
+  fi
+  printf 'unanswered'
+}
+
+# What the archive says about this entry, under the same two identities
+# resolve_entry resolves a live row through. A row actually found there is
+# authoritative about itself: it proves the captain answered, or it proves the
+# call was closed with no answer. Returns 0 with the evidence named, 2 when the
+# archive itself refuses the entry, and 1 only when the archive holds no row for
+# it at all, which is the one case the status log may still speak to.
+archived_purge_evidence() {  # <origin-or-empty> <entry>
+  local origin=$1 entry=$2 archive legacy
+  if ! archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
+    CAPTAIN_PURGE_REFUSAL="this home's backlog keeps no Done archive to read"
+    return 1
+  fi
+  if archive_path_empty "$archive"; then
+    CAPTAIN_PURGE_REFUSAL="retention has rotated nothing into $archive yet"
+    return 1
+  fi
+  archive_readable "$archive" \
+    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its Done archive $archive could not be read, so whether the captain answered it cannot be established"
+  case "$(archived_identity_verdict "$archive" "$entry")" in
+    answered)
+      CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
+      return 0
+      ;;
+    unanswered)
+      CAPTAIN_PURGE_REFUSAL="its archived row in $archive, under $entry, is closed with no recorded captain answer"
+      return 2
+      ;;
+  esac
+  if entry_has_legacy_identity "$origin"; then
+    legacy=$(legacy_hold_id "$origin" "$entry")
+    case "$(archived_identity_verdict "$archive" "$legacy")" in
+      answered)
+        CAPTAIN_PURGE_EVIDENCE="the archived captain answer for its legacy identity $legacy in $archive"
+        return 0
+        ;;
+      unanswered)
+        CAPTAIN_PURGE_REFUSAL="its archived row in $archive, under its legacy identity $legacy, is closed with no recorded captain answer"
+        return 2
+        ;;
+    esac
+    CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive, under $entry or $legacy"
+    return 1
+  fi
+  CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive"
+  return 1
 }
 
 # Historical proof that an entry the backlog no longer carries was already
-# closed with the captain's answer. The archive is searched under the same two
-# identities resolve_entry resolves a live row through, so a pre-collapse entry
-# is proved by the row that actually carries it.
+# closed with the captain's answer. The archive speaks first and, when it holds
+# the row, last: only an archive that holds no row for the entry lets the
+# origin's own status close be read, so rotating a backlog can never turn a
+# refusal into an acceptance.
 entry_purge_evidence() {  # <origin> <entry>
-  local origin=$1 entry=$2 archive legacy verb resolve
+  local origin=$1 entry=$2 verb resolve archived=0
   CAPTAIN_PURGE_EVIDENCE=
-  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
-    if archived_answer_present "$archive" "$entry"; then
-      CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
-      return 0
-    fi
-    if entry_has_legacy_identity "$origin"; then
-      legacy=$(legacy_hold_id "$origin" "$entry")
-      if archived_answer_present "$archive" "$legacy"; then
-        CAPTAIN_PURGE_EVIDENCE="the archived captain answer for its legacy identity $legacy in $archive"
-        return 0
-      fi
-    fi
-  fi
+  CAPTAIN_PURGE_REFUSAL=
+  archived_purge_evidence "$origin" "$entry" || archived=$?
+  case "$archived" in
+    0) return 0 ;;
+    2) return 1 ;;
+  esac
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   verb=$(status_key_closing_verb "$STATE/$origin.status" "$entry")
   if [ "$verb" = "$resolve" ]; then
     CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$entry] in $STATE/$origin.status"
     return 0
   fi
+  CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and $STATE/$origin.status records no resolved close for [key=$entry]"
   return 1
-}
-
-# What the archive was actually searched for, so a refusal never claims the
-# archive holds nothing under an identity it never looked up.
-archive_search_note() {  # <origin-or-empty> <entry>
-  local origin=$1 entry=$2 archive
-  if ! archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
-    printf "this home's backlog keeps no Done archive to read"
-    return 0
-  fi
-  if entry_has_legacy_identity "$origin"; then
-    printf 'it carries no archived captain answer in %s, under %s or %s' \
-      "$archive" "$entry" "$(legacy_hold_id "$origin" "$entry")"
-    return 0
-  fi
-  printf 'it carries no archived captain answer in %s' "$archive"
 }
 
 # What to do about an entry that resolves to nothing and has no closing record.
 # The captain call may genuinely still be open, so this names the entry and the
 # exact two commands that make it durable again rather than leaving the gate
 # unpassable.
-purged_entry_repair() {  # <origin> <entry> <archive-note>
-  local origin=$1 entry=$2 archive_note=$3
-  printf '%s; %s and %s records no resolved close for [key=%s].\n' \
-    "$(unresolved_entry_reason "$origin" "$entry")" \
-    "$archive_note" "$STATE/$origin.status" "$entry"
+purged_entry_repair() {  # <origin> <entry> <refusal-reason>
+  local origin=$1 entry=$2 reason=$3
+  printf '%s; %s.\n' "$(unresolved_entry_reason "$origin" "$entry")" "$reason"
   printf 'Re-record that captain call, then re-run this gate:\n'
   printf "  %s hold %s --title '<what the captain must choose>' --reason '<why it is held>' --origin %s\n" \
     "$0" "$entry" "$origin"
@@ -867,7 +924,7 @@ verify_inventory_entry() {  # <origin> <entry>
       "$entry" "$CAPTAIN_BACKLOG_FILE" "$CAPTAIN_PURGE_EVIDENCE" >&2
     return 0
   fi
-  fail "$(purged_entry_repair "$origin" "$entry" "$(archive_search_note "$origin" "$entry")")"
+  fail "$(purged_entry_repair "$origin" "$entry" "$CAPTAIN_PURGE_REFUSAL")"
 }
 
 body_hold_set_timestamp() {  # <decoded-task-body>

@@ -2441,6 +2441,98 @@ SH
   pass "an inventory entry whose row cannot be read refuses both gates"
 }
 
+# Rotation alone must never flip a verdict. This is the unanswered-close fixture
+# plus the one thing that used to override it: the origin's own resolved close.
+# Before retention, verify_hold_durable refuses this state outright; after it,
+# the archived row still proves the call was closed with no captain answer, so
+# the status log must not be read behind it.
+test_archived_unanswered_row_outranks_a_status_close() {
+  local home id call rc
+  home=$(make_home purged-archive-outranks-status)
+  id=sample-precedence-review
+  call=sample-precedence-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample precedence" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the precedence investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample precedence review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the row outside the owner"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "- [x] $call -" "$home/data/done-archive.md" "retention did not archive the closed row"
+  assert_no_grep "Resolution recorded by fm-captain-hold." "$home/data/done-archive.md" \
+    "the fixture recorded an answer it was supposed to skip"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a status close overrode an archived row proving no captain answer"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "closed with no recorded captain answer" "$home/verify.err" \
+    "the refusal did not say the archive holds an unanswered row"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced an unanswered archived call as purged"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an archived row proving no captain answer"
+  assert_grep "no captain-held task $call" "$home/none.err" \
+    "the completion refusal did not name the entry"
+  pass "an archived row with no recorded answer outranks the origin's status close"
+}
+
+# An archive that exists but cannot be opened is not evidence that it holds no
+# row, so the gate must name it as unreadable rather than assert what it carries
+# or fall through to the status log behind it.
+test_unreadable_archive_is_named_rather_than_assumed_empty() {
+  local home id call rc
+  home=$(make_home purged-unreadable-archive)
+  id=sample-unreadable-archive-review
+  call=sample-shared-archive-call
+  mkdir -p "$home/data/$id" "$home/shared"
+  tasks_in "$home" add "$id" "Investigate sample shared archives" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the unreadable-archive investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample shared archive review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  # tasks-axi follows a symlinked archive, so retention would write the answered
+  # row through it; this gate refuses to read one and must say so.
+  printf '## Done\n\n' > "$home/shared/done-archive.md"
+  ln -s "$home/shared/done-archive.md" "$home/data/done-archive.md"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unreadable Done archive was treated as holding no answer"
+  assert_grep "could not be read" "$home/verify.err" \
+    "the refusal did not say the Done archive could not be read"
+  assert_grep "$home/data/done-archive.md" "$home/verify.err" \
+    "the refusal did not name the archive it could not read"
+  assert_no_grep "carries no archived captain answer" "$home/verify.err" \
+    "the refusal asserted what an archive it never opened holds"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "an unreadable archive licensed the status-log fall-through"
+  pass "an unreadable Done archive is named rather than assumed to hold no answer"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -2471,6 +2563,8 @@ test_unprovable_inventory_entry_is_refused_by_name
 test_purged_entry_without_a_recorded_answer_is_still_refused
 test_purged_legacy_identity_passes_on_its_archived_answer
 test_unreadable_inventory_entry_refuses_both_gates
+test_archived_unanswered_row_outranks_a_status_close
+test_unreadable_archive_is_named_rather_than_assumed_empty
 
 test_verify_resolves_a_hold_migrated_to_beads_notes
 test_verify_resolves_a_hold_migrated_under_the_configured_prefix
