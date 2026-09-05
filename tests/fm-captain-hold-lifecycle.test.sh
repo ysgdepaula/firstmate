@@ -2533,21 +2533,21 @@ working: report drafted
 needs-decision [key=$call]: choose route north or route south
 resolved [key=$call]: the captain chose north
 EOF
-  cat > "$home/fakebin/tasks-axi" <<'SH'
+  # The failing id is baked into the fake rather than carried in the
+  # environment, so the read failure needs no subshell around run_captain and
+  # cannot leak into another case.
+  cat > "$home/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
-if [ "${1:-}" = show ] && [ "${2:-}" = "${TASKS_AXI_FAIL_SHOW_ID:-}" ]; then
+if [ "\${1:-}" = show ] && [ "\${2:-}" = "$call" ]; then
   printf 'error: temporary backlog read failure\n' >&2
   exit 75
 fi
-exec "${REAL_TASKS_AXI:?}" "$@"
+exec "\${REAL_TASKS_AXI:?}" "\$@"
 SH
   chmod +x "$home/fakebin/tasks-axi"
 
   set +e
-  (
-    export TASKS_AXI_FAIL_SHOW_ID="$call"
-    run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err"
-  )
+  run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err"
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "completion treated an unreadable captain call as purged"
@@ -2561,10 +2561,7 @@ SH
 
   printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
   set +e
-  (
-    export TASKS_AXI_FAIL_SHOW_ID="$call"
-    run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
-  )
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "verification treated an unreadable captain call as purged"
