@@ -127,13 +127,16 @@
 # entry was treated as purged and which record proved it:
 #   - the closed row in the Done archive `.tasks.toml` names, carrying the same
 #     resolution record the live check requires (bin/fm-backlog-transition-lib.sh
-#     owns resolving that archive path); or
+#     owns resolving that archive path). The archive is searched under the entry
+#     id and, for a concrete origin, under the legacy derived identity too, the
+#     same two identities a live row resolves through, because pre-collapse
+#     holds are the oldest population and so the likeliest to be purged; or
 #   - a `resolved` close for `[key=<entry>]` in the origin's own status log, read
 #     through bin/fm-classify-lib.sh's status_key_closing_verb so the durable
 #     `captain-held` transfer is never mistaken for one.
 # Neither record reads prose, and an entry with no such record is still refused:
-# that refusal names the entry, both records it looked in, and the exact hold
-# and answer commands that make the call durable again.
+# that refusal names the entry, every identity and record it looked in, and the
+# exact hold and answer commands that make the call durable again.
 #
 # Metadata compatibility: the attestation keeps the historical
 # `decisions_reviewed=1` and `decision_keys=` keys, and an inventory entry that
@@ -730,16 +733,37 @@ archived_task_record() {  # <archive-file> <task-id>
   ' "$archive"
 }
 
+# True when this entry can also be carried by the legacy derived identity.
+entry_has_legacy_identity() {  # <origin-or-empty>
+  [ -n "$1" ] && [ "$1" != "$BINDING_ANY" ]
+}
+
+# An archived row carrying its captain answer, for one exact task id.
+archived_answer_present() {  # <archive-file> <task-id>
+  local record
+  record=$(archived_task_record "$1" "$2") || return 1
+  body_has_resolution_record "$record"
+}
+
 # Historical proof that an entry the backlog no longer carries was already
-# closed with the captain's answer.
+# closed with the captain's answer. The archive is searched under the same two
+# identities resolve_entry resolves a live row through, so a pre-collapse entry
+# is proved by the row that actually carries it.
 entry_purge_evidence() {  # <origin> <entry>
-  local origin=$1 entry=$2 archive record verb resolve
+  local origin=$1 entry=$2 archive legacy verb resolve
   CAPTAIN_PURGE_EVIDENCE=
-  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
-    && record=$(archived_task_record "$archive" "$entry") \
-    && body_has_resolution_record "$record"; then
-    CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
-    return 0
+  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
+    if archived_answer_present "$archive" "$entry"; then
+      CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
+      return 0
+    fi
+    if entry_has_legacy_identity "$origin"; then
+      legacy=$(legacy_hold_id "$origin" "$entry")
+      if archived_answer_present "$archive" "$legacy"; then
+        CAPTAIN_PURGE_EVIDENCE="the archived captain answer for its legacy identity $legacy in $archive"
+        return 0
+      fi
+    fi
   fi
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   verb=$(status_key_closing_verb "$STATE/$origin.status" "$entry")
@@ -748,6 +772,22 @@ entry_purge_evidence() {  # <origin> <entry>
     return 0
   fi
   return 1
+}
+
+# What the archive was actually searched for, so a refusal never claims the
+# archive holds nothing under an identity it never looked up.
+archive_search_note() {  # <origin-or-empty> <entry>
+  local origin=$1 entry=$2 archive
+  if ! archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
+    printf "this home's backlog keeps no Done archive to read"
+    return 0
+  fi
+  if entry_has_legacy_identity "$origin"; then
+    printf 'it carries no archived captain answer in %s, under %s or %s' \
+      "$archive" "$entry" "$(legacy_hold_id "$origin" "$entry")"
+    return 0
+  fi
+  printf 'it carries no archived captain answer in %s' "$archive"
 }
 
 # What to do about an entry that resolves to nothing and has no closing record.
@@ -763,8 +803,12 @@ purged_entry_repair() {  # <origin> <entry> <archive-note>
   printf "  %s hold %s --title '<what the captain must choose>' --reason '<why it is held>' --origin %s\n" \
     "$0" "$entry" "$origin"
   printf '  %s answer %s --decision-file <file holding the captain answer>\n' "$0" "$entry"
-  printf 'Drop %s from decision_keys= in %s only when it never named a captain call.' \
-    "$entry" "$STATE/$origin.meta"
+  # Only an origin that HAS an attestation can have that entry dropped from it;
+  # advising an edit to a file that does not exist would be its own false line.
+  if [ -f "$STATE/$origin.meta" ]; then
+    printf 'Drop %s from decision_keys= in %s only when it never named a captain call.' \
+      "$entry" "$STATE/$origin.meta"
+  fi
 }
 
 # One inventory entry's durability check. Deliberately not called through a
@@ -789,12 +833,7 @@ verify_inventory_entry() {  # <origin> <entry>
       "$entry" "$CAPTAIN_BACKLOG_FILE" "$CAPTAIN_PURGE_EVIDENCE" >&2
     return 0
   fi
-  if archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
-    archive_note="it carries no archived captain answer in $archive"
-  else
-    archive_note="this home's backlog keeps no Done archive to read"
-  fi
-  fail "$(purged_entry_repair "$origin" "$entry" "$archive_note")"
+  fail "$(purged_entry_repair "$origin" "$entry" "$(archive_search_note "$origin" "$entry")")"
 }
 
 body_hold_set_timestamp() {  # <decoded-task-body>
