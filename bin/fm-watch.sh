@@ -790,6 +790,12 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope]
 # writing and then started a validation run has been deferred for the whole hour
 # while that run is minutes old, and attributing the chain's number to the source
 # would state a duration the named evidence did not produce.
+#
+# The triage-log line below describes the deferral the same way, for the same
+# reason. Only the worktree-write source is anchored on the idle window at all;
+# the live-run probe establishes no time relationship, so saying an evidence phrase
+# holds "since the idle window opened" asserts an age that source never measured -
+# and that log is what a supervisor diagnoses one of these absorbs from.
 wedge_defer_progress() {  # <window> <since-file> <triage-label> <idle-age> <evidence> <recheck-hint>
   local win=$1 since_file=$2 label=$3 age=$4 evidence=$5 hint=$6 key wsf wage
   key=$(window_key "$win")
@@ -799,7 +805,7 @@ wedge_defer_progress() {  # <window> <since-file> <triage-label> <idle-age> <evi
   date +%s > "$since_file"
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s, deferred for ${wage}s, currently $evidence, rechecked on a long cadence not a wedge; $hint)"
-  triage_log "absorbed $label ($evidence since the idle window opened, idle ${age}s): $win"
+  triage_log "absorbed $label (deferred, currently $evidence, idle ${age}s): $win"
 }
 
 # Drop a window's progress-deferral chain wherever its stale bookkeeping resets, so
