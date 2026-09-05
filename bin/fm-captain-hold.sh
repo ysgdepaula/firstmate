@@ -127,16 +127,26 @@
 # entry was treated as purged and which record proved it:
 #   - the closed row in the Done archive this home rotates into, carrying the
 #     same resolution record the live check requires
-#     (bin/fm-backlog-transition-lib.sh owns resolving that archive path: the
-#     `.tasks.toml` key when one names it, else tasks-axi's own default beside
-#     the backlog file, because a config that names no archive still has one).
-#     The archive is searched under the entry
+#     (bin/fm-backlog-transition-lib.sh owns resolving that archive path,
+#     mirroring tasks-axi's own precedence: the backlog root's `.tasks.toml`
+#     `[markdown] archive` when one names it, then the same key in the user
+#     config at `$HOME/.tasks-axi/config.toml`, else tasks-axi's own default
+#     beside the backlog file, because a config that names no archive still has
+#     one). The archive is searched under the entry
 #     id and, for a concrete origin, under the legacy derived identity too, the
 #     same two identities a live row resolves through, because pre-collapse
-#     holds are the oldest population and so the likeliest to be purged; or
-#   - a `resolved` close for `[key=<entry>]` in the origin's own status log, read
+#     holds are the oldest population and so the likeliest to be purged. A
+#     purge frees an id for reuse and retention appends a fresh archived section
+#     without deduping ids, so the NEWEST archived row under an identity is the
+#     one that says whether THIS call was closed with an answer; an older
+#     answered row beneath it proves nothing, and the refusal names how many
+#     rows that identity has there; or
+#   - a `resolved` close in the origin's own status log, read
 #     through bin/fm-classify-lib.sh's status_key_closing_verb so the durable
-#     `captain-held` transfer is never mistaken for one.
+#     `captain-held` transfer is never mistaken for one, and looked up under the
+#     same identities the archive was searched under, because a pre-collapse
+#     call can have been closed on the channel under its composed identity. The
+#     acceptance and the refusal both name the key that was read.
 # The two are ordered, not independent: a row actually found in the archive is
 # authoritative about itself, so a row closed with no resolution record refuses
 # by name under the identity it was found beneath and the status log is never
@@ -496,6 +506,26 @@ entry_has_legacy_identity() {  # <origin-or-empty>
   [ -n "$1" ] && [ "$1" != "$BINDING_ANY" ]
 }
 
+# Every identity one inventory entry or channel key can be carried by in this
+# home's own records, one per line and in resolution order: the exact id, then
+# the legacy derived identity when the origin is a concrete slug. The one owner
+# of that set, so the backlog-absence check, the archive search and the status
+# lookup can never drift apart over which identities a verdict was reached
+# across. resolve_entry's live ladder deliberately reaches further, to the rows
+# a markdown-to-beads migration rehomed; those are backend row names that no
+# markdown Done archive and no status key can carry, so they belong to that
+# ladder alone and never to this set.
+entry_identities() {  # <origin-or-empty> <entry>
+  printf '%s\n' "$2"
+  if entry_has_legacy_identity "$1"; then
+    printf '%s\n' "$(legacy_hold_id "$1" "$2")"
+  fi
+}
+
+# Resolve one inventory entry or channel key to the task that carries it: the
+# first of its identities that names a live row. Prints the resolved id, or
+# returns 1 having printed nothing, so a caller decides what an unresolvable
+# entry means instead of every caller inheriting one verdict.
 # --- migrated legacy-id resolution on the Beads backend ---------------------
 #
 # A home that moved its backlog from markdown to Beads no longer carries the
@@ -757,13 +787,15 @@ require_row_absent() {  # <resolved-data-dir> <task-id>
 # identity a live row resolves through. Called directly, never through a command
 # substitution, so its refusal aborts the gate.
 require_entry_purged() {  # <origin-or-empty> <entry>
-  local origin=$1 entry=$2 data
+  local origin=$1 entry=$2 data identity
   data=$(fm_backlog_data_absolute "$DATA") \
     || fail "data directory cannot be resolved: $DATA"
-  require_row_absent "$data" "$entry"
-  if entry_has_legacy_identity "$origin"; then
-    require_row_absent "$data" "$(legacy_hold_id "$origin" "$entry")"
-  fi
+  while IFS= read -r identity; do
+    [ -n "$identity" ] || continue
+    require_row_absent "$data" "$identity" </dev/null
+  done <<EOF
+$(entry_identities "$origin" "$entry")
+EOF
 }
 
 # True when nothing at all sits at this path, so "it records nothing" is a fact
@@ -780,29 +812,57 @@ record_readable() {  # <path>
   [ -f "$1" ] && [ -r "$1" ] && [ ! -L "$1" ]
 }
 
-# The archived rows for one task id: the closed row plus its indented body, so
+# The archived record for one task id: its closed row plus the indented body, so
 # body_has_resolution_record applies to the archive exactly as it applies to a
-# live row. Only `- [x]` rows count, so an archive that somehow holds an open
-# row proves nothing.
+# live row. Retention appends a fresh archived section on every rotation and
+# never dedupes ids, so an id freed by a purge and later reused legitimately has
+# several closed rows; only the LAST one answers "was THIS call closed with an
+# answer", so that is the only one emitted. Only `- [x]` rows count, so an
+# archive that somehow holds an open row proves nothing.
 archived_task_record() {  # <archive-file> <task-id>
   local archive=$1 id=$2
   record_readable "$archive" || return 1
   LC_ALL=C awk -v id="$id" '
-    BEGIN { want = "- [x] " id " -"; found = 0; capture = 0 }
+    BEGIN { want = "- [x] " id " -"; found = 0; capture = 0; record = "" }
     /^- \[/ {
       capture = (index($0, want) == 1)
-      if (capture) { found = 1; print }
+      if (capture) { found = 1; record = $0 }
       next
     }
     /^[^[:space:]]/ { capture = 0; next }
-    capture { print }
-    END { if (!found) exit 1 }
+    capture { record = record "\n" $0 }
+    END { if (!found) exit 1; print record }
   ' "$archive"
 }
 
-# The archive's verdict on one exact task id: `answered` when its closed row
-# carries the captain's resolution record, `unanswered` when the row is there
-# without one, `absent` when the archive holds no such row.
+# How many closed rows the archive holds for one exact task id, so a refusal can
+# tell an archive that holds nothing from one holding an unanswered row on top
+# of an older answered one.
+archived_identity_rows() {  # <archive-file> <task-id>
+  local archive=$1 id=$2
+  if ! record_readable "$archive"; then
+    printf '0'
+    return 0
+  fi
+  LC_ALL=C awk -v id="$id" '
+    BEGIN { want = "- [x] " id " -"; rows = 0 }
+    /^- \[/ { if (index($0, want) == 1) rows++ }
+    END { printf "%d", rows }
+  ' "$archive"
+}
+
+# That count as the phrase a refusal reads with.
+archived_rows_tally() {  # <row-count>
+  if [ "$1" = 1 ]; then
+    printf '1 archived row'
+    return 0
+  fi
+  printf '%s archived rows' "$1"
+}
+
+# The archive's verdict on one exact task id, read off its newest closed row:
+# `answered` when that row carries the captain's resolution record, `unanswered`
+# when it is there without one, `absent` when the archive holds no such row.
 archived_identity_verdict() {  # <archive-file> <task-id>
   local record
   if ! record=$(archived_task_record "$1" "$2"); then
@@ -816,14 +876,14 @@ archived_identity_verdict() {  # <archive-file> <task-id>
   printf 'unanswered'
 }
 
-# What the archive says about this entry, under the same two identities
-# resolve_entry resolves a live row through. A row actually found there is
-# authoritative about itself: it proves the captain answered, or it proves the
-# call was closed with no answer. Returns 0 with the evidence named, 2 when the
-# archive itself refuses the entry, and 1 only when the archive holds no row for
-# it at all, which is the one case the status log may still speak to.
+# What the archive says about this entry, under every identity resolve_entry
+# resolves a live row through. A row actually found there is authoritative about
+# itself: its newest row proves the captain answered, or it proves the call was
+# closed with no answer. Returns 0 with the evidence named, 2 when the archive
+# itself refuses the entry, and 1 only when the archive holds no row for it at
+# all, which is the one case the status log may still speak to.
 archived_purge_evidence() {  # <origin-or-empty> <entry>
-  local origin=$1 entry=$2 archive legacy
+  local origin=$1 entry=$2 archive identity under answer searched='' rows
   archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
     || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and this home's Done archive path could not be resolved, so whether the captain answered it cannot be established"
   if record_path_empty "$archive"; then
@@ -832,32 +892,35 @@ archived_purge_evidence() {  # <origin-or-empty> <entry>
   fi
   record_readable "$archive" \
     || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its Done archive $archive could not be read, so whether the captain answered it cannot be established"
-  case "$(archived_identity_verdict "$archive" "$entry")" in
-    answered)
-      CAPTAIN_PURGE_EVIDENCE="its archived captain answer in $archive"
-      return 0
-      ;;
-    unanswered)
-      CAPTAIN_PURGE_REFUSAL="its archived row in $archive, under $entry, is closed with no recorded captain answer"
-      return 2
-      ;;
-  esac
-  if entry_has_legacy_identity "$origin"; then
-    legacy=$(legacy_hold_id "$origin" "$entry")
-    case "$(archived_identity_verdict "$archive" "$legacy")" in
+  while IFS= read -r identity; do
+    [ -n "$identity" ] || continue
+    if [ "$identity" = "$entry" ]; then
+      under=$identity
+      answer="its archived captain answer in $archive"
+    else
+      under="its legacy identity $identity"
+      answer="the archived captain answer for its legacy identity $identity in $archive"
+    fi
+    searched=${searched:+$searched or }$identity
+    case "$(archived_identity_verdict "$archive" "$identity")" in
       answered)
-        CAPTAIN_PURGE_EVIDENCE="the archived captain answer for its legacy identity $legacy in $archive"
+        CAPTAIN_PURGE_EVIDENCE=$answer
         return 0
         ;;
       unanswered)
-        CAPTAIN_PURGE_REFUSAL="its archived row in $archive, under its legacy identity $legacy, is closed with no recorded captain answer"
+        rows=$(archived_identity_rows "$archive" "$identity")
+        CAPTAIN_PURGE_REFUSAL="the newest of the $(archived_rows_tally "$rows") in $archive under $under is closed with no recorded captain answer"
         return 2
         ;;
     esac
-    CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive, under $entry or $legacy"
+  done <<EOF
+$(entry_identities "$origin" "$entry")
+EOF
+  if [ "$searched" = "$entry" ]; then
+    CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive"
     return 1
   fi
-  CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive"
+  CAPTAIN_PURGE_REFUSAL="it carries no archived captain answer in $archive, under $searched"
   return 1
 }
 
@@ -865,9 +928,12 @@ archived_purge_evidence() {  # <origin-or-empty> <entry>
 # closed with the captain's answer. The archive speaks first and, when it holds
 # the row, last: only an archive that holds no row for the entry lets the
 # origin's own status close be read, so rotating a backlog can never turn a
-# refusal into an acceptance.
+# refusal into an acceptance. The status log is then read under the same
+# identities the archive was searched under, because a pre-collapse call can
+# have been closed on the channel under its composed identity.
 entry_purge_evidence() {  # <origin> <entry>
-  local origin=$1 entry=$2 verb resolve status_file archived=0
+  local origin=$1 entry=$2 verb resolve status_file archived=0 identity
+  local identities keys=''
   CAPTAIN_PURGE_EVIDENCE=
   CAPTAIN_PURGE_REFUSAL=
   archived_purge_evidence "$origin" "$entry" || archived=$?
@@ -875,20 +941,32 @@ entry_purge_evidence() {  # <origin> <entry>
     0) return 0 ;;
     2) return 1 ;;
   esac
+  identities=$(entry_identities "$origin" "$entry")
+  while IFS= read -r identity; do
+    [ -n "$identity" ] || continue
+    keys=${keys:+$keys or }"[key=$identity]"
+  done <<EOF
+$identities
+EOF
   status_file="$STATE/$origin.status"
   if record_path_empty "$status_file"; then
-    CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and this origin keeps no status log at $status_file to record a resolved close for [key=$entry]"
+    CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and this origin keeps no status log at $status_file to record a resolved close for $keys"
     return 1
   fi
   record_readable "$status_file" \
     || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its origin status log $status_file could not be read, so whether the captain answered it cannot be established"
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
-  verb=$(status_key_closing_verb "$status_file" "$entry")
-  if [ "$verb" = "$resolve" ]; then
-    CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$entry] in $status_file"
-    return 0
-  fi
-  CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and $status_file records no resolved close for [key=$entry]"
+  while IFS= read -r identity; do
+    [ -n "$identity" ] || continue
+    verb=$(status_key_closing_verb "$status_file" "$identity")
+    if [ "$verb" = "$resolve" ]; then
+      CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$identity] in $status_file"
+      return 0
+    fi
+  done <<EOF
+$identities
+EOF
+  CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and $status_file records no resolved close for $keys"
   return 1
 }
 
