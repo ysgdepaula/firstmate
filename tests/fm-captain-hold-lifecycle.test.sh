@@ -2369,6 +2369,78 @@ test_purged_entry_without_a_recorded_answer_is_still_refused() {
   pass "an archived captain call closed with no recorded answer is still refused"
 }
 
+# A row that cannot be READ is not a purged row. The purge tolerance must never
+# be reached on read uncertainty: the call here is still live, open, and
+# unanswered, so treating its unreadable row as purged would pass an open
+# captain call on a status close and state a falsehood while doing it.
+test_unreadable_inventory_entry_refuses_both_gates() {
+  local home id call rc show
+  home=$(make_home purged-read-error)
+  id=sample-readerror-review
+  call=sample-unreadable-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample read failures" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the read-error investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample read-error review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the still-open captain-held task"
+  # The status log carries the very record the purge tolerance accepts, so only
+  # the absence check can keep this open call from passing.
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = show ] && [ "${2:-}" = "${TASKS_AXI_FAIL_SHOW_ID:-}" ]; then
+  printf 'error: temporary backlog read failure\n' >&2
+  exit 75
+fi
+exec "${REAL_TASKS_AXI:?}" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  set +e
+  (
+    export TASKS_AXI_FAIL_SHOW_ID="$call"
+    run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err"
+  )
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion treated an unreadable captain call as purged"
+  assert_grep "could not be read" "$home/complete.err" "completion did not explain the refusal"
+  assert_grep "temporary backlog read failure" "$home/complete.err" \
+    "the underlying backlog read failure was hidden"
+  assert_no_grep "purged: captain-held task" "$home/complete.err" \
+    "an unreadable row was announced as purged"
+  assert_no_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "completion attested an inventory it could not read"
+
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  set +e
+  (
+    export TASKS_AXI_FAIL_SHOW_ID="$call"
+    run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  )
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "verification treated an unreadable captain call as purged"
+  assert_grep "could not be read" "$home/verify.err" "verification did not explain the refusal"
+  assert_grep "temporary backlog read failure" "$home/verify.err" \
+    "verification hid the underlying backlog read failure"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "verification announced an unreadable row as purged"
+
+  show=$(tasks_in "$home" show "$call" --full) || fail "the unreadable captain call disappeared"
+  assert_contains "$show" "hold_kind: captain" "the refusal dropped the captain hold"
+  assert_not_contains "$show" "Resolution recorded by fm-captain-hold." \
+    "the refusal recorded an answer nobody gave"
+  pass "an inventory entry whose row cannot be read refuses both gates"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -2398,6 +2470,7 @@ test_purged_inventory_entry_passes_on_its_status_close
 test_unprovable_inventory_entry_is_refused_by_name
 test_purged_entry_without_a_recorded_answer_is_still_refused
 test_purged_legacy_identity_passes_on_its_archived_answer
+test_unreadable_inventory_entry_refuses_both_gates
 
 test_verify_resolves_a_hold_migrated_to_beads_notes
 test_verify_resolves_a_hold_migrated_under_the_configured_prefix

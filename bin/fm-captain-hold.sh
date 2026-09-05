@@ -134,6 +134,10 @@
 #   - a `resolved` close for `[key=<entry>]` in the origin's own status log, read
 #     through bin/fm-classify-lib.sh's status_key_closing_verb so the durable
 #     `captain-held` transfer is never mistaken for one.
+# An entry reaches that tolerance only once the backlog is proved to carry no
+# row under either identity, through the same guarded probe `open` asks: a row
+# that cannot be READ is read uncertainty, not a purge, and refuses with the
+# underlying read failure exactly as the ship-hold gate refuses it.
 # Neither record reads prose, and an entry with no such record is still refused:
 # that refusal names the entry, every identity and record it looked in, and the
 # exact hold and answer commands that make the call durable again.
@@ -474,6 +478,13 @@ verify_hold_durable() {  # <task-id>
   fail "captain-held task $id is neither held for the captain nor closed with a recorded captain answer"
 }
 
+# True when this entry can also be carried by the legacy derived identity. The
+# one owner of that condition: the resolution probe, the refusal wording, and
+# the archive search must never drift apart over it.
+entry_has_legacy_identity() {  # <origin-or-empty>
+  [ -n "$1" ] && [ "$1" != "$BINDING_ANY" ]
+}
+
 # --- migrated legacy-id resolution on the Beads backend ---------------------
 #
 # A home that moved its backlog from markdown to Beads no longer carries the
@@ -672,7 +683,7 @@ resolve_entry() {  # <origin-or-empty> <entry>
     printf '%s exact' "$entry"
     return 0
   fi
-  if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
+  if entry_has_legacy_identity "$origin"; then
     legacy=$(legacy_hold_id "$origin" "$entry")
     if task_show "$legacy" >/dev/null 2>&1; then
       printf '%s legacy' "$legacy"
@@ -691,7 +702,7 @@ resolve_entry() {  # <origin-or-empty> <entry>
 # The named reason an entry resolves to nothing, for a caller that must refuse.
 unresolved_entry_reason() {  # <origin-or-empty> <entry>
   local origin=$1 entry=$2
-  if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
+  if entry_has_legacy_identity "$origin"; then
     printf 'no captain-held task %s and no migrated hold for it in this home'"'"'s configured backlog (data directory %s); the nearest legacy identity %s also resolves to nothing' \
       "$entry" "$DATA" "$(legacy_hold_id "$origin" "$entry")"
     return 0
@@ -713,6 +724,33 @@ CAPTAIN_PURGE_EVIDENCE=
 CAPTAIN_RESOLVED_ID=
 CAPTAIN_RESOLVED_HOW=
 
+# A row that could not be READ is not a purged row, and treating it as one would
+# pass a still-open captain call and print an accepted-notice stating a
+# falsehood. fm_backlog_row_probe (bin/fm-backlog-transition-lib.sh) is the one
+# owner of that classification, the same boundary `open` asks, so only its
+# `not_found` verdict is absence and every other outcome refuses here.
+require_row_absent() {  # <resolved-data-dir> <task-id>
+  local data=$1 id=$2
+  if fm_backlog_row_probe "$data" "$id"; then
+    fail "captain-held task $id is still in $CAPTAIN_BACKLOG_FILE but its record could not be resolved"
+  fi
+  [ "$FM_BACKLOG_ROW_RESULT" = not_found ] \
+    || fail "captain-held task $id could not be read from $CAPTAIN_BACKLOG_FILE: $FM_BACKLOG_ROW_ERROR"
+}
+
+# An entry is genuinely purged only when the backlog carries no row under either
+# identity a live row resolves through. Called directly, never through a command
+# substitution, so its refusal aborts the gate.
+require_entry_purged() {  # <origin-or-empty> <entry>
+  local origin=$1 entry=$2 data
+  data=$(fm_backlog_data_absolute "$DATA") \
+    || fail "data directory cannot be resolved: $DATA"
+  require_row_absent "$data" "$entry"
+  if entry_has_legacy_identity "$origin"; then
+    require_row_absent "$data" "$(legacy_hold_id "$origin" "$entry")"
+  fi
+}
+
 # The archived rows for one task id: the closed row plus its indented body, so
 # body_has_resolution_record applies to the archive exactly as it applies to a
 # live row. Only `- [x]` rows count, so an archive that somehow holds an open
@@ -731,11 +769,6 @@ archived_task_record() {  # <archive-file> <task-id>
     capture { print }
     END { if (!found) exit 1 }
   ' "$archive"
-}
-
-# True when this entry can also be carried by the legacy derived identity.
-entry_has_legacy_identity() {  # <origin-or-empty>
-  [ -n "$1" ] && [ "$1" != "$BINDING_ANY" ]
 }
 
 # An archived row carrying its captain answer, for one exact task id.
@@ -828,6 +861,7 @@ verify_inventory_entry() {  # <origin> <entry>
   # A refused migrated-hold scan is read uncertainty, not an absent row, so it
   # never reaches the purge tolerance: resolve_entry has already named it.
   [ "$rc" = 1 ] || exit 1
+  require_entry_purged "$origin" "$entry"
   if entry_purge_evidence "$origin" "$entry"; then
     printf 'purged: captain-held task %s is no longer in %s; accepted on %s\n' \
       "$entry" "$CAPTAIN_BACKLOG_FILE" "$CAPTAIN_PURGE_EVIDENCE" >&2
