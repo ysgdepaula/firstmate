@@ -276,7 +276,7 @@ After /no-mistakes reports CI green (the CI-ready return point - do not wait for
 EOF
       ;;
     *)
-      echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
+      echo "error: fm_dod_block: no brief block for delivery mode '$mode'" >&2
       return 1 ;;
   esac
 }

@@ -1759,6 +1759,36 @@ test_classify_signal_dedup_against_scan() {
   pass "classify_signal dedupes against the catch-all scan seen marker"
 }
 
+# The done contract guard is the one predicate every finish reader asks. When the
+# span reader withholds a linkless done it steers the worker instead of
+# presenting it, so no path escalated that line and this signal is a routine one,
+# not a re-notification of something already escalated.
+test_classify_signal_withheld_done_is_not_already_escalated() {
+  local dir state out
+  dir=$(make_supercase signal-withheld-done)
+  state="$dir/state"
+  printf 'window=sess:fm-sig-nm1\nkind=ship\nmode=no-mistakes\n' > "$state/sig-nm1.meta"
+  printf 'done: local tests pass\n' > "$state/sig-nm1.status"
+  seen_through "$state" "sig-nm1"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/sig-nm1.status" "$state")
+  case "$out" in
+    self\|routine\ signal:*) ;;
+    *) fail "a withheld linkless done was reported as already escalated: $out" ;;
+  esac
+
+  # The divergence: the same fixture whose done carries its PR link really was
+  # escalated by another path, and is still reported that way.
+  printf 'window=sess:fm-sig-nm2\nkind=ship\nmode=no-mistakes\n' > "$state/sig-nm2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/sig-nm2.status"
+  seen_through "$state" "sig-nm2"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/sig-nm2.status" "$state")
+  case "$out" in
+    self\|signal\ already\ escalated*) ;;
+    *) fail "a delivered done is no longer reported as already escalated: $out" ;;
+  esac
+  pass "classify_signal calls a withheld linkless done routine and a delivered one already escalated"
+}
+
 test_classify_stale_dedup_against_signal() {
   # If the signal path already escalated a status (seen marker matches),
   # classify_stale must self-handle to avoid a duplicate in the digest.
@@ -2721,6 +2751,7 @@ test_transient_unreadable_signal_recovers_without_advancing
 test_permission_recovery_reclassifies_catchall_status
 test_permanent_classification_failure_is_reported_and_acknowledged
 test_catchall_scan_surfaces_a_masked_event
+test_classify_signal_withheld_done_is_not_already_escalated
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale

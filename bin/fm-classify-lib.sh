@@ -1693,10 +1693,10 @@ _fm_status_open_decision_origins() {  # <status-file>
 # replayed by a whole-log re-read is dropped rather than re-steered or
 # re-presented. Every consumer that decides whether a line is a FINISH asks the
 # pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
-# the away-mode supervisor's stale wake classification and its wedge aging, both
-# of bin/fm-crew-state.sh's status-log paths (its verb mapping and its ci-ready
-# gate), a secondmate's parent-channel ledger, and bin/fm-captain-hold.sh's
-# open-decision retirement -
+# the away-mode supervisor's signal and stale wake classifications and its wedge
+# aging, both of bin/fm-crew-state.sh's status-log paths (its verb mapping and
+# its ci-ready gate), a secondmate's parent-channel ledger, and
+# bin/fm-captain-hold.sh's open-decision retirement -
 # so the classifier and the authoritative current-state reader cannot disagree
 # about whether a task is finished, and nothing retires a captain's open decision
 # on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
@@ -1727,8 +1727,10 @@ status_task_delivery_mode() {  # <status-file>
 #
 # This is deliberately a SHAPE test - "https://<host>/<path>/pull/<n>", plus
 # GitLab's "/-/merge_requests/<n>" spelling, each accepted whatever a browser
-# hung off the number ("/files", "#issuecomment-1", "?w=1"), since a pasted
-# review URL is the same delivered pull request - and deliberately NOT
+# hung off the number ("/files", "#issuecomment-1", "?w=1") and whatever prose
+# wrapped it (brackets and quotes on either side, trailing sentence
+# punctuation), since a pasted review URL is the same delivered pull request -
+# and deliberately NOT
 # bin/fm-pr-lib.sh's fm_pr_url_parse, even though that function is the one owner
 # of what a task PR URL is. The two answer different questions. fm_pr_url_parse
 # asks "can this fleet's merge polling address this pull request", so it accepts
@@ -1745,11 +1747,18 @@ status_line_has_pr_link() {  # <status-line>
   local line=$1 word
   case "$line" in *https://*) ;; *) return 1 ;; esac
   while IFS= read -r word; do
-    case "$word" in https://*) ;; *) continue ;; esac
-    # Trailing sentence punctuation is prose, not part of the URL.
+    # A wrapper or sentence punctuation on either side is prose, not part of the
+    # URL, and a worker that brackets its link has still delivered it.
     while :; do
       case "$word" in
-        *.|*,|*\;|*:|*!|*\)|*\]|*\}) word=${word%?} ;;
+        \(*|\<*|\[*|\{*|\"*|\'*) word=${word#?} ;;
+        *) break ;;
+      esac
+    done
+    case "$word" in https://*) ;; *) continue ;; esac
+    while :; do
+      case "$word" in
+        *.|*,|*\;|*:|*!|*\)|*\]|*\}|*\>|*\"|*\') word=${word%?} ;;
         *) break ;;
       esac
     done

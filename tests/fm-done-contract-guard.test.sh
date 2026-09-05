@@ -134,8 +134,20 @@ test_pr_link_detection() {
     || fail "a multi-digit pull request with a path suffix was read as no link"
   status_line_has_pr_link "done: PR https://gitlab.com/g/p/-/merge_requests/3/diffs" \
     || fail "a single-digit merge request with a path suffix was read as no link"
+  # Prose wraps a pasted URL on both sides, and a worker that brackets its link
+  # has still delivered the pull request.
+  status_line_has_pr_link "done: PR (https://github.com/o/r/pull/7) checks green" \
+    || fail "a parenthesized pull-request URL was read as no link"
+  status_line_has_pr_link "done: PR <https://github.com/o/r/pull/7> checks green" \
+    || fail "an angle-bracketed pull-request URL was read as no link"
+  status_line_has_pr_link 'done: PR "https://github.com/o/r/pull/12" checks green' \
+    || fail "a quoted pull-request URL was read as no link"
+  status_line_has_pr_link "done: PR [https://gitlab.com/g/p/-/merge_requests/3] shipped" \
+    || fail "a bracketed merge-request URL was read as no link"
   status_line_has_pr_link "done: local tests pass" \
     && fail "a done: with no link was read as carrying one"
+  status_line_has_pr_link "done: see (https://github.com/kunchenguid/firstmate)" \
+    && fail "a bracketed repository URL that is not a pull request was read as a PR link"
   status_line_has_pr_link "done: see https://github.com/kunchenguid/firstmate" \
     && fail "a repository URL that is not a pull request was read as a PR link"
   status_line_has_pr_link "done: see https://github.com/kunchenguid/firstmate/pull/0" \

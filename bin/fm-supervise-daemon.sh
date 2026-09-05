@@ -377,8 +377,13 @@ classify_signal() {  # <reason-after-colon> <state>
     # Nothing captain-relevant is left ahead of the recorded offset. When the log
     # nonetheless ends on a captain-relevant line, this signal is a re-notification
     # of something already escalated, not a routine one; position is the whole
-    # dedupe, so no separate seen-marker comparison is needed.
-    status_is_captain_relevant "$last" && seen_rel=1
+    # dedupe, so no separate seen-marker comparison is needed. A `done:` the
+    # delivery contract withholds is the exception: the span reader steered its
+    # worker instead of presenting it, so no path escalated it and calling this
+    # signal a re-notification of one would be false.
+    if ! status_done_contract_unmet "$f" "$last"; then
+      status_is_captain_relevant "$last" && seen_rel=1
+    fi
   done
   # strip a trailing " | " separator so the distilled line is clean
   distilled="${distilled% | }"
