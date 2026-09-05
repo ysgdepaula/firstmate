@@ -1909,35 +1909,72 @@ FM_NM_PROCESS_NAME=${FM_NM_PROCESS_NAME:-no-mistakes}
 # exclusion at all.
 FM_NM_PROCESS_SHARED_SUBCOMMANDS=${FM_NM_PROCESS_SHARED_SUBCOMMANDS-'daemon'}
 
-# Every pid whose CURRENT WORKING DIRECTORY is <dir> or under it, from one
-# system-wide `lsof -a -d cwd` scan (never the recursive +D file-tree walk, which
-# lsof itself documents as slow). Never $$, the calling shell's own pid.
+# The one system-wide `lsof -a -d cwd` scan every cwd-binding answer below is read
+# from, and its OPT-IN single-cycle reuse. The scan is system-wide, so its result is
+# identical for every directory asked about at the same moment; without reuse a
+# caller sweeping N windows in one poll pays N identical scans back to back, each
+# one costing its own wall-clock bound in the component whose job is noticing a
+# wedge quickly.
 #
-# A process's working directory is a kernel fact rather than anything a tool
-# renders, which is what makes it a sound BINDING between a process and one task:
-# a task worktree path is unique per task and never shared, so a pid reported here
-# cannot belong to another task or to the primary checkout.
-#
-# <timeout-secs> is optional. Omitted, the scan is unbounded, which is what a
+# Reuse is off unless a caller arms it with fm_cwd_scan_cache_reset, because a
 # caller acting on the complete process list (teardown's leaked-descendant reap)
-# needs. Given, the scan runs under that wall-clock bound and a scan that outlives
-# it reports failure like any other unusable result, which is what a caller
-# running inside a poll loop needs.
+# kills what it finds and must never act on a list assembled a moment ago. Armed,
+# the reset both enables reuse and DISCARDS whatever the previous cycle captured,
+# so a caller arms it at the top of each cycle and the result can never outlive the
+# cycle that produced it or reach disk. Stale process data would defer an
+# escalation that should have fired, the unsafe direction, so the memo's lifetime
+# is exactly one cycle and no longer.
 #
+# Only a SUCCESSFUL scan is remembered. A missing lsof, an error, or a timeout is
+# not "no processes": it is left uncaptured so the next caller in the same cycle
+# re-scans and every caller keeps reporting the same no-evidence failure it does
+# today.
+FM_CWD_SCAN_CACHE_ARMED=0
+FM_CWD_SCAN_CACHE_VALID=0
+FM_CWD_SCAN_CACHE_OUT=
+FM_CWD_SCAN_OUT=
+
+# Arm single-cycle reuse and drop the previous cycle's capture. Callers running a
+# poll loop call this at the top of every cycle; callers that need a freshly
+# assembled list on every call never call it at all.
+fm_cwd_scan_cache_reset() {
+  FM_CWD_SCAN_CACHE_ARMED=1
+  FM_CWD_SCAN_CACHE_VALID=0
+  FM_CWD_SCAN_CACHE_OUT=
+}
+
+# Capture one cwd scan into FM_CWD_SCAN_OUT: 0 when the output is usable, 1 when
+# the scan could not run at all (no lsof, an lsof error, or a timeout). Must be
+# called from the shell that owns the cycle rather than from inside a command
+# substitution, or the memo would be written in a subshell and thrown away.
+# <timeout-secs> is optional, exactly as in fm_pids_with_cwd_under below.
+fm_cwd_scan_capture() {  # [timeout-secs]
+  local bound=${1-}
+  if [ "${FM_CWD_SCAN_CACHE_ARMED:-0}" = 1 ] && [ "${FM_CWD_SCAN_CACHE_VALID:-0}" = 1 ]; then
+    FM_CWD_SCAN_OUT=$FM_CWD_SCAN_CACHE_OUT
+    return 0
+  fi
+  case "$bound" in
+    ''|*[!0-9]*|0) FM_CWD_SCAN_OUT=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
+    *) FM_CWD_SCAN_OUT=$(fm_run_timed "$bound" lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
+  esac
+  if [ "${FM_CWD_SCAN_CACHE_ARMED:-0}" = 1 ]; then
+    FM_CWD_SCAN_CACHE_OUT=$FM_CWD_SCAN_OUT
+    FM_CWD_SCAN_CACHE_VALID=1
+  fi
+}
+
+# Every pid in the captured scan whose CURRENT WORKING DIRECTORY is <dir> or under
+# it. Never $$, the calling shell's own pid. Reads FM_CWD_SCAN_OUT, so the caller
+# must have captured successfully first; parsing is separated from scanning only so
+# one capture can answer for many directories.
 # 0 with the matching pids on stdout, 0 with empty output when provably nothing
-# matches, and 1 when the scan could not establish a safe result at all (no lsof,
-# an lsof error or timeout, or output this parser does not recognize). Callers
-# distinguish those two zero cases themselves; the shared owner deliberately does
-# not decide what "no holder" means for them.
-fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
-  local dir=$1 bound=${2-} out pid path line
+# matches, and 1 when the output is not in a shape this parser recognizes.
+fm_cwd_scan_pids_under() {  # <dir>
+  local dir=$1 pid path line
   [ -n "$dir" ] && [ -d "$dir" ] || return 0
   dir=$(cd "$dir" && pwd -P) || return 1
-  case "$bound" in
-    ''|*[!0-9]*|0) out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
-    *) out=$(fm_run_timed "$bound" lsof -a -d cwd -Fpn 2>/dev/null) || return 1 ;;
-  esac
-  [ -n "$out" ] || return 0
+  [ -n "$FM_CWD_SCAN_OUT" ] || return 0
   pid=
   while IFS= read -r line; do
     case "$line" in
@@ -1959,8 +1996,39 @@ fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
       *) return 1 ;;
     esac
   done <<EOF
-$out
+$FM_CWD_SCAN_OUT
 EOF
+}
+
+# Every pid whose CURRENT WORKING DIRECTORY is <dir> or under it, from one
+# system-wide `lsof -a -d cwd` scan (never the recursive +D file-tree walk, which
+# lsof itself documents as slow). Never $$, the calling shell's own pid.
+#
+# A process's working directory is a kernel fact rather than anything a tool
+# renders, which is what makes it a sound BINDING between a process and one task:
+# a task worktree path is unique per task and never shared, so a pid reported here
+# cannot belong to another task or to the primary checkout.
+#
+# <timeout-secs> is optional. Omitted, the scan is unbounded, which is what a
+# caller acting on the complete process list (teardown's leaked-descendant reap)
+# needs. Given, the scan runs under that wall-clock bound and a scan that outlives
+# it reports failure like any other unusable result, which is what a caller
+# running inside a poll loop needs.
+#
+# 0 with the matching pids on stdout, 0 with empty output when provably nothing
+# matches, and 1 when the scan could not establish a safe result at all (no lsof,
+# an lsof error or timeout, or output this parser does not recognize). Callers
+# distinguish those two zero cases themselves; the shared owner deliberately does
+# not decide what "no holder" means for them.
+#
+# Capture-then-parse in one call, for a caller that asks about a single directory
+# and wants nothing remembered. A caller sweeping many directories in one cycle
+# captures once itself and parses per directory instead.
+fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
+  local dir=$1 bound=${2-}
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  fm_cwd_scan_capture "$bound" || return 1
+  fm_cwd_scan_pids_under "$dir"
 }
 
 # 0 when a live no-mistakes validation process is bound to <id>'s own worktree:
@@ -1986,16 +2054,28 @@ EOF
 # satisfies both, per FM_NM_PROCESS_SHARED_SUBCOMMANDS above.
 #
 # 1 for every other outcome, including an id with no recorded worktree, a worktree
-# that is gone, a secondmate task (which records a provisioned firstmate home, not
-# a code tree, exactly as the worktree probe excludes), a scan that cannot run
+# that is gone, a secondmate task or any other task whose recorded worktree is a
+# provisioned firstmate home rather than a code tree, a scan that cannot run
 # because lsof is absent, and a scan that fails or times out. Absence of evidence
 # is never absorption: every one of those leaves the caller's existing escalation
 # schedule exactly as it was, so a genuinely wedged crew still escalates on the
 # unchanged schedule and a home without lsof loses nothing it had before.
 #
+# A provisioned firstmate home is excluded exactly as the worktree probe above
+# excludes it, by BOTH kind=secondmate and the home's own marker, and for the same
+# reason: such a home runs its own supervision and its own validation inside
+# itself, so a process living there says nothing about the task that recorded it.
+# The marker is the load-bearing half here - a kind=secondmate window is triaged
+# only under a declared pause, which takes the recheck cadence rather than the
+# wedge timer, so the window that actually reaches this probe with a mate home
+# recorded is an ordinary crew one - and the kind check is kept beside it because
+# it is cheap and still covers any future caller that arrives with a mate window.
+#
 # Not a pure status-file read (see the header): one bounded process scan plus one
 # `ps` read per bound pid, which callers must reach only when they are otherwise
-# about to escalate, never on every poll.
+# about to escalate, never on every poll. The scan itself is captured through
+# fm_cwd_scan_capture above, so a caller that armed single-cycle reuse pays one
+# system-wide scan for the whole cycle rather than one per window.
 crew_nm_run_process_alive() {  # <id> <state>
   local id=$1 state=$2 wt kind bound pids pid cmd exe base rest sub shared word
   local -a shared_words=()
@@ -2004,11 +2084,15 @@ crew_nm_run_process_alive() {  # <id> <state>
   [ -n "$wt" ] && [ -d "$wt" ] || return 1
   kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
   [ "$kind" != secondmate ] || return 1
+  if [ -e "$wt/.fm-secondmate-home" ] || [ -L "$wt/.fm-secondmate-home" ]; then
+    return 1
+  fi
   command -v lsof >/dev/null 2>&1 || return 1
   bound=$FM_NM_PROCESS_TIMEOUT
   case "$bound" in ''|*[!0-9]*|0) bound=10 ;; esac
   read -r -a shared_words <<< "$FM_NM_PROCESS_SHARED_SUBCOMMANDS"
-  pids=$(fm_pids_with_cwd_under "$wt" "$bound") || return 1
+  fm_cwd_scan_capture "$bound" || return 1
+  pids=$(fm_cwd_scan_pids_under "$wt") || return 1
   [ -n "$pids" ] || return 1
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue

@@ -1639,6 +1639,14 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
 
+  # Open a fresh single-cycle window for the shared cwd scan the live-run probe
+  # reads (fm_cwd_scan_cache_reset in fm-classify-lib.sh). That scan is
+  # system-wide, so one capture answers for every window this cycle sweeps
+  # instead of one identical bounded scan per window; discarding it here is what
+  # keeps the answer to THIS cycle, so no escalation can ever be deferred on a
+  # process list assembled during an earlier one.
+  fm_cwd_scan_cache_reset
+
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
   fi

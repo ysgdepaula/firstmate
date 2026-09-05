@@ -583,4 +583,5 @@ The fix round's working directory is its own task worktree, and the shared daemo
 Driving the probe against each of those directories in turn returned a deferral for the task worktree that owned the run and an escalation for the no-mistakes home.
 
 The portable logic - both signals required, either one alone escalating, and the shared-subcommand exclusion - is pinned without a real validation run by `test_live_validation_run_defers_the_wedge_escalation` in `tests/fm-watch-triage.test.sh`, which drives real processes and asserts each half of the conjunction separately.
+The remaining two properties are pinned in the same suite and need no tool-emitted input: `test_live_validation_in_a_mate_home_is_not_run_evidence` covers the provisioned-mate-home exclusion on the route that reaches the probe, and `test_cwd_scan_is_captured_once_per_poll_cycle` with `test_cwd_scan_capture_does_not_outlive_its_poll_cycle` covers the single system-wide scan a poll cycle may reuse and its discard at the next cycle.
 Re-run the commands above after a no-mistakes upgrade that changes how a run is launched.

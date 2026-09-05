@@ -3737,6 +3737,275 @@ test_secondmate_home_supervision_churn_is_not_write_evidence() {
   pass "a secondmate's own home supervision churn is not crew write evidence, so a pane recording that home keeps the unchanged escalation schedule"
 }
 
+# The same exclusion, at the live-run probe. A provisioned firstmate home does not
+# only churn its own state directory: it runs its OWN validation inside itself, so a
+# no-mistakes process living there is evidence about the mate's clone rather than
+# about the task whose meta happens to record that path. kind=secondmate cannot
+# carry the exclusion on this route, because such a window is triaged only under a
+# declared pause and a declared pause takes the bounded recheck cadence instead of
+# the wedge timer; the window that actually reaches this probe with a mate home
+# recorded is an ordinary kind=ship one, so the home's own marker is what must
+# exclude it. Real process, no stub, and the control round drives the SAME process
+# against the same worktree without the marker, so the escalation cannot pass
+# vacuously on a home where the probe could not have found anything anyway.
+test_live_validation_in_a_mate_home_is_not_run_evidence() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig home back
+  local pid=""
+  dir=$(make_case mate-home-live-validation); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-mate-run"; home="$dir/mate-home"
+  # No regular file anywhere under the home during the control round, so the
+  # worktree-write probe cannot defer first and mask the run probe.
+  mkdir -p "$home/state"
+  printf 'idle, run in progress' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$home" > "$state/mate-run.meta"
+  printf 'working: implementing\n' > "$state/mate-run.status"
+  sig=$(seen_sig "$state/mate-run.status"); printf '%s' "$sig" > "$state/.seen-mate-run_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, run in progress")
+
+  matehome_arm_threshold() {
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    back=$(( $(date +%s) - 500 ))
+    echo "$back" > "$state/.stale-since-$key"
+    set_mtime "$back" "$state/.stale-since-$key"
+    rm -f "$state/.wedge-escalations-$key" "$state/.writing-since-$key" \
+      "$state/.writing-resurfaced-$key"
+    : > "$out"
+  }
+  matehome_start() {
+    env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_WATCH_HANDLING_SUCCESSOR=1 \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  }
+  matehome_await_proc() {  # <pid>
+    local i=0
+    while [ "$i" -lt 100 ]; do
+      LC_ALL=C ps -p "$1" -o args= 2>/dev/null | grep -q . && return 0
+      i=$((i + 1))
+    done
+    return 1
+  }
+
+  ( cd "$home/state" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  matehome_await_proc "$pid" || { kill "$pid" 2>/dev/null; fail "the in-home validation process never became visible"; }
+
+  # Control - the very same process and the very same directory, with no mate-home
+  # marker: an ordinary worktree, so the probe finds its evidence and defers.
+  matehome_arm_threshold
+  local wpid
+  matehome_start; wpid=$!
+  if ! wait_poll_cycle "$state" "$wpid" 300; then
+    kill "$pid" 2>/dev/null
+    fail "the control round exited instead of deferring on a live validation run: $(cat "$out")"
+  fi
+  reap "$wpid"
+  [ -e "$state/.writing-since-$key" ] \
+    || { kill "$pid" 2>/dev/null; fail "the control round opened no deferral chain, so the marker round would prove nothing"; }
+  grep -F "possible wedge" "$out" >/dev/null \
+    && { kill "$pid" 2>/dev/null; fail "the control round escalated, so this worktree could not show the exclusion"; }
+
+  # Marked - the identical situation inside a provisioned firstmate home. The
+  # unchanged escalation must still fire.
+  printf 'sm-mate\n' > "$home/.fm-secondmate-home"
+  matehome_arm_threshold
+  matehome_start; wpid=$!
+  if ! wait_for_exit "$wpid" 100; then
+    reap "$wpid"; kill "$pid" 2>/dev/null
+    fail "a validation run inside a provisioned mate home deferred an escalation it must not defer"
+  fi
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "stale: $window" "$out" >/dev/null || fail "the mate-home escalation did not print a stale wake: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the mate-home escalation did not flag a possible wedge: $(cat "$out")"
+  [ ! -e "$state/.writing-since-$key" ] || fail "a mate home was probed as if it were this task's own code tree"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the mate-home escalation was not counted"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the mate-home escalation failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the mate-home escalation was not queued"
+  pass "a live validation run inside a provisioned mate home is not this task's progress, so an ordinary window recording that home keeps the unchanged escalation schedule"
+}
+
+# Install a counting `lsof` into <fakebin>. Every invocation appends one line to
+# FM_FAKE_LSOF_COUNT_FILE and then emits whatever FM_FAKE_LSOF_OUTPUT holds, in
+# lsof's own -Fpn field format. This is the same executable seam the suite already
+# uses for tmux and fm-crew-state.sh: the watcher runs the real `lsof` command word
+# off its PATH and cannot tell the difference.
+make_counting_lsof() {  # <fakebin>
+  local fakebin=$1
+  cat > "$fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'scan\n' >> "${FM_FAKE_LSOF_COUNT_FILE:-/dev/null}"
+if [ -n "${FM_FAKE_LSOF_OUTPUT:-}" ] && [ -f "${FM_FAKE_LSOF_OUTPUT:-}" ]; then
+  cat "$FM_FAKE_LSOF_OUTPUT"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/lsof"
+}
+
+# The cwd scan behind the live-run probe is SYSTEM-WIDE, so its answer is identical
+# for every window asked about at the same moment. A fleet that goes quiet overnight
+# crosses the escalation threshold on many windows within one poll, and repeating an
+# identical bounded scan once per window serializes that cost inside the component
+# whose job is noticing a wedge quickly. One capture must therefore answer for the
+# whole cycle. Three windows are armed at the threshold at once here, the first two
+# deferring on real processes bound to their own worktrees and the last escalating,
+# so the whole cycle is observable through the exit it ends with.
+test_cwd_scan_is_captured_once_per_poll_cycle() {
+  local dir state fakebin out capture_file pane_hash back scans i
+  local -a pids=()
+  dir=$(make_case cwd-scan-once-per-cycle); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  make_counting_lsof "$fakebin"
+  printf 'idle, run in progress' > "$capture_file"
+  pane_hash=$(hash_text "idle, run in progress")
+  back=$(( $(date +%s) - 500 ))
+
+  # Metas are swept in sorted order, so the escalating window is named last and the
+  # cycle's exit happens only after both deferring windows have been probed.
+  scan_arm_window() {  # <id> <window>
+    local id=$1 window=$2 key sig
+    mkdir -p "$dir/wt-$id"
+    printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$dir/wt-$id" > "$state/$id.meta"
+    printf 'working: implementing\n' > "$state/$id.status"
+    sig=$(seen_sig "$state/$id.status"); printf '%s' "$sig" > "$state/.seen-${id}_status"
+    key=$(printf '%s' "$window" | tr ':/.' '___')
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    echo "$back" > "$state/.stale-since-$key"
+    set_mtime "$back" "$state/.stale-since-$key"
+  }
+  scan_await_proc() {  # <pid>
+    local i=0
+    while [ "$i" -lt 100 ]; do
+      LC_ALL=C ps -p "$1" -o args= 2>/dev/null | grep -q . && return 0
+      i=$((i + 1))
+    done
+    return 1
+  }
+  scan_reap_all() {
+    local p
+    for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done
+    pids=()
+  }
+
+  scan_arm_window a-defer "test:fm-scan-a"
+  scan_arm_window b-defer "test:fm-scan-b"
+  scan_arm_window c-escalate "test:fm-scan-c"
+
+  # Real processes for the two deferring windows; the counting lsof reports each
+  # one's own worktree, exactly as the real scan would, and nothing for the third.
+  local p wt
+  for i in a-defer b-defer; do
+    wt="$dir/wt-$i"
+    ( cd "$wt" && exec -a no-mistakes /bin/sleep 120 ) &
+    p=$!
+    pids+=( "$p" )
+    scan_await_proc "$p" || { scan_reap_all; fail "a deferring window's validation process never became visible"; }
+    printf 'p%s\nfcwd\nn%s\n' "$p" "$wt" >> "$dir/lsof.out"
+  done
+
+  env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-scan-a\nfm-scan-b\nfm-scan-c')" \
+    FM_FAKE_TMUX_CAPTURE="$capture_file" FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_FAKE_LSOF_COUNT_FILE="$dir/lsof.count" FM_FAKE_LSOF_OUTPUT="$dir/lsof.out" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  local wpid=$!
+  if ! wait_for_exit "$wpid" 100; then
+    reap "$wpid"; scan_reap_all
+    fail "the third window never escalated, so no whole poll cycle was observed: $(cat "$out")"
+  fi
+  scan_reap_all
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "the escalating window did not close the cycle with a wedge escalation: $(cat "$out")"
+  [ -e "$state/.writing-since-$(printf '%s' 'test:fm-scan-a' | tr ':/.' '___')" ] \
+    || fail "the first window did not defer, so the cycle probed fewer windows than this asserts on"
+  [ -e "$state/.writing-since-$(printf '%s' 'test:fm-scan-b' | tr ':/.' '___')" ] \
+    || fail "the second window did not defer on the reused capture"
+  scans=$(LC_ALL=C wc -l < "$dir/lsof.count" | tr -d '[:space:]')
+  [ "$scans" = 1 ] || fail "three windows probed in one poll cycle ran $scans system-wide scans instead of one"
+  pass "one system-wide cwd scan answers every window a poll cycle probes"
+}
+
+# The reuse above is bounded to ONE cycle and nothing longer, because process state
+# a cycle old would defer an escalation that should have fired - the unsafe
+# direction. Driven through the observable consequence rather than the marker: the
+# scan reports a live validation run the first time and nothing afterwards, so a
+# capture that outlived its cycle would defer this pane forever, while a capture
+# discarded at the top of each cycle lets the very next probe escalate.
+test_cwd_scan_capture_does_not_outlive_its_poll_cycle() {
+  local dir state fakebin out capture_file window key pane_hash sig back scans
+  local pid="" wpid
+  dir=$(make_case cwd-scan-per-cycle-invalidated); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-scan-fresh"
+  mkdir -p "$dir/wt"
+  printf 'idle, run in progress' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$dir/wt" > "$state/fresh.meta"
+  printf 'working: implementing\n' > "$state/fresh.status"
+  sig=$(seen_sig "$state/fresh.status"); printf '%s' "$sig" > "$state/.seen-fresh_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, run in progress")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  back=$(( $(date +%s) - 500 ))
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+
+  ( cd "$dir/wt" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  local i=0
+  while [ "$i" -lt 100 ]; do
+    LC_ALL=C ps -p "$pid" -o args= 2>/dev/null | grep -q . && break
+    i=$((i + 1))
+  done
+  printf 'p%s\nfcwd\nn%s\n' "$pid" "$dir/wt" > "$dir/lsof.first"
+  : > "$dir/lsof.rest"
+  # Evidence on the first scan only: every later scan reports an empty process
+  # table, so the verdict may only change if the capture is genuinely retaken.
+  cat > "$fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf 'scan\n' >> "$FM_FAKE_LSOF_COUNT_FILE"
+if [ "$(LC_ALL=C wc -l < "$FM_FAKE_LSOF_COUNT_FILE" | tr -d '[:space:]')" = 1 ]; then
+  cat "$FM_FAKE_LSOF_FIRST"
+else
+  cat "$FM_FAKE_LSOF_REST"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/lsof"
+
+  # A one-second escalation bound so the deferral's restarted idle window re-crosses
+  # the threshold on a later cycle, which is what asks the probe a second time.
+  env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_FAKE_LSOF_COUNT_FILE="$dir/lsof.count" FM_FAKE_LSOF_FIRST="$dir/lsof.first" \
+    FM_FAKE_LSOF_REST="$dir/lsof.rest" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=1 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wpid=$!
+  if ! wait_for_exit "$wpid" 200; then
+    reap "$wpid"; kill "$pid" 2>/dev/null
+    fail "a capture reused past its own poll cycle kept deferring an escalation that had lost its evidence: $(cat "$out")"
+  fi
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "the pane whose evidence disappeared did not escalate: $(cat "$out")"
+  scans=$(LC_ALL=C wc -l < "$dir/lsof.count" | tr -d '[:space:]')
+  [ "$scans" -ge 2 ] || fail "the probe answered $scans time(s), so no second cycle ever retook the capture"
+  pass "a cwd capture is discarded at the top of every poll cycle, so evidence that disappears escalates on the next probe"
+}
+
 # A write deferral is a bounded chain, not a permanent one: its .writing-since
 # marker ages the whole chain so a churning worktree still re-surfaces once per
 # PAUSE_RESURFACE_SECS. That only holds while the chain belongs to the CURRENT quiet
@@ -4455,6 +4724,9 @@ test_wedge_escalation_deferred_while_worktree_is_written
 test_write_deferral_resurfaces_on_the_bounded_cadence
 test_live_validation_run_defers_the_wedge_escalation
 test_secondmate_home_supervision_churn_is_not_write_evidence
+test_live_validation_in_a_mate_home_is_not_run_evidence
+test_cwd_scan_is_captured_once_per_poll_cycle
+test_cwd_scan_capture_does_not_outlive_its_poll_cycle
 test_timer_repair_drops_a_finished_write_deferral_chain
 test_terminal_first_sight_drops_a_finished_write_deferral_chain
 test_triage_log_size_cap_accepts_spaced_wc_counts
