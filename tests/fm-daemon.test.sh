@@ -1834,6 +1834,37 @@ test_afk_genuine_done_still_terminal_stale() {
   pass "genuine done: and merge-check events still escalate"
 }
 
+# The done contract guard is the one predicate every finish reader asks. A
+# `done:` with no pull-request link on a PR-delivery task is not a finish, so an
+# idle pane behind one must not read as terminal-and-already-escalated: the
+# classifier withheld that line and escalated nothing, and the caller has to keep
+# aging the pane toward a wedge.
+test_classify_stale_withheld_done_is_not_terminal() {
+  local dir state out
+  dir=$(make_supercase stale-withheld-done)
+  state="$dir/state"
+  printf 'window=sess:fm-nm-w1\nkind=ship\nmode=no-mistakes\n' > "$state/nm-w1.meta"
+  printf 'done: local tests pass\n' > "$state/nm-w1.status"
+  seen_through "$state" "nm-w1"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-nm-w1" "$state")
+  case "$out" in
+    self\|*transient*) ;;
+    *) fail "a withheld linkless done took the terminal stale path: $out" ;;
+  esac
+
+  # The divergence: the same fixture whose done carries its PR link is a real
+  # finish and still takes the terminal arm.
+  printf 'window=sess:fm-nm-w2\nkind=ship\nmode=no-mistakes\n' > "$state/nm-w2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/nm-w2.status"
+  seen_through "$state" "nm-w2"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-nm-w2" "$state")
+  case "$out" in
+    self\|*terminal*) ;;
+    *) fail "a delivered done no longer takes the terminal stale path: $out" ;;
+  esac
+  pass "classify_stale reads a withheld linkless done as non-terminal and a delivered one as terminal"
+}
+
 test_pane_input_pending_bordered_idle_not_pending() {
   # THE regression: an idle claude composer is a bordered box ("│ > … │"). The
   # old idle regex only matched a BARE prompt, so every idle claude pane read as
@@ -2693,6 +2724,7 @@ test_catchall_scan_surfaces_a_masked_event
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale
+test_classify_stale_withheld_done_is_not_terminal
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending
 test_submit_ack_confirms_on_bordered_empty_composer

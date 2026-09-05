@@ -349,6 +349,54 @@ test_one_line_never_spends_two_reminders() {
   pass "re-classifying one withheld line neither re-steers the worker nor spends more budget"
 }
 
+test_a_reappended_identical_done_is_steered_again() {
+  local dir state handled oldest
+  dir="$TMP_ROOT/reappended"; state="$dir/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes 'done: local tests pass'
+
+  # First linkless done: withheld, one reminder spent.
+  status_span_has_actionable "$state/t.status" 0 && fail "the first linkless done was presented"
+  [ "$(inbox_records "$state" t)" = 1 ] || fail "the first linkless done did not steer the worker"
+
+  # The worker acknowledges the reminder the way its brief tells it to: the move
+  # into handled/ IS the acknowledgement (bin/fm-task-inbox-lib.sh owns that
+  # contract), so nothing is left for the re-ring ladder to escalate.
+  handled=$(fm_task_inbox_handled_dir "$state" t)
+  mkdir -p "$handled"
+  oldest=$(fm_task_inbox_oldest_unhandled "$state" t) \
+    || fail "the contract reminder was not an escalation-tracked record"
+  mv "$oldest" "$handled/" || fail "the worker could not acknowledge the reminder"
+  [ "$(inbox_records "$state" t)" = 0 ] || fail "the acknowledged reminder is still unhandled"
+  [ "$(fm_task_inbox_due_action "$state" t)" = quiet ] \
+    || fail "an acknowledged reminder still has the ladder holding something"
+
+  printf 'working: retrying\n' >> "$state/t.status"
+  status_span_has_actionable "$state/t.status" 0 >/dev/null
+
+  # The SAME text appended again is a new line, not a second cursor re-reading
+  # the old one: the worker moved on and wrote the false done a second time, so
+  # it must be steered again and spend budget like any other new linkless done.
+  printf 'done: local tests pass\n' >> "$state/t.status"
+  status_span_has_actionable "$state/t.status" 0 && fail "the re-appended linkless done was presented"
+  [ "$(inbox_records "$state" t)" = 1 ] \
+    || fail "a re-appended identical linkless done neither steered the worker nor left the ladder anything to escalate"
+
+  # The divergence, so this cannot pass vacuously: re-reading that same append
+  # from another cursor still enqueues nothing more.
+  status_span_has_actionable "$state/t.status" 0 && fail "the re-read of the re-appended done was presented"
+  [ "$(inbox_records "$state" t)" = 1 ] \
+    || fail "re-classifying one append enqueued a second reminder"
+
+  # Budget really was spent twice, so the guard is at its documented bound: the
+  # next linkless done reaches firstmate unchanged.
+  printf 'done: still just local tests\n' >> "$state/t.status"
+  status_span_has_actionable "$state/t.status" 0 \
+    || fail "the second reminder did not spend budget: a third linkless done was still withheld"
+  status_done_guard_holds "$state/t.status" \
+    && fail "the guard claims to hold a line whose budget it has spent"
+  pass "a worker that re-writes the same linkless done is steered again and still reaches its bound"
+}
+
 test_unsteerable_worker_is_presented() {
   local dir state
   dir="$TMP_ROOT/unsteerable"; state="$dir/state"; mkdir -p "$state"
@@ -624,6 +672,7 @@ test_unregistered_task_done_is_untouched
 test_unheeded_reminder_rides_the_inbox_escalation_ladder
 test_reminder_budget_is_bounded
 test_one_line_never_spends_two_reminders
+test_a_reappended_identical_done_is_steered_again
 test_unsteerable_worker_is_presented
 test_guard_steers_without_the_inbox_library_preloaded
 test_guard_ignores_historical_done_lines

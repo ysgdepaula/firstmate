@@ -1674,7 +1674,11 @@ _fm_status_open_decision_origins() {  # <status-file>
 #     about six minutes on the defaults (bin/fm-task-inbox-lib.sh owns the ladder);
 #   - the guard spends at most FM_DONE_GUARD_REMINDER_MAX reminders per task, so a
 #     worker that keeps re-reporting a linkless done has its next such line
-#     presented to firstmate unchanged instead of absorbed again.
+#     presented to firstmate unchanged instead of absorbed again. Re-reporting is
+#     counted by APPEND and not by text: a worker that acknowledged its reminder
+#     and then wrote the byte-identical done again has written a NEW line, so it
+#     is steered again and spends budget, while one append re-read by a second
+#     cursor is not (status_done_guard_defer owns how the two are told apart).
 # An inbox that cannot be written, or a budget that cannot be persisted, also
 # presents the line: the guard withholds a captain event only when it has provably
 # steered the worker in its place.
@@ -1689,9 +1693,10 @@ _fm_status_open_decision_origins() {  # <status-file>
 # replayed by a whole-log re-read is dropped rather than re-steered or
 # re-presented. Every consumer that decides whether a line is a FINISH asks the
 # pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
-# the away-mode supervisor's wedge aging, both of bin/fm-crew-state.sh's
-# status-log paths (its verb mapping and its ci-ready gate), a secondmate's
-# parent-channel ledger, and bin/fm-captain-hold.sh's open-decision retirement -
+# the away-mode supervisor's stale wake classification and its wedge aging, both
+# of bin/fm-crew-state.sh's status-log paths (its verb mapping and its ci-ready
+# gate), a secondmate's parent-channel ledger, and bin/fm-captain-hold.sh's
+# open-decision retirement -
 # so the classifier and the authoritative current-state reader cannot disagree
 # about whether a task is finished, and nothing retires a captain's open decision
 # on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
@@ -1775,7 +1780,13 @@ status_done_contract_unmet() {  # <status-file> <status-line>
 }
 
 # The task's reminder-budget record, alongside its status log the same way the
-# open-decisions cursor is: "<reminders spent><TAB><line already reminded for>".
+# open-decisions cursor is:
+# "<reminders spent><TAB><log length when reminded><TAB><line reminded for>".
+# The length is what tells ONE append apart from a LATER append of the same text.
+# Keyed on the text alone, a worker that acknowledged its reminder and then wrote
+# the same linkless done again was absorbed forever: never steered a second time,
+# never presented, and with no unacknowledged inbox record left for the re-ring
+# ladder to escalate.
 _fm_done_guard_path() {  # <status-file>
   local f=$1 dir base
   dir=$(dirname "$f")
@@ -1783,19 +1794,35 @@ _fm_done_guard_path() {  # <status-file>
   printf '%s/.%s.done-guard' "$dir" "${base%.status}"
 }
 
-# Read the budget record into FM_DONE_GUARD_COUNT / FM_DONE_GUARD_LINE. A missing,
-# unreadable, or malformed record reads as a fresh budget, which spends a reminder
-# rather than losing one.
+# Read the budget record into FM_DONE_GUARD_COUNT / FM_DONE_GUARD_POSITION /
+# FM_DONE_GUARD_LINE. A missing, unreadable, or malformed record reads as a fresh
+# budget, which spends a reminder rather than losing one - and a record left
+# behind in the earlier two-field shape reads that way too, because its second
+# field is a status line rather than a length.
 _fm_done_guard_read() {  # <status-file>
-  local guard count='' line=''
+  local guard count='' pos='' line=''
   FM_DONE_GUARD_COUNT=0
+  FM_DONE_GUARD_POSITION=''
   FM_DONE_GUARD_LINE=''
   guard=$(_fm_done_guard_path "$1")
   [ -f "$guard" ] && [ -r "$guard" ] && [ ! -L "$guard" ] || return 0
-  IFS=$(printf '\t') read -r count line < "$guard" 2>/dev/null || return 0
+  IFS=$(printf '\t') read -r count pos line < "$guard" 2>/dev/null || return 0
   case "$count" in ''|*[!0-9]*) return 0 ;; esac
+  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
   FM_DONE_GUARD_COUNT=$count
+  FM_DONE_GUARD_POSITION=$pos
   FM_DONE_GUARD_LINE=$line
+}
+
+# The status log's current length: the position component of the record above.
+# Fails rather than guessing when it cannot be read, and every caller reads that
+# failure as "no provable hold", which presents the line instead of withholding it.
+_fm_done_guard_position() {  # <status-file>
+  local size
+  size=$(_fm_status_file_size "$1") || return 1
+  size=${size//[[:space:]]/}
+  case "$size" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$size"
 }
 
 # 0 when this line is the status log's newest line. The guard is a verdict about
@@ -1826,9 +1853,15 @@ status_done_guard_clear() {  # <status-file> <status-line>
 # instruction, so there is nothing for firstmate to do with the same event.
 # With <status-line> given, that exact line must also be the one being held, so a
 # caller deciding about one specific event cannot be answered about another.
+# The log's length must match the record's too, so a hold taken over an EARLIER
+# append cannot be read as covering a later append of the same text: that later
+# one may be a line whose budget was spent and which firstmate is therefore owed.
 status_done_guard_holds() {  # <status-file> [<status-line>]
+  local pos
   _fm_done_guard_read "$1"
   [ -n "$FM_DONE_GUARD_LINE" ] || return 1
+  pos=$(_fm_done_guard_position "$1") || return 1
+  [ "$pos" = "$FM_DONE_GUARD_POSITION" ] || return 1
   [ "$FM_DONE_GUARD_LINE" = "$(last_status_line "$1")" ] || return 1
   [ "$#" -lt 2 ] || [ "$2" = "$FM_DONE_GUARD_LINE" ]
 }
@@ -1863,18 +1896,22 @@ EOF
 # written, or a budget that could not be persisted.
 # NOT a pure read: this writes a steering-inbox record and the budget above.
 status_done_guard_defer() {  # <status-file> <status-line>
-  local f=$1 line=$2 state id guard mode text max
+  local f=$1 line=$2 state id guard mode text max pos
   # Current state only: a historical done replayed by a whole-log re-read is not
   # something to steer a worker about (status_line_is_newest owns why).
   status_line_is_newest "$f" "$line" || return 1
+  pos=$(_fm_done_guard_position "$f") || return 1
   state=$(dirname "$f")
   id=$(basename "$f")
   id=${id%.status}
   _fm_done_guard_read "$f"
   # One append is classified by more than one cursor (the signal path and the
   # heartbeat backstop each keep their own), so a repeat of the exact line already
-  # reminded for is absorbed without spending a second reminder on it.
-  [ "$FM_DONE_GUARD_LINE" = "$line" ] && return 0
+  # reminded for AT THE SAME LOG LENGTH is absorbed without spending a second
+  # reminder on it. A later append of the same text is a different line at a
+  # different length: the worker has already acknowledged the first reminder and
+  # written the same false done again, so it is steered like any other new one.
+  [ "$FM_DONE_GUARD_LINE" = "$line" ] && [ "$FM_DONE_GUARD_POSITION" = "$pos" ] && return 0
   max=$(fm_done_guard_reminder_max)
   [ "$FM_DONE_GUARD_COUNT" -lt "$max" ] || return 1
   mode=$(status_task_delivery_mode "$f")
@@ -1895,7 +1932,7 @@ status_done_guard_defer() {  # <status-file> <status-line>
     ' _ "$_FM_CLASSIFY_LIB_DIR" "$state" "$id" "$text" || return 1
   fi
   guard=$(_fm_done_guard_path "$f")
-  printf '%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$line" > "$guard" 2>/dev/null || return 1
+  printf '%s\t%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$pos" "$line" > "$guard" 2>/dev/null || return 1
   return 0
 }
 
