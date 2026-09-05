@@ -153,7 +153,16 @@ log_last_line() {
 # a crew with no active run and an idle pane that declared a known external wait
 # reports `paused` distinctly, so a supervisor reading this sees a declared pause
 # and its reason rather than a wedge-suspect idle.
-map_log_state() {  # <line>
+# With <status-file> given, a `done:` that does not carry the pull-request link
+# its task's delivery contract requires maps to working rather than done. That
+# line is not a finish: the shared classifier withholds it and steers the worker
+# back to its contract instead (fm-classify-lib.sh's done contract guard), so the
+# authoritative current-state reader has to agree. Without that, this reader is
+# the path by which the withheld line still becomes a completion - crew_absorb_class
+# could never absorb it, fleet views would label the task done, and
+# bin/fm-inactive-reconcile.sh would publish an inactive terminal outcome for it.
+map_log_state() {  # <line> [<status-file>]
+  local statusf=${2:-}
   if status_is_paused "$1"; then
     echo paused
     return
@@ -162,10 +171,27 @@ map_log_state() {  # <line>
     working)        echo working ;;
     needs-decision) echo parked ;;
     blocked)        echo blocked ;;
-    done)           echo "done" ;;
+    done)
+      if [ -n "$statusf" ] && status_done_contract_unmet "$statusf" "$1"; then
+        echo working
+      else
+        echo "done"
+      fi
+      ;;
     failed)         echo failed ;;
     *)              echo unknown ;;
   esac
+}
+
+# The detail this reader prints for a status-log verdict. A withheld `done:`
+# reports working, so its own note - which reads like a completion - would
+# misdescribe the state; say why it is working instead.
+log_state_detail() {  # <line> <mapped-state> <status-file>
+  if [ "$2" = working ] && [ "$(status_line_verb "$1")" = 'done' ]; then
+    printf '%s' "reported done without the pull-request link its delivery contract requires; the worker has been steered back to that contract"
+    return
+  fi
+  status_line_note "$1"
 }
 
 LOG_LINE=$(log_last_line || true)
@@ -191,9 +217,9 @@ if [ -n "$REMOTE_HOST" ]; then
   case "$REMOTE_STATE" in
     alive)
       if [ -n "$LOG_VERB" ]; then
-        LOG_STATE=$(map_log_state "$LOG_LINE")
+        LOG_STATE=$(map_log_state "$LOG_LINE" "$LOG")
         if [ "$LOG_STATE" != unknown ]; then
-          emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
+          emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE" "$LOG")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
@@ -723,9 +749,9 @@ fi
 # the verb->state mapping (including the configurable paused verb), so reusing its
 # `unknown` verdict as the "not a state" test needs no second verb list here.
 if [ -n "$LOG_VERB" ]; then
-  LOG_STATE=$(map_log_state "$LOG_LINE")
+  LOG_STATE=$(map_log_state "$LOG_LINE" "$LOG")
   if [ "$LOG_STATE" != unknown ]; then
-    emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
+    emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE" "$LOG")"
   fi
 fi
 

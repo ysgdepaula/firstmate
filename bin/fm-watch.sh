@@ -1383,11 +1383,14 @@ EOF
 # surfaced to firstmate (.hb-surfaced-<task>). It walks every log rather than only
 # those whose LAST line looks captain-relevant, because the event this backstop
 # most needs to catch is precisely one a later routine append has already moved
-# past. Pure detect, no side effects: the caller enqueues first, then marks
-# surfaced. Because every captain-relevant signal/stale already marks itself
-# surfaced when it wakes firstmate, this normally finds nothing and the heartbeat
-# is absorbed; it surfaces only an event the per-wake path absorbed by mistake -
-# the fail-safe backstop.
+# past. Detect-only for the wake decision - the caller enqueues first, then marks
+# surfaced - but NOT side-effect-free: the span classification it runs reaches the
+# PR-delivery done contract guard, which may write a task's steering-inbox record
+# and its reminder budget (fm-classify-lib.sh's sixth documented exception to
+# that library's pure-read contract). Because every captain-relevant signal or
+# stale already marks itself surfaced when it wakes firstmate, this normally
+# finds nothing and the heartbeat is absorbed; it surfaces only an event the
+# per-wake path absorbed by mistake - the fail-safe backstop.
 heartbeat_scan_finds_actionable() {
   local f task record rest endpoint ident rc found=1 sig marker
   FM_HEARTBEAT_SURFACE_ENDPOINTS=''
@@ -2065,20 +2068,36 @@ EOF
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
-            case "$(pause_state_class "$w" "$task")" in
-              working)
-                clear_pause_tracking "$key"
-                printf '%s' "$h" > "$sf"
-                date +%s > "$ssf"
-                triage_log "absorbed non-terminal stale (provably working): $w"
-                ;;
-              paused)
-                handle_paused_stale "$w" "$task" "$h"
-                ;;
-              *)
-                surface_nonterminal_stale "$w" "$h"
-                ;;
-            esac
+            if status_done_guard_holds "$STATE/$task.status"; then
+              # A fourth absorb reason, checked before the costly state read
+              # because it is one file read: the PR-delivery done contract guard
+              # is holding this task's newest line and has already handed its
+              # worker the exact contract, so an idle pane behind it is expected
+              # and there is nothing here for firstmate to act on. The deferral
+              # is bounded exactly like the provably-working one - the wedge
+              # timer starts here and still escalates past its threshold - and
+              # independently by the steering inbox's own re-ring ladder, so the
+              # guard alone can never mute this pane.
+              clear_pause_tracking "$key"
+              printf '%s' "$h" > "$sf"
+              date +%s > "$ssf"
+              triage_log "absorbed non-terminal stale (done contract guard is steering the worker): $w"
+            else
+              case "$(pause_state_class "$w" "$task")" in
+                working)
+                  clear_pause_tracking "$key"
+                  printf '%s' "$h" > "$sf"
+                  date +%s > "$ssf"
+                  triage_log "absorbed non-terminal stale (provably working): $w"
+                  ;;
+                paused)
+                  handle_paused_stale "$w" "$task" "$h"
+                  ;;
+                *)
+                  surface_nonterminal_stale "$w" "$h"
+                  ;;
+              esac
+            fi
           else
             task=$(window_to_task "$w" "$STATE")
             if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then

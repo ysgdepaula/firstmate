@@ -363,6 +363,24 @@ child_terminal_ledger_line() { # <status>
   esac
 }
 
+# 0 when a child's terminal ledger line is a `done:` its delivery contract
+# requires to name a pull request, and no pull request is known for it anywhere -
+# not on the line, not in the task's recorded metadata, not earlier in its log.
+# That is a false finish: the shared classifier is already withholding the same
+# line and steering the child (fm-classify-lib.sh's done contract guard), so
+# publishing it here would deliver that finish to the captain through the parent
+# channel by a route the guard never sees.
+# The recorded pull request is part of the test on purpose. This path holds the
+# task's metadata, where firstmate records the pull request when the work is
+# raised, so unlike the line-only classifier it can tell a child that delivered
+# and reported tersely from one that never delivered at all - and only the second
+# is the failure being guarded.
+child_done_without_any_pr() { # <meta> <status> <line> <pr>
+  [ "$(status_line_verb "$3")" = 'done' ] || return 1
+  [ -z "$4" ] || return 1
+  status_done_contract_unmet "$2" "$3"
+}
+
 # Claim one already-delivered inactive fallback as the delivery of this ledger
 # event. Both reconciliation paths hold the child's meta lock, so this receipt
 # update serializes their decision even though the child appends its ledger
@@ -399,6 +417,7 @@ report_child_ledger_locked() { # <id> <meta>
   last=$(child_terminal_ledger_line "$status") || return 0
   state=$(status_line_verb "$last")
   pr=$(pr_for_task "$meta" "$status" "$last")
+  child_done_without_any_pr "$meta" "$status" "$last" "$pr" && return 0
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|ledger|$last")
   previous=$(grep -v '^[[:space:]]*$' "$status" 2>/dev/null \

@@ -984,6 +984,56 @@ EOF
   pass "another branch's run is ignored, falls back"
 }
 
+# A `done:` that does not carry the pull-request link its task's delivery contract
+# requires is not a finish: the shared classifier withholds it and steers the
+# worker back to that contract, so this reader - the authoritative one - has to
+# agree and keep reporting working. Without that it is the path by which the
+# withheld line still becomes a completion: crew_absorb_class could never absorb
+# it, fleet views would label the task done, and the inactive-outcome scan would
+# publish it to the captain as a terminal result.
+test_withheld_linkless_done_reports_working() {
+  reset_fakes
+  local d out
+  d=$(new_case withheld-done)
+  make_repo_on_branch "$d/wt" fm/feat-guard
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-guard.meta" "window=fm:fm-feat-guard" "worktree=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'done: local tests pass\n' > "$d/state/feat-guard.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-guard
+  out=$(run_crew_state "$d" feat-guard)
+  assert_contains "$out" "state: working" "a withheld linkless done must keep reading as working"
+  assert_contains "$out" "source: status-log" "the withheld verdict still comes from the status log"
+  assert_contains "$out" "delivery contract" "the reader must say why it reports working"
+  assert_not_contains "$out" "state: done" "a withheld linkless done must never read as a finish"
+  pass "a done with no PR link on a PR-delivery task reports working, not done"
+}
+
+# The deliberate divergence: the same fixture whose done carries its link is
+# still a finish, so the guard cannot quietly swallow real completions.
+test_delivered_done_still_reports_done() {
+  reset_fakes
+  local d out
+  d=$(new_case delivered-done)
+  make_repo_on_branch "$d/wt" fm/feat-delivered
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-delivered.meta" "window=fm:fm-feat-delivered" "worktree=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'done: PR https://github.com/owner/repo/pull/7 checks green\n' \
+    > "$d/state/feat-delivered.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-delivered
+  out=$(run_crew_state "$d" feat-delivered)
+  assert_contains "$out" "state: done" "a done carrying its PR link must still read as done"
+  assert_contains "$out" "source: status-log" "the delivered verdict still comes from the status log"
+  pass "a done carrying its PR link still reports done"
+}
+
 # (f) no run for this crew + a busy pane -> working via pane
 test_no_run_busy_pane() {
   reset_fakes
@@ -2101,6 +2151,8 @@ test_remote_dead_reports_remote_verdict
 test_missing_meta
 test_provably_working_via_runs_list_fallback
 test_not_provably_working_when_stopped
+test_withheld_linkless_done_reports_working
+test_delivered_done_still_reports_done
 test_usage_error
 test_historical_same_branch_rewritten_head_not_current
 test_active_run_descendant_fix_head_remains_current

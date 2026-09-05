@@ -1683,6 +1683,18 @@ _fm_status_open_decision_origins() {  # <status-file>
 # terminal form is unchanged, and nothing here reads or writes its state. A task
 # with no recorded delivery mode - a scout, a secondmate, an adopted or foreign
 # log - is untouched for the same reason.
+#
+# The guard judges a task's CURRENT state and never its history: only the log's
+# newest line is acted on (status_line_is_newest owns why), and a linkless done
+# replayed by a whole-log re-read is dropped rather than re-steered or
+# re-presented. Every consumer that decides whether a line is a FINISH asks the
+# pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
+# the away-mode supervisor's wedge aging, bin/fm-crew-state.sh's status-log
+# fallback, and a secondmate's parent-channel ledger - so the classifier and the
+# authoritative current-state reader cannot disagree about whether a task is
+# finished. A consumer deciding whether to suppress a LIVE presentation asks
+# status_done_guard_holds instead, because a line whose reminder budget is spent
+# is deliberately firstmate's to see and must stay recoverable.
 FM_DONE_GUARD_REMINDER_MAX_DEFAULT=2
 
 fm_done_guard_reminder_max() {
@@ -1704,33 +1716,42 @@ status_task_delivery_mode() {  # <status-file>
   grep '^mode=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2-
 }
 
-# 0 when a status line carries a task pull-request link. bin/fm-pr-lib.sh's
-# fm_pr_url_parse is the ONE definition of what such a URL is on each supported
-# forge, so this only splits the line into candidate words and asks it, rather
-# than restating a second URL shape here. That library is sourced inside a
-# subshell because sourcing it resets its FM_PR_* globals, which a caller of this
-# classifier may be holding.
+# 0 when a status line carries a pull-request link, 1 when it does not.
+#
+# This is deliberately a SHAPE test - "https://<host>/<path>/pull/<n>", plus
+# GitLab's "/-/merge_requests/<n>" spelling - and deliberately NOT
+# bin/fm-pr-lib.sh's fm_pr_url_parse, even though that function is the one owner
+# of what a task PR URL is. The two answer different questions. fm_pr_url_parse
+# asks "can this fleet's merge polling address this pull request", so it accepts
+# only github.com and recognized GitLab hosts; this asks "did the worker deliver
+# a pull request at all". Using the stricter one here would withhold a genuine
+# `done: PR <url> checks green` raised on any other host and steer that worker in
+# circles until its reminder budget ran out - the guard failing in the one
+# direction its own doctrine forbids, since it may withhold a captain event only
+# when it can prove it should. Keeping the shape test local also means this
+# predicate loads nothing and therefore has no undecidable state to leak.
+# An unaddressable-but-real PR is a merge-tooling problem, reported where the
+# merge tooling owns it, never a reason to call a delivered done a false one.
 status_line_has_pr_link() {  # <status-line>
-  local line=$1
+  local line=$1 word
   case "$line" in *https://*) ;; *) return 1 ;; esac
-  (
-    # shellcheck source=/dev/null
-    . "$_FM_CLASSIFY_LIB_DIR/fm-pr-lib.sh" 2>/dev/null || exit 1
-    while IFS= read -r word; do
-      case "$word" in https://*) ;; *) continue ;; esac
-      # Trailing sentence punctuation is prose, not part of the URL.
-      while :; do
-        case "$word" in
-          *.|*,|*\;|*:|*!|*\)|*\]|*\}) word=${word%?} ;;
-          *) break ;;
-        esac
-      done
-      fm_pr_url_parse "$word" && exit 0
-    done <<EOF
+  while IFS= read -r word; do
+    case "$word" in https://*) ;; *) continue ;; esac
+    # Trailing sentence punctuation is prose, not part of the URL.
+    while :; do
+      case "$word" in
+        *.|*,|*\;|*:|*!|*\)|*\]|*\}) word=${word%?} ;;
+        *) break ;;
+      esac
+    done
+    case "$word" in
+      https://?*/?*/pull/[1-9]|https://?*/?*/pull/[1-9][0-9]*) return 0 ;;
+      https://?*/?*/-/merge_requests/[1-9]|https://?*/?*/-/merge_requests/[1-9][0-9]*) return 0 ;;
+    esac
+  done <<EOF
 $(printf '%s' "$line" | tr '[:space:]' '\n')
 EOF
-    exit 1
-  )
+  return 1
 }
 
 # 0 when this line is a `done:` its task's PR-delivery contract requires to carry
@@ -1773,9 +1794,25 @@ _fm_done_guard_read() {  # <status-file>
   FM_DONE_GUARD_LINE=$line
 }
 
-# Forget the budget once the contract is satisfied, so a later task that reuses
-# this log starts from a full budget.
-status_done_guard_clear() {  # <status-file>
+# 0 when this line is the status log's newest line. The guard is a verdict about
+# a task's CURRENT state, never about its history, and this is the one test that
+# keeps it so. A status log is routinely re-read from byte 0 - the watcher's
+# stale path passes that offset literally, and the file header above documents
+# every other whole-log re-read - and a no-mistakes log always contains an
+# earlier linkless handoff `done:` because that is what its brief asks for. With
+# no such test, one of those re-reads would steer a worker that has long since
+# delivered, about a line it wrote hours ago, and then escalate that
+# never-acknowledged reminder as a wake the guard itself invented.
+status_line_is_newest() {  # <status-file> <status-line>
+  [ -n "$2" ] || return 1
+  [ "$2" = "$(last_status_line "$1")" ]
+}
+
+# Forget the budget once the contract is satisfied. Scoped to the newest line for
+# the reason above: a replayed historical done that carried its link must not
+# release a hold the task's current line still earns.
+status_done_guard_clear() {  # <status-file> <status-line>
+  status_line_is_newest "$1" "$2" || return 0
   rm -f -- "$(_fm_done_guard_path "$1")" 2>/dev/null || true
 }
 
@@ -1783,10 +1820,13 @@ status_done_guard_clear() {  # <status-file>
 # withheld and steered back to the worker. Pure, and the evidence a supervisor
 # uses to absorb the wake that line produced: the worker holds a durable
 # instruction, so there is nothing for firstmate to do with the same event.
-status_done_guard_holds() {  # <status-file>
+# With <status-line> given, that exact line must also be the one being held, so a
+# caller deciding about one specific event cannot be answered about another.
+status_done_guard_holds() {  # <status-file> [<status-line>]
   _fm_done_guard_read "$1"
   [ -n "$FM_DONE_GUARD_LINE" ] || return 1
-  [ "$FM_DONE_GUARD_LINE" = "$(last_status_line "$1")" ]
+  [ "$FM_DONE_GUARD_LINE" = "$(last_status_line "$1")" ] || return 1
+  [ "$#" -lt 2 ] || [ "$2" = "$FM_DONE_GUARD_LINE" ]
 }
 
 # The reminder body: the worker's own line, its recorded contract, and the exact
@@ -1820,6 +1860,9 @@ EOF
 # NOT a pure read: this writes a steering-inbox record and the budget above.
 status_done_guard_defer() {  # <status-file> <status-line>
   local f=$1 line=$2 state id guard mode text max
+  # Current state only: a historical done replayed by a whole-log re-read is not
+  # something to steer a worker about (status_line_is_newest owns why).
+  status_line_is_newest "$f" "$line" || return 1
   state=$(dirname "$f")
   id=$(basename "$f")
   id=${id%.status}
@@ -1940,10 +1983,19 @@ EOF
         # its done: line. A linkless one is steered back to the worker instead of
         # being presented as a completion (see the done contract guard above).
         if [ "$verb" = 'done' ]; then
-          if status_done_contract_unmet "$f" "$line"; then
-            status_done_guard_defer "$f" "$line" && continue
-          else
-            status_done_guard_clear "$f"
+          if status_line_is_newest "$f" "$line"; then
+            if status_done_contract_unmet "$f" "$line"; then
+              status_done_guard_defer "$f" "$line" && continue
+            else
+              status_done_guard_clear "$f" "$line"
+            fi
+          elif status_done_contract_unmet "$f" "$line"; then
+            # A linkless done the task has already moved past. It was judged when
+            # it WAS the current line - withheld and steered, or handed to
+            # firstmate once the budget was spent - and replaying it now can
+            # neither steer the worker again nor become a captain event a second
+            # time, so a whole-log re-read drops it instead.
+            continue
           fi
         fi
         [ -n "$events" ] && events="${events} ; "
@@ -2453,8 +2505,15 @@ signal_crew_provably_working() {  # <file> ...
 # captain-relevant; 1 otherwise, including the no-status case. A 1 only means
 # "non-terminal"; the always-on watcher then applies crew_is_provably_working,
 # while the away-mode daemon applies its persistence recheck.
+# A `done:` that does not carry the pull-request link its task's delivery
+# contract requires is not a finish either, so a pane sitting idle behind one is
+# not terminal: the guard has steered that worker and the supervisor's ordinary
+# non-terminal handling owns what happens next.
 stale_is_terminal() {  # <window> <state>
-  local win=$1 state=$2 last
-  last=$(last_status_line "$state/$(window_to_task "$win" "$state").status")
-  [ -n "$last" ] && status_is_captain_relevant "$last"
+  local win=$1 state=$2 statusf last
+  statusf="$state/$(window_to_task "$win" "$state").status"
+  last=$(last_status_line "$statusf")
+  [ -n "$last" ] || return 1
+  status_done_contract_unmet "$statusf" "$last" && return 1
+  status_is_captain_relevant "$last"
 }

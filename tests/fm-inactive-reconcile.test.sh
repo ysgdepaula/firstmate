@@ -190,6 +190,36 @@ test_local_secondmate_delivers_terminal_ledger_line() {
   pass "secondmate delivers a child's terminal ledger line once, on the next poll, from the ledger alone"
 }
 
+# A `done:` that does not carry the pull-request link its child's delivery
+# contract requires is not a terminal outcome: the shared classifier withholds it
+# and steers that child instead. Publishing it here would deliver the same false
+# finish to the captain through the parent channel, by a route the guard never
+# sees, so the ledger must not publish it at all.
+test_secondmate_ledger_withholds_a_linkless_done() {
+  make_world ledger-guard; bind_secondmate local
+  write_child "$MATE" child 'done: local tests pass'
+  # No pull request anywhere: not on the line, not recorded for the task, not
+  # earlier in its log. That is the false finish, as opposed to a child that
+  # delivered and reported tersely.
+  fm_write_meta "$MATE/state/child.meta" "window=firstmate:fm-child" \
+    "worktree=$MATE/projects/child" "project=alpha" 'harness=codex' 'kind=ship' \
+    'mode=no-mistakes' 'yolo=off' "spawn_gen=s-guard"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  ! grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "the ledger published a done with no PR link to the parent: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  [ "$(outcome_count "$MATE" reported)" = 0 ] \
+    || fail "the ledger minted a delivery receipt for a withheld done"
+
+  # The deliberate divergence: the same child, the same poll, a done that does
+  # carry its link is still delivered exactly as before.
+  printf 'done: PR https://example.test/owner/repo/pull/1 checks green\n' \
+    > "$MATE/state/child.status"
+  FM_FAKE_CREW_STATE='unknown' run_reconcile "$MATE"
+  grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" \
+    || fail "the child's real terminal line was not delivered once it carried its PR link: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  pass "a secondmate ledger withholds a done with no PR link and still delivers a real one"
+}
+
 # A busy child cannot keep later ledger outcomes from being visited, and is
 # retried on the next poll after its lifecycle lock becomes available.
 test_busy_child_does_not_starve_later_ledger_outcomes() {
@@ -788,6 +818,7 @@ test_reconciliation_never_calls_forge() {
 
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
+test_secondmate_ledger_withholds_a_linkless_done
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
 test_terminal_line_during_state_read_yields_to_ledger_delivery
