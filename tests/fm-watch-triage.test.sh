@@ -3829,6 +3829,116 @@ test_live_validation_in_a_mate_home_is_not_run_evidence() {
   pass "a live validation run inside a provisioned mate home is not this task's progress, so an ordinary window recording that home keeps the unchanged escalation schedule"
 }
 
+# Firstmate reads a crew's run step by running `no-mistakes axi status` INSIDE that
+# crew's own worktree (bin/fm-crew-state.sh through bin/fm-nm-run-lib.sh), and the
+# fleet snapshot forks one such query per crew in the background while the watcher
+# polls. Both of the live-run probe's signals hold for that query - the working
+# directory is the task worktree and the executable is the validation binary - and
+# its `axi` first argument is the same one a real fix round carries, so a wedged
+# crew crossing the threshold during one of those queries would be deferred on
+# firstmate's own read rather than escalated. The probe therefore also asks WHO
+# launched a candidate. Both rounds below run REAL processes in the same worktree
+# with the same executable name; only the launcher differs, and the marked round
+# goes through the production launcher itself rather than a hand-built imitation of
+# it, so the exclusion is proven against the shape firstmate actually produces.
+test_firstmate_own_nm_query_is_not_crew_progress() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig wt back
+  local wpid pid=""
+  dir=$(make_case wedge-own-nm-query); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-own-query"; wt="$dir/wt"
+  # Deliberately EMPTY: the worktree write probe must find nothing, or it would
+  # defer first and neither round would reach the run probe.
+  mkdir -p "$wt"
+  # A real executable that presents itself as the validation binary, so a process
+  # started through it is a genuine candidate rather than a stub.
+  ln -s /bin/sleep "$fakebin/no-mistakes"
+  printf 'idle, run in progress' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/own-query.meta"
+  printf 'working: implementing\n' > "$state/own-query.status"
+  sig=$(seen_sig "$state/own-query.status"); printf '%s' "$sig" > "$state/.seen-own-query_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, run in progress")
+
+  ownq_arm_threshold() {
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    printf '%s' "$pane_hash" > "$state/.stale-$key"
+    back=$(( $(date +%s) - 500 ))
+    echo "$back" > "$state/.stale-since-$key"
+    set_mtime "$back" "$state/.stale-since-$key"
+    rm -f "$state/.wedge-escalations-$key" "$state/.writing-since-$key" \
+      "$state/.writing-resurfaced-$key"
+    : > "$out"
+  }
+  ownq_start() {
+    env PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_WATCH_HANDLING_SUCCESSOR=1 \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  }
+  ownq_await_candidate() {
+    local i=0 found
+    while [ "$i" -lt 200 ]; do
+      found=$(fm_pids_with_cwd_under "$wt" 10 2>/dev/null || true)
+      [ -n "$found" ] && return 0
+      i=$((i + 1))
+    done
+    return 1
+  }
+  # Reap by working directory rather than by job, because the production launcher
+  # puts its command in its own process group on the perl arm.
+  ownq_reap_worktree() {
+    local p
+    for p in $(fm_pids_with_cwd_under "$wt" 10 2>/dev/null || true); do
+      kill "$p" 2>/dev/null || true
+    done
+    [ -z "$pid" ] || { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+    pid=""
+  }
+
+  # Round 1 - the crew's own run: a validation process the crew left running in its
+  # worktree, launched by nothing firstmate marks. This must defer, or round 2 would
+  # prove nothing about the launcher.
+  ( cd "$wt" && exec -a no-mistakes /bin/sleep 120 ) &
+  pid=$!
+  ownq_await_candidate || { ownq_reap_worktree; fail "the crew-launched validation process never became visible"; }
+  ownq_arm_threshold
+  ownq_start; wpid=$!
+  if ! wait_poll_cycle "$state" "$wpid" 300; then
+    ownq_reap_worktree
+    fail "a crew-launched validation run escalated instead of deferring: $(cat "$out")"
+  fi
+  reap "$wpid"
+  [ -e "$state/.writing-since-$key" ] \
+    || { ownq_reap_worktree; fail "a crew-launched validation run opened no deferral chain"; }
+  grep -F "possible wedge" "$out" >/dev/null \
+    && { ownq_reap_worktree; fail "a crew-launched validation run was escalated as a possible wedge"; }
+  ownq_reap_worktree
+
+  # Round 2 - firstmate's OWN bounded query into the same worktree, run through the
+  # production launcher. Same worktree, same executable name, same live process; the
+  # unchanged escalation must still fire.
+  ( PATH="$fakebin:$PATH"; fm_nm_run_bounded "$wt" 300 120 >/dev/null 2>&1 ) &
+  pid=$!
+  ownq_await_candidate || { ownq_reap_worktree; fail "firstmate's own bounded query never became visible"; }
+  ownq_arm_threshold
+  ownq_start; wpid=$!
+  if ! wait_for_exit "$wpid" 100; then
+    reap "$wpid"; ownq_reap_worktree
+    fail "firstmate's own attribution query deferred an escalation it must not defer: $(cat "$out")"
+  fi
+  ownq_reap_worktree
+  grep -F "stale: $window" "$out" >/dev/null || fail "the own-query escalation did not print a stale wake: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the own-query escalation did not flag a possible wedge: $(cat "$out")"
+  [ ! -e "$state/.writing-since-$key" ] || fail "firstmate's own query opened a deferral chain"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the own-query escalation was not counted"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the own-query escalation failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the own-query escalation was not queued"
+  pass "firstmate's own bounded no-mistakes query in a task worktree is not crew progress, while the same crew-launched process still defers"
+}
+
 # Install a counting `lsof` into <fakebin>. Every invocation appends one line to
 # FM_FAKE_LSOF_COUNT_FILE and then emits whatever FM_FAKE_LSOF_OUTPUT holds, in
 # lsof's own -Fpn field format. This is the same executable seam the suite already
@@ -4725,6 +4835,7 @@ test_write_deferral_resurfaces_on_the_bounded_cadence
 test_live_validation_run_defers_the_wedge_escalation
 test_secondmate_home_supervision_churn_is_not_write_evidence
 test_live_validation_in_a_mate_home_is_not_run_evidence
+test_firstmate_own_nm_query_is_not_crew_progress
 test_cwd_scan_is_captured_once_per_poll_cycle
 test_cwd_scan_capture_does_not_outlive_its_poll_cycle
 test_timer_repair_drops_a_finished_write_deferral_chain

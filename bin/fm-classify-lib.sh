@@ -40,9 +40,10 @@
 # log every time. crew_worktree_written_since reads the task's meta file and walks
 # a bounded slice of its worktree instead of a status file, so callers run it only
 # at the moment they would otherwise escalate. crew_nm_run_process_alive reads that
-# same meta file and then the live process table, for the same callers under the
-# same rule: it answers whether a validation run is bound to this task's worktree
-# when no run step could be attributed at all.
+# same meta file and then the live process table, including the parent of each
+# candidate so firstmate's own bounded queries never read as crew progress, for the
+# same callers under the same rule: it answers whether a validation run is bound to
+# this task's worktree when no run step could be attributed at all.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -66,6 +67,14 @@ case $- in *u*) _fm_classify_nounset=on ;; *) _fm_classify_nounset=off ;; esac
 . "$_FM_CLASSIFY_LIB_DIR/fm-timeout-lib.sh"
 [ "$_fm_classify_nounset" = on ] || set +u
 unset _fm_classify_nounset
+
+# FM_NM_OWN_RUN_MARK, the mark bin/fm-nm-run-lib.sh puts on every no-mistakes
+# invocation firstmate launches into a task worktree. That library owns the mark
+# and the reason for it; the live-run probe below only reads it, so the constant is
+# sourced from its owner rather than restated here.
+# shellcheck source=bin/fm-nm-run-lib.sh
+# shellcheck disable=SC1091
+. "$_FM_CLASSIFY_LIB_DIR/fm-nm-run-lib.sh"
 
 # Captain-relevant status verbs. A status line carrying any of these is work
 # firstmate must see. Lines without these verbs are no-verb signals: the watcher
@@ -2053,6 +2062,14 @@ fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
 # Shared no-mistakes infrastructure is excluded by subcommand even when it
 # satisfies both, per FM_NM_PROCESS_SHARED_SUBCOMMANDS above.
 #
+# Firstmate's OWN no-mistakes invocations are excluded by launcher, which no
+# subcommand filter could do: bin/fm-crew-state.sh reads a crew's run step with a
+# bounded `no-mistakes axi status` run inside that crew's own worktree, the fleet
+# snapshot forks one per crew in the background, and a real fix round shares its
+# `axi` first argument, so both signals hold for a query that proves nothing about
+# the crew. crew_nm_process_is_crew_launched below is what separates them, by
+# reading FM_NM_OWN_RUN_MARK from the candidate's direct parent.
+#
 # 1 for every other outcome, including an id with no recorded worktree, a worktree
 # that is gone, a secondmate task or any other task whose recorded worktree is a
 # provisioned firstmate home rather than a code tree, a scan that cannot run
@@ -2071,11 +2088,53 @@ fm_pids_with_cwd_under() {  # <dir> [timeout-secs]
 # recorded is an ordinary crew one - and the kind check is kept beside it because
 # it is cheap and still covers any future caller that arrives with a mate window.
 #
+# 0 only when <pid> is PROVABLY not one of firstmate's own no-mistakes
+# invocations: its direct parent's argument vector is readable and does not carry
+# FM_NM_OWN_RUN_MARK. 1 for firstmate's own, and 1 for every pid whose lineage
+# cannot be established at all, so an unreadable answer is treated as "cannot prove
+# this is the crew's own run" and leaves the escalation schedule untouched, the
+# same direction every other unknown in this probe takes.
+#
+# The parent is where the mark lives because `env` execs the real command in place:
+# bin/fm-nm-run-lib.sh states that contract and owns the mark. The parent id is
+# read from /proc where a proc filesystem exists and from `ps` otherwise, the same
+# platform split bin/fm-teardown.sh's task_process_identity uses, and the parent's
+# argument vector is read with `ps`, which reports it on both platforms (a process
+# ENVIRONMENT is not readable for another process on macOS, which is why the mark
+# is an argument rather than an exported variable).
+#
+# A candidate whose launcher already exited is reparented to init, whose argument
+# vector reads normally and carries no mark, so an ordinary crew run outliving its
+# shell still counts as progress exactly as before.
+crew_nm_process_is_crew_launched() {  # <pid>
+  local pid=$1 proc_root stat_line ppid args
+  local -a stat_fields=()
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  if [ -r "$proc_root/$pid/stat" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 2 ] || return 1
+    ppid=${stat_fields[1]}
+  else
+    ppid=$(LC_ALL=C ps -p "$pid" -o ppid= 2>/dev/null) || return 1
+    ppid=${ppid//[[:space:]]/}
+  fi
+  case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
+  args=$(LC_ALL=C ps -p "$ppid" -o args= 2>/dev/null) || return 1
+  [ -n "$args" ] || return 1
+  case " $args " in
+    *" $FM_NM_OWN_RUN_MARK "*) return 1 ;;
+  esac
+  return 0
+}
+
 # Not a pure status-file read (see the header): one bounded process scan plus one
-# `ps` read per bound pid, which callers must reach only when they are otherwise
-# about to escalate, never on every poll. The scan itself is captured through
-# fm_cwd_scan_capture above, so a caller that armed single-cycle reuse pays one
-# system-wide scan for the whole cycle rather than one per window.
+# `ps` read per bound pid, and one parent lookup for a pid that passed every other
+# signal, which callers must reach only when they are otherwise about to escalate,
+# never on every poll. The scan itself is captured through fm_cwd_scan_capture
+# above, so a caller that armed single-cycle reuse pays one system-wide scan for
+# the whole cycle rather than one per window.
 crew_nm_run_process_alive() {  # <id> <state>
   local id=$1 state=$2 wt kind bound pids pid cmd exe base rest sub shared word
   local -a shared_words=()
@@ -2109,6 +2168,7 @@ crew_nm_run_process_alive() {  # <id> <state>
       if [ "$sub" = "$word" ]; then shared=1; break; fi
     done
     [ "$shared" -eq 0 ] || continue
+    crew_nm_process_is_crew_launched "$pid" || continue
     return 0
   done <<EOF
 $pids

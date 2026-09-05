@@ -784,7 +784,12 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope]
 # demand-deep-inspection history it had already earned).
 #
 # <evidence> is the human phrase naming what is happening, and <recheck-hint> what
-# the captain should confirm when the bounded re-surface fires.
+# the captain should confirm when the bounded re-surface fires. The re-surface
+# reason names the CHAIN's age and then the evidence answering right now, never the
+# evidence's own age: the chain is shared, so a window that spent half an hour
+# writing and then started a validation run has been deferred for the whole hour
+# while that run is minutes old, and attributing the chain's number to the source
+# would state a duration the named evidence did not produce.
 wedge_defer_progress() {  # <window> <since-file> <triage-label> <idle-age> <evidence> <recheck-hint>
   local win=$1 since_file=$2 label=$3 age=$4 evidence=$5 hint=$6 key wsf wage
   key=$(window_key "$win")
@@ -793,7 +798,7 @@ wedge_defer_progress() {  # <window> <since-file> <triage-label> <idle-age> <evi
   wage=$(age_of "$wsf")
   date +%s > "$since_file"
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
-    "stale: $win (idle ${age}s, $evidence for ${wage}s, rechecked on a long cadence not a wedge; $hint)"
+    "stale: $win (idle ${age}s, deferred for ${wage}s, currently $evidence, rechecked on a long cadence not a wedge; $hint)"
   triage_log "absorbed $label ($evidence since the idle window opened, idle ${age}s): $win"
 }
 
