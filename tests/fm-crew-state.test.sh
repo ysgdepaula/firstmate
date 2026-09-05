@@ -1034,6 +1034,61 @@ test_delivered_done_still_reports_done() {
   pass "a done carrying its PR link still reports done"
 }
 
+# The same rule on the run-step path, which reaches its `done` by a different
+# route: log_reports_ci_ready only looks for the words "PR" and "checks green" in
+# the note, so a worker that copies the brief's form without substituting its URL
+# matches it. That emit is what bin/fm-inactive-reconcile.sh reads as a terminal
+# outcome, so the withheld line must not produce it here either.
+test_withheld_linkless_done_on_the_ci_ready_run_path_reports_working() {
+  reset_fakes
+  local d short out
+  d=$(new_case withheld-ci-ready)
+  make_repo_on_branch "$d/wt" fm/feat-ciwithheld
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ciwithheld.meta" "window=fm:fm-feat-ciwithheld" "worktree=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'done: PR {url} checks green\n' > "$d/state/feat-ciwithheld.status"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-07-02 22:10
+  running    fm/feat-ciwithheld ${short}  2026-07-02 22:05
+EOF
+)"
+  out=$(run_crew_state "$d" feat-ciwithheld)
+  assert_contains "$out" "state: working" "a withheld linkless done must keep reading as working"
+  assert_contains "$out" "source: run-step" "the withheld verdict falls through to the run-step"
+  assert_contains "$out" "delivery contract" "the reader must say why it reports working"
+  assert_not_contains "$out" "state: done" "the ci-ready path must not turn a withheld done into a finish"
+  pass "the run-step ci-ready path reports working for a withheld linkless done"
+}
+
+# The deliberate divergence: the very same fixture whose done carries its link
+# still reaches done by that path, so the gate cannot pass vacuously.
+test_delivered_done_on_the_ci_ready_run_path_still_reports_done() {
+  reset_fakes
+  local d short out
+  d=$(new_case delivered-ci-ready)
+  make_repo_on_branch "$d/wt" fm/feat-cidelivered
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-cidelivered.meta" "window=fm:fm-feat-cidelivered" "worktree=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'done: PR https://github.com/o/r/pull/9/files checks green\n' \
+    > "$d/state/feat-cidelivered.status"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-07-02 22:10
+  running    fm/feat-cidelivered ${short}  2026-07-02 22:05
+EOF
+)"
+  FM_FAKE_CI_LOGS="CI checks running, waiting for results..."
+  out=$(run_crew_state "$d" feat-cidelivered)
+  assert_contains "$out" "state: done" "a done carrying its PR link must still read as done"
+  assert_contains "$out" "source: status-log" "the delivered verdict still comes from the status log"
+  pass "the run-step ci-ready path still reports done for a delivered done"
+}
+
 # (f) no run for this crew + a busy pane -> working via pane
 test_no_run_busy_pane() {
   reset_fakes
@@ -2153,6 +2208,8 @@ test_provably_working_via_runs_list_fallback
 test_not_provably_working_when_stopped
 test_withheld_linkless_done_reports_working
 test_delivered_done_still_reports_done
+test_withheld_linkless_done_on_the_ci_ready_run_path_reports_working
+test_delivered_done_on_the_ci_ready_run_path_still_reports_done
 test_usage_error
 test_historical_same_branch_rewritten_head_not_current
 test_active_run_descendant_fix_head_remains_current

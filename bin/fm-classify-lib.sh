@@ -1719,7 +1719,9 @@ status_task_delivery_mode() {  # <status-file>
 # 0 when a status line carries a pull-request link, 1 when it does not.
 #
 # This is deliberately a SHAPE test - "https://<host>/<path>/pull/<n>", plus
-# GitLab's "/-/merge_requests/<n>" spelling - and deliberately NOT
+# GitLab's "/-/merge_requests/<n>" spelling, each accepted whatever a browser
+# hung off the number ("/files", "#issuecomment-1", "?w=1"), since a pasted
+# review URL is the same delivered pull request - and deliberately NOT
 # bin/fm-pr-lib.sh's fm_pr_url_parse, even though that function is the one owner
 # of what a task PR URL is. The two answer different questions. fm_pr_url_parse
 # asks "can this fleet's merge polling address this pull request", so it accepts
@@ -1745,8 +1747,8 @@ status_line_has_pr_link() {  # <status-line>
       esac
     done
     case "$word" in
-      https://?*/?*/pull/[1-9]|https://?*/?*/pull/[1-9][0-9]*) return 0 ;;
-      https://?*/?*/-/merge_requests/[1-9]|https://?*/?*/-/merge_requests/[1-9][0-9]*) return 0 ;;
+      https://?*/?*/pull/[1-9]|https://?*/?*/pull/[1-9][0-9]*|https://?*/?*/pull/[1-9][!0-9]*) return 0 ;;
+      https://?*/?*/-/merge_requests/[1-9]|https://?*/?*/-/merge_requests/[1-9][0-9]*|https://?*/?*/-/merge_requests/[1-9][!0-9]*) return 0 ;;
     esac
   done <<EOF
 $(printf '%s' "$line" | tr '[:space:]' '\n')

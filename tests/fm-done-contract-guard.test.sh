@@ -122,6 +122,18 @@ test_pr_link_detection() {
   # steer a worker that did exactly what its contract asked.
   status_line_has_pr_link "done: PR https://git.corp.example/team/svc/pull/12 checks green" \
     || fail "a pull request on an unsupported host was read as no link at all"
+  # A pasted review URL carries whatever the browser hung off the number, and a
+  # one-digit pull request must be read exactly like a many-digit one.
+  status_line_has_pr_link "done: PR https://github.com/o/r/pull/7/files checks green" \
+    || fail "a single-digit pull request with a path suffix was read as no link"
+  status_line_has_pr_link "done: PR https://github.com/o/r/pull/7#issuecomment-1 checks green" \
+    || fail "a single-digit pull request with a fragment was read as no link"
+  status_line_has_pr_link "done: PR https://github.com/o/r/pull/7?w=1 checks green" \
+    || fail "a single-digit pull request with a query was read as no link"
+  status_line_has_pr_link "done: PR https://github.com/o/r/pull/12/files checks green" \
+    || fail "a multi-digit pull request with a path suffix was read as no link"
+  status_line_has_pr_link "done: PR https://gitlab.com/g/p/-/merge_requests/3/diffs" \
+    || fail "a single-digit merge request with a path suffix was read as no link"
   status_line_has_pr_link "done: local tests pass" \
     && fail "a done: with no link was read as carrying one"
   status_line_has_pr_link "done: see https://github.com/kunchenguid/firstmate" \
@@ -130,6 +142,8 @@ test_pr_link_detection() {
     && fail "a malformed pull-request number was read as a PR link"
   status_line_has_pr_link "done: see https://github.com/o/r/pull/notanumber" \
     && fail "a non-numeric pull-request id was read as a PR link"
+  status_line_has_pr_link "done: see https://github.com/o/r/pull/0/files" \
+    && fail "a malformed pull-request number with a suffix was read as a PR link"
   pass "the PR link test accepts a delivered pull request on any host and nothing else"
 }
 

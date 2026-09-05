@@ -339,6 +339,9 @@ nm_gate_findings_count() {
   case "$rest" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$rest"
 }
+# Only ever a prose test over the note, so a worker that copies the brief's form
+# literally without substituting its URL still matches here. The caller asks the
+# shared contract predicate before it may read that as a finish.
 log_reports_ci_ready() {
   [ "$LOG_VERB" = "done" ] || return 1
   case "$(status_line_note "$LOG_LINE")" in
@@ -615,20 +618,29 @@ if [ "$HAVE_RUN" = 1 ]; then
     fi
   fi
 
+  # The sibling of map_log_state above, and bound by the same rule: a `done:`
+  # the delivery contract withholds is not a finish, whatever its prose claims.
+  # Left ungated this is the route by which a withheld line reaches the captain
+  # as a terminal outcome anyway, since bin/fm-inactive-reconcile.sh reads the
+  # `state: done` these emits print.
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
-    if [ "$RUN_SOURCE" = coarse ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
-    fi
-    [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
-    if [ "$RUN_STATUS" = fixing ]; then
-      CI_LOG_STATE=not-ready
-    elif [ "$CI_STEP_STATUS" = running ] && [ -z "$CI_LOG_STATE" ]; then
-      CI_LOG_STATE=$(nm_ci_checks_state)
-    elif [ "$CI_STEP_STATUS" = fixing ]; then
-      CI_LOG_STATE=not-ready
-    fi
-    if [ "$CI_LOG_STATE" != not-ready ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+    if status_done_contract_unmet "$LOG" "$LOG_LINE"; then
+      RUN_DETAIL="$RUN_DETAIL${SEP}$(log_state_detail "$LOG_LINE" working "$LOG")"
+    else
+      if [ "$RUN_SOURCE" = coarse ]; then
+        emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      fi
+      [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
+      if [ "$RUN_STATUS" = fixing ]; then
+        CI_LOG_STATE=not-ready
+      elif [ "$CI_STEP_STATUS" = running ] && [ -z "$CI_LOG_STATE" ]; then
+        CI_LOG_STATE=$(nm_ci_checks_state)
+      elif [ "$CI_STEP_STATUS" = fixing ]; then
+        CI_LOG_STATE=not-ready
+      fi
+      if [ "$CI_LOG_STATE" != not-ready ]; then
+        emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      fi
     fi
   fi
 
