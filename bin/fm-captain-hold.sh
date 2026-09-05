@@ -125,9 +125,12 @@
 # and only WHERE that record is read moves. Both gates accept such an entry on
 # either of the two records that outlive the row, and name on stderr which
 # entry was treated as purged and which record proved it:
-#   - the closed row in the Done archive `.tasks.toml` names, carrying the same
-#     resolution record the live check requires (bin/fm-backlog-transition-lib.sh
-#     owns resolving that archive path). The archive is searched under the entry
+#   - the closed row in the Done archive this home rotates into, carrying the
+#     same resolution record the live check requires
+#     (bin/fm-backlog-transition-lib.sh owns resolving that archive path: the
+#     `.tasks.toml` key when one names it, else tasks-axi's own default beside
+#     the backlog file, because a config that names no archive still has one).
+#     The archive is searched under the entry
 #     id and, for a concrete origin, under the legacy derived identity too, the
 #     same two identities a live row resolves through, because pre-collapse
 #     holds are the oldest population and so the likeliest to be purged; or
@@ -139,9 +142,9 @@
 # by name under the identity it was found beneath and the status log is never
 # read behind it. Rotating a backlog can therefore never turn a refusal into an
 # acceptance. The status log is consulted only when the archive holds no row for
-# the entry under any identity. An archive path that exists but cannot be opened
-# is not evidence that it holds no row either: it refuses naming that archive as
-# unreadable, while a path retention has never written to is simply empty.
+# the entry under any identity. Neither record may be concluded from without
+# being opened: a path that exists but cannot be read refuses by name, while a
+# path nothing has ever written to genuinely records nothing.
 # An entry reaches that tolerance only once the backlog is proved to carry no
 # row under either identity, through the same guarded probe `open` asks: a row
 # that cannot be READ is read uncertainty, not a purge, and refuses with the
@@ -763,15 +766,17 @@ require_entry_purged() {  # <origin-or-empty> <entry>
   fi
 }
 
-# True when nothing at all sits at the archive path, so "it holds no row" is a
-# fact rather than a guess: retention has simply never rotated anything here.
-archive_path_empty() {  # <archive-file>
+# True when nothing at all sits at this path, so "it records nothing" is a fact
+# rather than a guess: nothing has ever been written here.
+record_path_empty() {  # <path>
   [ ! -e "$1" ] && [ ! -L "$1" ]
 }
 
-# True when the Done archive can be opened as this home's own regular file. A
-# path that cannot be opened is not evidence that it holds no row.
-archive_readable() {  # <archive-file>
+# True when a durable record can be opened as this home's own regular file. A
+# path that cannot be opened is not evidence about what it holds. One owner for
+# both records the purge tolerance reads, so neither can drift into asserting a
+# fact about a file it never opened.
+record_readable() {  # <path>
   [ -f "$1" ] && [ -r "$1" ] && [ ! -L "$1" ]
 }
 
@@ -781,7 +786,7 @@ archive_readable() {  # <archive-file>
 # row proves nothing.
 archived_task_record() {  # <archive-file> <task-id>
   local archive=$1 id=$2
-  archive_readable "$archive" || return 1
+  record_readable "$archive" || return 1
   LC_ALL=C awk -v id="$id" '
     BEGIN { want = "- [x] " id " -"; found = 0; capture = 0 }
     /^- \[/ {
@@ -819,15 +824,13 @@ archived_identity_verdict() {  # <archive-file> <task-id>
 # it at all, which is the one case the status log may still speak to.
 archived_purge_evidence() {  # <origin-or-empty> <entry>
   local origin=$1 entry=$2 archive legacy
-  if ! archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null); then
-    CAPTAIN_PURGE_REFUSAL="this home's backlog keeps no Done archive to read"
-    return 1
-  fi
-  if archive_path_empty "$archive"; then
+  archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
+    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and this home's Done archive path could not be resolved, so whether the captain answered it cannot be established"
+  if record_path_empty "$archive"; then
     CAPTAIN_PURGE_REFUSAL="retention has rotated nothing into $archive yet"
     return 1
   fi
-  archive_readable "$archive" \
+  record_readable "$archive" \
     || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its Done archive $archive could not be read, so whether the captain answered it cannot be established"
   case "$(archived_identity_verdict "$archive" "$entry")" in
     answered)
@@ -864,7 +867,7 @@ archived_purge_evidence() {  # <origin-or-empty> <entry>
 # origin's own status close be read, so rotating a backlog can never turn a
 # refusal into an acceptance.
 entry_purge_evidence() {  # <origin> <entry>
-  local origin=$1 entry=$2 verb resolve archived=0
+  local origin=$1 entry=$2 verb resolve status_file archived=0
   CAPTAIN_PURGE_EVIDENCE=
   CAPTAIN_PURGE_REFUSAL=
   archived_purge_evidence "$origin" "$entry" || archived=$?
@@ -872,13 +875,20 @@ entry_purge_evidence() {  # <origin> <entry>
     0) return 0 ;;
     2) return 1 ;;
   esac
+  status_file="$STATE/$origin.status"
+  if record_path_empty "$status_file"; then
+    CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and this origin keeps no status log at $status_file to record a resolved close for [key=$entry]"
+    return 1
+  fi
+  record_readable "$status_file" \
+    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its origin status log $status_file could not be read, so whether the captain answered it cannot be established"
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
-  verb=$(status_key_closing_verb "$STATE/$origin.status" "$entry")
+  verb=$(status_key_closing_verb "$status_file" "$entry")
   if [ "$verb" = "$resolve" ]; then
-    CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$entry] in $STATE/$origin.status"
+    CAPTAIN_PURGE_EVIDENCE="the recorded $resolve close for [key=$entry] in $status_file"
     return 0
   fi
-  CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and $STATE/$origin.status records no resolved close for [key=$entry]"
+  CAPTAIN_PURGE_REFUSAL="$CAPTAIN_PURGE_REFUSAL and $status_file records no resolved close for [key=$entry]"
   return 1
 }
 

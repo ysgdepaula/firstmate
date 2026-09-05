@@ -141,9 +141,11 @@ fm_tasks_axi_backend_from_toml() {  # <toml-path>
   fm_tasks_axi_toml_string "$1" '' backend
 }
 
-# The markdown backend's configured Done archive, verbatim from the config.
-# tasks-axi has no built-in default archive, so an unset key means this home
-# keeps no archive and the caller has no historical record to read.
+# The markdown backend's configured Done archive, verbatim from the config, or
+# return 1 when no key names one. An unset key does not mean this home keeps no
+# archive: tasks-axi still rotates into its own default, so the caller resolving
+# a path (fm_backlog_archive_file) supplies that default rather than concluding
+# there is nothing to read.
 fm_tasks_axi_archive_from_toml() {  # <toml-path>
   fm_tasks_axi_toml_string "$1" markdown archive
 }
