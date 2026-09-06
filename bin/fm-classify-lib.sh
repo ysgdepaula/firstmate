@@ -1881,10 +1881,11 @@ status_line_is_newest() {  # <status-file> <status-line> [newest-line]
 }
 
 # The supersession marker for one linkless done, alongside its status log the way
-# the budget record is: "<log length when superseded><TAB><line superseded>".
+# the budget record is: "<log length when superseded><TAB><that log's identity><TAB><line superseded>".
 # Keyed on log position as well as text for the same reason the budget record is:
 # a LATER append of the same text is a new line this marker does not cover, so
-# the guard still judges it on its own.
+# the guard still judges it on its own. The identity field is what the reader
+# below uses to refuse a marker left by an earlier task of a reused id.
 _fm_done_guard_superseded_path() {  # <status-file>
   local f=$1 dir base
   dir=$(dirname "$f")
