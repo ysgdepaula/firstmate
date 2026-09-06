@@ -58,16 +58,21 @@ run_teardown() {  # <home> <id>
     FM_CONFIG_OVERRIDE="$home/config" "$TEARDOWN" "$id"
 }
 
+# tasks-axi, and firstmate's archive resolution with it, falls back to
+# $HOME/.tasks-axi/config.toml when a repository config does not answer. Point
+# HOME at the fixture so the developer's own user config can never decide what
+# a fixture resolves: "this home keeps no Done archive" must be true on every
+# machine, not only on one without that file.
 tasks_in() {  # <home> <tasks-axi args...>
   local home=$1
   shift
-  (cd "$home" && tasks-axi "$@")
+  (cd "$home" && HOME="$home" tasks-axi "$@")
 }
 
 run_captain() {  # <home> <command args...>
   local home=$1
   shift
-  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" \
+  PATH="$home/fakebin:$PATH" REAL_TASKS_AXI="$TASKS_AXI_BIN" HOME="$home" \
     FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-captain-hold.sh" "$@"
 }
@@ -92,6 +97,41 @@ write_origin_meta() {  # <home> <id> [kind]
     "kind=$kind" \
     "mode=$kind" \
     "spawn_gen=fixture-$id"
+}
+
+# A home whose config names no Done archive, which is NOT a home without one:
+# tasks-axi still rotates closed rows into its own default beside the backlog.
+# tasks_in and run_captain pin HOME to the fixture, so the user-level config
+# cannot supply an archive behind the test's back.
+write_no_archive_config() {  # <home>
+  local home=$1
+  printf 'backend = "markdown"\n\n[markdown]\npath = "data/backlog.md"\ndone_keep = 10\n' \
+    > "$home/.tasks.toml"
+  rm -rf "$home/.tasks-axi"
+}
+
+# Rotate one throwaway row through tasks-axi's real retention, so this home's
+# Done archive exists and is readable without archiving anything the case under
+# test names.
+seed_done_archive() {  # <home>
+  local home=$1
+  tasks_in "$home" add sample-archive-seed "Seed the Done archive" --repo sample >/dev/null \
+    || fail "could not create the archive seed"
+  tasks_in "$home" "done" sample-archive-seed --keep 0 >/dev/null \
+    || fail "could not rotate the archive seed out of the backlog"
+}
+
+# Purge <id> from the backlog through tasks-axi's own Done retention, which
+# moves every retained row into this home's configured archive.
+archive_out_of_backlog() {  # <home> <id>
+  local home=$1 id=$2
+  tasks_in "$home" add sample-retention-filler "Filler work" --repo sample >/dev/null \
+    || fail "could not create the retention filler"
+  tasks_in "$home" "done" sample-retention-filler --keep 0 >/dev/null \
+    || fail "could not run retention over the Done rows"
+  if tasks_in "$home" show "$id" >/dev/null 2>&1; then
+    fail "retention did not push $id out of the backlog"
+  fi
 }
 
 # --- markdown-to-beads migration resolution ----------------------------------
@@ -398,6 +438,116 @@ test_verify_resolves_a_pre_collapse_key_through_its_derived_marker() {
   run_captain "$home" verify "$scout" >/dev/null \
     || fail "verify did not probe the derived pre-collapse identity for its migrated row"
   pass "a pre-collapse key resolves through its derived identity's migration marker"
+}
+
+# A markdown-to-beads migration rehomes the held rows but leaves the old
+# data/backlog.md and data/done-archive.md sitting on disk. That archive records
+# answers given BEFORE the migration, which say nothing about the call that
+# lives in the migrated graph now, so it must not prove a purged entry on a home
+# whose resolved backend is no longer markdown: a migration, like retention,
+# never turns a refusal into an acceptance. Fully portable - the stubbed
+# tasks-axi and bd fake the beads backend and its empty graph, so no beads
+# install is needed to drive the refusal.
+test_stale_markdown_archive_proves_nothing_on_a_beads_home() {
+  local home fb scout call rc
+  home="$TMP_ROOT/captain-stub-stale-archive/home"
+  mkdir -p "$home/data" "$home/config" "$home/projects" "$home/graph/.beads"
+  (umask 077; mkdir -p "$home/state")
+  cat > "$home/.tasks.toml" <<'EOF'
+backend = "beads"
+
+[beads]
+path = "graph/.beads"
+binary = "bd"
+prefix = "fm"
+
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+EOF
+  scout=sample-stale-archive-scout
+  call=sample-stale-archive-call
+  fb=$(fm_fakebin "$home")
+  fm_fake_exit0 "$fb" tmux treehouse no-mistakes gh gh-axi
+  # The migrated graph carries no row for the attested call, and no row carries
+  # its migration marker, so the entry legitimately resolves to nothing here.
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) printf '%s\n' '0.2.5' ;;
+  update)
+    [ "${2:-}" = --help ] || exit 1
+    printf '%s\n' '--archive-body'
+    ;;
+  mv)
+    [ "${2:-}" = --help ] || exit 1
+    printf '%s\n' 'usage: tasks-axi mv [<id>...]'
+    ;;
+  hold)
+    case " $* " in
+      *" --help "*) printf '%s\n' '  --kind captain'; exit 0 ;;
+    esac
+    exit 1
+    ;;
+  show)
+    printf '%s\n' 'error: task not found' 'code: NOT_FOUND' >&2
+    exit 1
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+  cat > "$fb/bd" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "list --all --json") printf '%s\n' '[]' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/bd"
+  write_scout_with_attested_inventory "$home" "$scout" "$call"
+  # Exactly the shape retention wrote before the migration: a closed row whose
+  # indented body carries the captain's recorded answer. On a markdown home this
+  # row proves the entry; here it must not be read at all.
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-09-01
+
+- [x] $call - Choose route: north, south
+  Resolution recorded by fm-captain-hold.
+  Decision digest: 0000000000000000000000000000000000000000000000000000000000000000
+  Resolution mode: done
+
+  Captain decision:
+  the captain chose north
+EOF
+
+  set +e
+  run_captain "$home" verify "$scout" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a pre-migration markdown archive proved a purged entry on a beads home"
+  assert_grep "$call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "beads backend" "$home/verify.err" \
+    "the refusal did not say why no markdown Done archive is authoritative here"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced the entry as purged on a stale markdown archive"
+  assert_no_grep "done-archive.md" "$home/verify.err" \
+    "the refusal named a markdown Done archive that is not authoritative here"
+
+  set +e
+  run_captain "$home" complete "$scout" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted a purged entry on a stale markdown archive"
+  assert_grep "$call" "$home/none.err" \
+    "the completion refusal did not name the entry"
+  assert_no_grep "purged: captain-held task" "$home/none.err" \
+    "completion announced the entry as purged on a stale markdown archive"
+  assert_no_grep "done-archive.md" "$home/none.err" \
+    "the completion refusal named a Done archive that is not authoritative here"
+  pass "a pre-migration markdown Done archive proves nothing on a beads home"
 }
 
 # The captain-hold mutation wrapper must address the configured backend like
@@ -2111,6 +2261,642 @@ SH
   pass "cleanup refuses a ship row when its captain hold cannot be read"
 }
 
+
+# Retention pushes an answered captain call out of the backlog and into the
+# configured Done archive, so an inventory recorded several passes ago names a
+# task tasks-axi can no longer show. Both gates must still pass on the archived
+# answer, name the entry they treated as purged and the record that proved it,
+# and keep the live entries checked exactly as before.
+test_purged_inventory_entry_passes_on_its_archived_answer() {
+  local home id call show archive
+  home=$(make_home purged-archived-answer)
+  id=sample-retention-review
+  call=sample-purged-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample retention" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the retention investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample retention review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  printf 'Captain, 2026-09-05: "north."\n' > "$home/decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/decision.txt" >/dev/null \
+    || fail "could not record the captain answer"
+  run_captain "$home" complete "$id" "$call" >/dev/null \
+    || fail "completion gate failed while the answered call was still in the backlog"
+
+  archive_out_of_backlog "$home" "$call"
+  archive="$home/data/done-archive.md"
+  assert_grep "- [x] $call -" "$archive" "retention did not move the answered call into the archive"
+  assert_grep "Resolution recorded by fm-captain-hold." "$archive" \
+    "the archived row lost the captain answer this gate reads"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the completion gate refused an answered captain call that retention archived"
+  assert_grep "purged: captain-held task $call" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "its archived captain answer in $archive" "$home/verify.err" \
+    "the gate did not name the record that proved the purged entry"
+  assert_no_grep "captain-held task  is" "$home/verify.err" \
+    "the gate emitted a refusal naming no task at all"
+
+  # The vecu command: re-attesting the same finished investigation must pass too.
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err" \
+    || fail "re-attesting a finished investigation refused because of a purged entry"
+  assert_grep "purged: captain-held task $call" "$home/none.err" \
+    "completion did not name the purged entry it accepted"
+  show=$(tasks_in "$home" list --state "done" --fields body) \
+    || fail "could not read the backlog after the purged-entry completion"
+  assert_not_contains "$show" "$call" "the purged call reappeared in the live backlog"
+  pass "an answered captain call archived by retention still passes the completion gate"
+}
+
+# Pre-collapse captain calls are the oldest population, so they are the ones
+# retention has most likely already purged, and their metadata records the SHORT
+# key while the answered row carries the composed `<origin>-decision-<key>` id.
+# The archive must be searched under that identity too, or the gate refuses a
+# properly answered call and claims the archive holds nothing it demonstrably
+# holds.
+test_purged_legacy_identity_passes_on_its_archived_answer() {
+  local home id key legacy archive
+  home=$(make_home purged-legacy-archived)
+  id=sample-legacy-purge-review
+  key=route
+  legacy="$id-decision-$key"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample legacy purges" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the legacy-purge investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample legacy purge review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+
+  # Exactly what the retired fm-decision-hold.sh left behind: a composed row,
+  # captain-held, closed with its own resolution record.
+  tasks_in "$home" add "$legacy" "Choose the legacy route" --repo sample >/dev/null \
+    || fail "could not create the legacy captain-held fixture"
+  tasks_in "$home" hold "$legacy" --reason "captain legacy route choice pending" --kind captain >/dev/null \
+    || fail "could not hold the legacy fixture for the captain"
+  tasks_in "$home" update "$legacy" --body "$(printf 'Resolution recorded by fm-decision-hold.\nDecision digest: 0000000000000000000000000000000000000000000000000000000000000000\nResolution mode: answered\n\nCaptain decision:\nThe captain chose the north route.')" >/dev/null \
+    || fail "could not record the legacy captain answer"
+  tasks_in "$home" "done" "$legacy" >/dev/null || fail "could not close the legacy captain call"
+
+  # The pre-collapse attestation records the short key, never the composed id.
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$key" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$legacy"
+  archive="$home/data/done-archive.md"
+  assert_grep "- [x] $legacy -" "$archive" "retention did not archive the legacy captain call"
+  assert_no_grep "resolved [key=$key]" "$home/state/$id.status" \
+    "the fixture recorded a status close that would prove the entry another way"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the gate refused a legacy captain call whose archived answer exists"
+  assert_grep "purged: captain-held task $key" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "legacy identity $legacy" "$home/verify.err" \
+    "the gate did not name the composed identity that proved the entry"
+  pass "a purged pre-collapse captain call passes on its archived answer"
+}
+
+# The second record that outlives the row: the origin's own keyed status close.
+# It is evidence only where the archive was genuinely read and holds no row for
+# the entry, so this home has a real, populated archive and the captain-held row
+# left the backlog through `tasks-axi rm`, which archives nothing.
+test_purged_inventory_entry_passes_on_its_status_close() {
+  local home id call archive
+  home=$(make_home purged-status-close)
+  id=sample-statusonly-review
+  call=sample-status-closed-call
+  archive="$home/data/done-archive.md"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample status closes" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the status-close investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample status review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  seed_done_archive "$home"
+  tasks_in "$home" rm "$call" >/dev/null || fail "could not remove the captain-held row"
+  if tasks_in "$home" show "$call" >/dev/null 2>&1; then
+    fail "the captain-held row survived its removal from the backlog"
+  fi
+  assert_present "$archive" "the fixture home never built the Done archive this case must read"
+  assert_no_grep "- [x] $call -" "$archive" \
+    "the fixture archived the very row this case needs the archive to lack"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the completion gate refused a call the origin's status log records as closed"
+  assert_grep "purged: captain-held task $call" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "resolved close for [key=$call]" "$home/verify.err" \
+    "the gate did not name the status record that proved the purged entry"
+  assert_no_grep "archived captain answer" "$home/verify.err" \
+    "the gate credited an archived answer the archive does not hold"
+  pass "a purged captain call passes on the origin's recorded status close"
+}
+
+# A config that names no archive still HAS one: tasks-axi rotates into its own
+# default beside the backlog. The gate must read that default archive, so a call
+# answered through `answer` and then rotated is proved by its archived answer and
+# never needs a status line.
+test_default_done_archive_proves_a_purged_answer() {
+  local home id call archive
+  home=$(make_home purged-default-archive-answer)
+  id=sample-default-archive-review
+  call=sample-default-archive-call
+  archive="$home/data/done-archive.md"
+  write_no_archive_config "$home"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample default archives" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the default-archive investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample default archive review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  printf 'Captain, 2026-09-05: "north."\n' > "$home/decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/decision.txt" >/dev/null \
+    || fail "could not record the captain answer"
+  run_captain "$home" complete "$id" "$call" >/dev/null \
+    || fail "completion failed while the answered call was still in the backlog"
+  archive_out_of_backlog "$home" "$call"
+  assert_present "$archive" "tasks-axi did not rotate into its default Done archive"
+  assert_grep "- [x] $call -" "$archive" "the default archive did not receive the answered row"
+  assert_no_grep "resolved [key=$call]" "$home/state/$id.status" \
+    "the fixture recorded a status close that would prove the entry another way"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the gate refused an answered call rotated into tasks-axi's default archive"
+  assert_grep "purged: captain-held task $call" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "its archived captain answer in $archive" "$home/verify.err" \
+    "the gate did not read the default Done archive that holds the answer"
+  pass "an answered call rotated into the default Done archive passes the gate"
+}
+
+# The same default archive must close the back door as well as open the front
+# one: a bare `tasks-axi done` close rotated into it proves the call was closed
+# with no captain answer, so the origin's resolved line must not override it.
+test_default_done_archive_refuses_an_unanswered_rotation() {
+  local home id call rc archive
+  home=$(make_home purged-default-archive-unanswered)
+  id=sample-default-unanswered-review
+  call=sample-default-unanswered-call
+  archive="$home/data/done-archive.md"
+  write_no_archive_config "$home"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample default rotations" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the default-rotation investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample default rotation review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the row outside the owner"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "- [x] $call -" "$archive" "the default archive did not receive the closed row"
+  assert_no_grep "Resolution recorded by fm-captain-hold." "$archive" \
+    "the fixture recorded an answer it was supposed to skip"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a status close overrode an unanswered row in the default archive"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "closed with no recorded captain answer" "$home/verify.err" \
+    "the refusal did not say the default archive holds an unanswered row"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced an unanswered rotated call as purged"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an unanswered row in the default archive"
+  pass "an unanswered rotation into the default Done archive is still refused"
+}
+
+# The status log gets the same treatment the archive does: a log that exists but
+# cannot be opened was never read, so the gate must name it rather than report
+# that it records no close.
+test_unreadable_status_log_is_named_rather_than_assumed_silent() {
+  local home id call rc
+  home=$(make_home purged-unreadable-status)
+  id=sample-unreadable-status-review
+  call=sample-unreadable-status-call
+  mkdir -p "$home/data/$id" "$home/shared"
+  tasks_in "$home" add "$id" "Investigate sample shared status logs" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the unreadable-status investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample shared status review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  cat > "$home/shared/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  ln -s "$home/shared/$id.status" "$home/state/$id.status"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unreadable status log was read as proof of a close"
+  assert_grep "could not be read" "$home/verify.err" \
+    "the refusal did not say the status log could not be read"
+  assert_grep "$home/state/$id.status" "$home/verify.err" \
+    "the refusal did not name the status log it could not read"
+  assert_no_grep "records no resolved close" "$home/verify.err" \
+    "the refusal asserted what a status log it never opened records"
+  pass "an unreadable origin status log is named rather than assumed silent"
+}
+
+# No record either way is still a refusal, and the refusal must be usable: it
+# names the entry (never an empty task), both records it looked in, and the
+# exact commands that make the call durable again.
+test_unprovable_inventory_entry_is_refused_by_name() {
+  local home id call rc bare
+  home=$(make_home purged-no-evidence)
+  id=sample-noevidence-review
+  call=sample-unprovable-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample gaps" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the no-evidence investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample gap review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the gate accepted an inventory entry with no record of any close"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_no_grep "captain-held task  is" "$home/verify.err" \
+    "the refusal named no task at all"
+  assert_grep "hold $call" "$home/verify.err" "the refusal offered no hold repair command"
+  assert_grep "answer $call" "$home/verify.err" "the refusal offered no answer repair command"
+  assert_grep "$id-decision-$call" "$home/verify.err" \
+    "the refusal claimed the archive holds nothing without naming the legacy identity it searched"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an inventory entry with no record of any close"
+  assert_no_grep "captain-held task  is" "$home/none.err" "completion named no task at all"
+
+  # An origin that carries no attestation file has nothing to edit, so the
+  # refusal must not send the operator to a file that does not exist.
+  bare=sample-bare-origin
+  mkdir -p "$home/data/$bare"
+  printf '# Bare origin\n\nThis origin has a report and no metadata.\n' > "$home/data/$bare/report.md"
+  assert_absent "$home/state/$bare.meta" "the metadata-less origin fixture was not metadata-less"
+  set +e
+  run_captain "$home" complete "$bare" sample-typo-call > "$home/bare.out" 2> "$home/bare.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an unprovable entry on a metadata-less origin"
+  assert_grep "no captain-held task sample-typo-call" "$home/bare.err" \
+    "the metadata-less refusal did not name the entry"
+  assert_no_grep "decision_keys=" "$home/bare.err" \
+    "the refusal advised editing an attestation file that does not exist"
+  pass "an inventory entry with no closing record is refused by name with its repair"
+}
+
+# The tolerance must not become a way to close a captain call by closing the row
+# without recording what the captain said and waiting for retention: a bare
+# tasks-axi close leaves no resolution record, and an archived row without one
+# proves nothing. This is the same rule the live check applies, unchanged.
+test_purged_entry_without_a_recorded_answer_is_still_refused() {
+  local home id call rc
+  home=$(make_home purged-unanswered)
+  id=sample-unanswered-review
+  call=sample-unanswered-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample closes" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the unanswered investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf 'working: report drafted\n' > "$home/state/$id.status"
+  printf '# Sample close review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the row outside the owner"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "- [x] $call -" "$home/data/done-archive.md" "retention did not archive the closed row"
+  assert_no_grep "Resolution recorded by fm-captain-hold." "$home/data/done-archive.md" \
+    "the fixture recorded an answer it was supposed to skip"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an archived row with no recorded captain answer passed the gate"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the unprovable entry"
+  pass "an archived captain call closed with no recorded answer is still refused"
+}
+
+# A row that cannot be READ is not a purged row. The purge tolerance must never
+# be reached on read uncertainty: the call here is still live, open, and
+# unanswered, so treating its unreadable row as purged would pass an open
+# captain call on a status close and state a falsehood while doing it.
+test_unreadable_inventory_entry_refuses_both_gates() {
+  local home id call rc show
+  home=$(make_home purged-read-error)
+  id=sample-readerror-review
+  call=sample-unreadable-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample read failures" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the read-error investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample read-error review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the still-open captain-held task"
+  # The status log carries the very record the purge tolerance accepts, so only
+  # the absence check can keep this open call from passing.
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  # The failing id is baked into the fake rather than carried in the
+  # environment, so the read failure needs no subshell around run_captain and
+  # cannot leak into another case.
+  cat > "$home/fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = show ] && [ "\${2:-}" = "$call" ]; then
+  printf 'error: temporary backlog read failure\n' >&2
+  exit 75
+fi
+exec "\${REAL_TASKS_AXI:?}" "\$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+
+  set +e
+  run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion treated an unreadable captain call as purged"
+  assert_grep "could not be read" "$home/complete.err" "completion did not explain the refusal"
+  assert_grep "temporary backlog read failure" "$home/complete.err" \
+    "the underlying backlog read failure was hidden"
+  assert_no_grep "purged: captain-held task" "$home/complete.err" \
+    "an unreadable row was announced as purged"
+  assert_no_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "completion attested an inventory it could not read"
+
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "verification treated an unreadable captain call as purged"
+  assert_grep "could not be read" "$home/verify.err" "verification did not explain the refusal"
+  assert_grep "temporary backlog read failure" "$home/verify.err" \
+    "verification hid the underlying backlog read failure"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "verification announced an unreadable row as purged"
+
+  show=$(tasks_in "$home" show "$call" --full) || fail "the unreadable captain call disappeared"
+  assert_contains "$show" "hold_kind: captain" "the refusal dropped the captain hold"
+  assert_not_contains "$show" "Resolution recorded by fm-captain-hold." \
+    "the refusal recorded an answer nobody gave"
+  pass "an inventory entry whose row cannot be read refuses both gates"
+}
+
+# Rotation alone must never flip a verdict. This is the unanswered-close fixture
+# plus the one thing that used to override it: the origin's own resolved close.
+# Before retention, verify_hold_durable refuses this state outright; after it,
+# the archived row still proves the call was closed with no captain answer, so
+# the status log must not be read behind it.
+test_archived_unanswered_row_outranks_a_status_close() {
+  local home id call rc
+  home=$(make_home purged-archive-outranks-status)
+  id=sample-precedence-review
+  call=sample-precedence-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample precedence" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the precedence investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample precedence review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the row outside the owner"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "- [x] $call -" "$home/data/done-archive.md" "retention did not archive the closed row"
+  assert_no_grep "Resolution recorded by fm-captain-hold." "$home/data/done-archive.md" \
+    "the fixture recorded an answer it was supposed to skip"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a status close overrode an archived row proving no captain answer"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "closed with no recorded captain answer" "$home/verify.err" \
+    "the refusal did not say the archive holds an unanswered row"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced an unanswered archived call as purged"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted an archived row proving no captain answer"
+  assert_grep "no captain-held task $call" "$home/none.err" \
+    "the completion refusal did not name the entry"
+  pass "an archived row with no recorded answer outranks the origin's status close"
+}
+
+# An archive that exists but cannot be opened is not evidence that it holds no
+# row, so the gate must name it as unreadable rather than assert what it carries
+# or fall through to the status log behind it.
+test_unreadable_archive_is_named_rather_than_assumed_empty() {
+  local home id call rc
+  home=$(make_home purged-unreadable-archive)
+  id=sample-unreadable-archive-review
+  call=sample-shared-archive-call
+  mkdir -p "$home/data/$id" "$home/shared"
+  tasks_in "$home" add "$id" "Investigate sample shared archives" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the unreadable-archive investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample shared archive review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route north or route south
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+  # tasks-axi follows a symlinked archive, so retention would write the answered
+  # row through it; this gate refuses to read one and must say so.
+  printf '## Done\n\n' > "$home/shared/done-archive.md"
+  ln -s "$home/shared/done-archive.md" "$home/data/done-archive.md"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unreadable Done archive was treated as holding no answer"
+  assert_grep "could not be read" "$home/verify.err" \
+    "the refusal did not say the Done archive could not be read"
+  assert_grep "$home/data/done-archive.md" "$home/verify.err" \
+    "the refusal did not name the archive it could not read"
+  assert_no_grep "carries no archived captain answer" "$home/verify.err" \
+    "the refusal asserted what an archive it never opened holds"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "an unreadable archive licensed the status-log fall-through"
+  pass "an unreadable Done archive is named rather than assumed to hold no answer"
+}
+
+# A purge frees the id, so a captain call answered and archived several passes
+# ago can be followed by a fresh call under the very same id. Retention appends
+# a new archived section without deduping, so the archive then holds two closed
+# rows for one identity: only the newest says whether THIS call was answered,
+# and the older answer beneath it must not license a bare `tasks-axi done`.
+test_reused_identity_is_judged_on_its_newest_archived_row() {
+  local home id call rc archive rows
+  home=$(make_home purged-reused-identity)
+  id=sample-reuse-review
+  call=sample-reused-call
+  archive="$home/data/done-archive.md"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample id reuse" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the reuse investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample reuse review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+
+  # Pass one: the call is held, answered, and rotated out carrying its record.
+  run_captain "$home" hold "$call" --title "Choose route: north, south" \
+    --reason "captain route choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the first captain-held task"
+  printf 'Captain, 2026-09-05: "north."\n' > "$home/decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/decision.txt" >/dev/null \
+    || fail "could not record the first captain answer"
+  archive_out_of_backlog "$home" "$call"
+  assert_grep "Resolution recorded by fm-captain-hold." "$archive" \
+    "the first pass did not archive an answered row"
+
+  # Pass two: the freed id carries a new call, closed with a bare tasks-axi done.
+  run_captain "$home" hold "$call" --title "Choose route again: east, west" \
+    --reason "captain route choice pending again" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the reused captain-held task"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the reused row outside the owner"
+  archive_out_of_backlog "$home" "$call"
+  rows=$(grep -Fc -- "- [x] $call -" "$archive" || true)
+  [ "$rows" = 2 ] || fail "the fixture left $rows archived rows for the reused id instead of two"
+
+  # The origin's resolved close from the first pass survives, so this also pins
+  # that it cannot rescue the unanswered newer row behind the archive.
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$call]: choose route east or route west
+resolved [key=$call]: the captain chose north
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$call" >> "$home/state/$id.meta"
+
+  set +e
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a stale archived answer passed a call closed with no recorded answer"
+  assert_grep "no captain-held task $call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "closed with no recorded captain answer" "$home/verify.err" \
+    "the refusal did not say the newest archived row carries no captain answer"
+  assert_grep "2 archived rows" "$home/verify.err" \
+    "the refusal did not say how many archived rows that identity carries"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced the reused unanswered call as purged"
+
+  set +e
+  run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted a reused call closed with no recorded answer"
+  assert_grep "no captain-held task $call" "$home/none.err" \
+    "the completion refusal did not name the entry"
+  pass "the newest archived row decides a reused captain-call identity"
+}
+
+# The second record gets the same two identities the archive does. A
+# pre-collapse call was closed on the status side under its composed
+# `<origin>-decision-<key>` identity while the attestation records the short
+# key, so reading the log under the entry alone would refuse a call the log
+# demonstrably records as closed.
+test_purged_legacy_identity_passes_on_its_status_close() {
+  local home id key legacy archive
+  home=$(make_home purged-legacy-status-close)
+  id=sample-legacy-status-review
+  key=route
+  legacy="$id-decision-$key"
+  archive="$home/data/done-archive.md"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample legacy status closes" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the legacy status-close investigation fixture"
+  write_origin_meta "$home" "$id"
+  printf '# Sample legacy status review\n\nThe evidence is complete.\n' > "$home/data/$id/report.md"
+
+  tasks_in "$home" add "$legacy" "Choose the legacy route" --repo sample >/dev/null \
+    || fail "could not create the legacy captain-held fixture"
+  tasks_in "$home" hold "$legacy" --reason "captain legacy route choice pending" --kind captain >/dev/null \
+    || fail "could not hold the legacy fixture for the captain"
+  # The composed row left the backlog without ever being archived, which is
+  # exactly what `tasks-axi rm` does, so only the status log still speaks.
+  tasks_in "$home" rm "$legacy" >/dev/null || fail "could not remove the legacy captain-held row"
+  cat > "$home/state/$id.status" <<EOF
+working: report drafted
+needs-decision [key=$legacy]: choose the legacy route
+resolved [key=$legacy]: the captain chose the north route
+EOF
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$key" >> "$home/state/$id.meta"
+  seed_done_archive "$home"
+  assert_present "$archive" "the fixture home never built the Done archive this case must read"
+  assert_no_grep "- [x] $legacy -" "$archive" \
+    "the fixture archived the very row this case needs the archive to lack"
+  assert_no_grep "resolved [key=$key]" "$home/state/$id.status" \
+    "the fixture recorded a short-key close that would prove the entry another way"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "the gate refused a legacy call the origin's status log records as closed"
+  assert_grep "purged: captain-held task $key" "$home/verify.err" \
+    "the gate did not name the entry it treated as purged"
+  assert_grep "resolved close for [key=$legacy]" "$home/verify.err" \
+    "the gate did not name the composed key whose status close proved the entry"
+  pass "a purged pre-collapse call passes on the status close recorded under its composed key"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
@@ -2135,10 +2921,25 @@ test_teardown_never_closes_a_captain_held_task
 test_interrupted_cleanup_keeps_the_captain_call_recoverable
 test_teardown_retains_captain_calls_in_a_relocated_backlog
 test_teardown_refuses_a_ship_when_the_captain_hold_cannot_be_read
+test_purged_inventory_entry_passes_on_its_archived_answer
+test_purged_inventory_entry_passes_on_its_status_close
+test_unprovable_inventory_entry_is_refused_by_name
+test_purged_entry_without_a_recorded_answer_is_still_refused
+test_purged_legacy_identity_passes_on_its_archived_answer
+test_unreadable_inventory_entry_refuses_both_gates
+test_archived_unanswered_row_outranks_a_status_close
+test_unreadable_archive_is_named_rather_than_assumed_empty
+test_default_done_archive_proves_a_purged_answer
+test_default_done_archive_refuses_an_unanswered_rotation
+test_unreadable_status_log_is_named_rather_than_assumed_silent
+test_reused_identity_is_judged_on_its_newest_archived_row
+test_purged_legacy_identity_passes_on_its_status_close
+
 test_verify_resolves_a_hold_migrated_to_beads_notes
 test_verify_resolves_a_hold_migrated_under_the_configured_prefix
 test_marker_noted_row_wins_over_a_prefix_namesake
 test_complete_accepts_a_migrated_inventory_on_beads
 test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
+test_stale_markdown_archive_proves_nothing_on_a_beads_home
 test_captain_hold_mutations_address_the_beads_backend
