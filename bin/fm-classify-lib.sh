@@ -1946,34 +1946,40 @@ status_done_guard_superseded() {  # <status-file> <status-line>
 # wakes nobody and would escape both of the guard's bounded paths. One span
 # covers every byte appended since the cursor, so a done can be seen for the
 # first time already non-newest, and that first sight is exactly the case this
-# refuses to swallow. Three witnesses, each provable from durable state:
-#   - the reminder budget names this exact text, so the worker was steered about
-#     this sentence (a later append of it is judged on its own at that position);
-#   - a published run-step outcome superseded this exact text (see the exception
-#     named in the header above);
-#   - the log's newest line is a done that SATISFIES the contract, so the task
-#     delivered after this line and the handoff it replaced is moot;
-#   - the presentation backstop has committed past the whole log, so every line
-#     in it, this one included, already reached firstmate.
+# refuses to swallow. Three witnesses, each stating exactly what it proves about
+# THIS line and nothing broader:
+#   - the reminder budget names this exact text. Only status_done_guard_defer
+#     writes that record, and only after enqueueing a reminder quoting that
+#     sentence, so the worker provably holds an instruction about this sentence
+#     and the inbox re-ring ladder is running for it. It proves the SENTENCE was
+#     steered, not that this occurrence of it was: a later append of the same
+#     text is judged on its own at its own position, by the newest-line branch.
+#   - a published run-step outcome superseded this exact text. Only
+#     bin/fm-inactive-reconcile.sh writes that marker, and only after publishing
+#     an outcome recording that line, so firstmate provably saw it; the marker is
+#     identity-bound to this log. Same sentence-not-occurrence scope as above.
+#   - the log's newest line is a done that SATISFIES the contract. This one
+#     proves the line is MOOT rather than judged: the task delivered afterwards,
+#     that delivery is itself presented as the actionable event of this very
+#     span, so firstmate is woken with a real completion and the handoff it
+#     replaced has nothing left to say.
+# A presentation cursor is deliberately NOT a witness. The outcome backstop shows
+# only a log's LAST non-blank line and then commits at that line's endpoint
+# (bin/fm-wake-drain.sh owns that), so its cursor reaching the log's end proves
+# the last line was presented and says nothing about any line before it.
 status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> [delivery-mode]
-  local f=$1 line=$2 newest=$3 backstop size
+  local f=$1 line=$2 newest=$3
   _fm_done_guard_read "$f"
   [ "$FM_DONE_GUARD_LINE" = "$line" ] && return 0
   _fm_done_guard_superseded_read "$f"
   [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && return 0
-  if [ "$(status_line_verb "$newest")" = 'done' ]; then
-    if [ "$#" -ge 4 ]; then
-      status_done_contract_unmet "$f" "$newest" "$4" || return 0
-    else
-      status_done_contract_unmet "$f" "$newest" || return 0
-    fi
+  [ "$(status_line_verb "$newest")" = 'done' ] || return 1
+  if [ "$#" -ge 4 ]; then
+    status_done_contract_unmet "$f" "$newest" "$4" && return 1
+  else
+    status_done_contract_unmet "$f" "$newest" && return 1
   fi
-  backstop=$(status_outcome_backstop_cursor_offset "$f") || return 1
-  size=$(_fm_status_file_size "$f") || return 1
-  size=${size//[[:space:]]/}
-  case "$size" in ''|*[!0-9]*) return 1 ;; esac
-  case "$backstop" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$backstop" -gt 0 ] && [ "$backstop" -ge "$size" ]
+  return 0
 }
 
 # Forget the budget once the contract is satisfied. Scoped to the newest line for

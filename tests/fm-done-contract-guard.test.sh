@@ -588,6 +588,52 @@ age_file() {  # <epoch> <file>
   perl -e 'utime($ARGV[0], $ARGV[0], $ARGV[1]) or exit 1' "$1" "$2"
 }
 
+# The recovery backstop presents only a log's LAST non-blank line and then
+# commits its cursor at that line's endpoint, jumping past every earlier line it
+# never showed. So its cursor is no witness that an earlier line was judged, and
+# a linkless done it jumped past must still be presented when the watcher comes
+# back and classifies from its own unadvanced offset.
+test_a_done_the_backstop_jumped_past_is_not_swallowed() {
+  local dir state out body old event
+  dir=$(make_case backstop-jump); state="$dir/state"; out="$dir/drain.out"
+  old=$(( $(date +%s) - 20 ))
+
+  make_task "$state" t no-mistakes 'done: local tests pass' 'failed: the build broke'
+  age_file "$old" "$state/t.status"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" \
+    || fail "main drain failed over the backstop fixture"
+  body=$(backstop_body "$out")
+  case "$body" in
+    *'t failed: the build broke'*) ;;
+    *) fail "the backstop did not recover the log's latest event: $body" ;;
+  esac
+  case "$body" in
+    *'done: local tests pass'*) fail "the backstop presented the linkless done itself: $body" ;;
+  esac
+
+  event=$(status_span_first_actionable "$state/t.status" 0) \
+    || fail "a done the backstop jumped past was presented to no one and steered no one"
+  case "$event" in
+    *'done: local tests pass'*) ;;
+    *) fail "the unjudged done was not presented once the watcher classified it: '$event'" ;;
+  esac
+
+  # The divergence: the same shape where a genuine witness DOES cover the done -
+  # the guard steered its worker about it while it was still the newest line - is
+  # dropped on the same whole-log re-read, so this cannot pass vacuously.
+  make_task "$state" u no-mistakes 'done: local tests pass'
+  status_span_has_actionable "$state/u.status" 0 \
+    && fail "the linkless done was presented instead of withheld while newest"
+  [ "$(inbox_records "$state" u)" = 1 ] || fail "the newest linkless done did not steer the worker"
+  printf 'failed: the build broke\n' >> "$state/u.status"
+  event=$(status_span_first_actionable "$state/u.status" 0) \
+    || fail "the later failed: line was not presented"
+  case "$event" in
+    *'done: local tests pass'*) fail "an already-steered done was re-presented: '$event'" ;;
+  esac
+  pass "a backstop cursor is no witness, so only a genuinely judged done is dropped"
+}
+
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one() {
   local dir state out body old
   dir=$(make_case backstop-guard); state="$dir/state"; out="$dir/drain.out"
@@ -773,6 +819,7 @@ test_guard_ignores_historical_done_lines
 test_a_first_sight_non_newest_linkless_done_is_not_swallowed
 test_a_historical_delivered_done_does_not_release_a_live_hold
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one
+test_a_done_the_backstop_jumped_past_is_not_swallowed
 test_watcher_absorbs_a_withheld_done
 test_stale_pane_behind_a_withheld_done_is_absorbed
 test_stale_pane_behind_a_real_done_still_surfaces
