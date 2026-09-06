@@ -203,7 +203,7 @@ interrupt_spawn_during_start() {  # <case-dir> <before|after>
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ] && [ ! -f "$case_dir/start-interrupted" ]; then
   : > "$case_dir/start-interrupted"
-  spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+  spawn_pid=\${FM_TEST_SPAWN_PID:?}
   case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
   if [ "$timing" = before ]; then
     kill -TERM "\$spawn_pid"
@@ -234,7 +234,7 @@ lie_start_then_interrupt() {  # <case-dir> <repair: works|fails>
 if [ "\${1:-}" = start ]; then
   if [ ! -f "$case_dir/start-interrupted" ]; then
     : > "$case_dir/start-interrupted"
-    spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+    spawn_pid=\${FM_TEST_SPAWN_PID:?}
     case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
     kill -TERM "\$spawn_pid"
     exit 0
@@ -262,7 +262,7 @@ hang_start_after_first() {  # <case-dir>
 if [ "\${1:-}" = start ]; then
   if [ ! -f "$case_dir/start-interrupted" ]; then
     : > "$case_dir/start-interrupted"
-    spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+    spawn_pid=\${FM_TEST_SPAWN_PID:?}
     case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
     kill -TERM "\$spawn_pid"
     exit 0
@@ -280,11 +280,16 @@ SH
 # timeout is absent and coreutils does not ship gtimeout. fm_tasks_axi must
 # still bound the call, through its perl watchdog, instead of running it
 # unbounded under the per-task meta lock.
-make_fallback_bin() {  # <case-dir> <tasks-axi-stub-script>
-  local case_dir=$1 stub=$2 fb="$1/fallbackbin"
+make_fallback_bin() {  # <case-dir> <tasks-axi-stub-script> [timeout-runner]
+  local case_dir=$1 stub=$2 fb="$1/fallbackbin" runner=${3:-perl} tool
   mkdir -p "$fb"
   ln -s "$(command -v perl)" "$fb/perl"
   ln -s "$(command -v sleep)" "$fb/sleep"
+  if [ "$runner" != perl ]; then
+    for tool in "$runner" bash mktemp cat rm; do
+      ln -s "$(command -v "$tool")" "$fb/$tool"
+    done
+  fi
   printf '%s\n' "$stub" > "$fb/tasks-axi"
   chmod +x "$fb/tasks-axi"
   printf '%s\n' "$fb"
@@ -335,21 +340,28 @@ exit 7')
   pass "fm_tasks_axi's perl watchdog passes the child status and output through unchanged"
 }
 
-test_fm_tasks_axi_fallback_kills_a_sigterm_ignoring_descendant() {
-  local case_dir fb out rc=0 started
-  case_dir=$(make_home fm-tasks-axi-descendant)
-  fb=$(make_fallback_bin "$case_dir" '#!/bin/bash
+test_fm_tasks_axi_kills_a_sigterm_ignoring_descendant() {
+  local case_dir fb out rc started runner
+  for runner in timeout gtimeout perl; do
+    if ! command -v "$runner" >/dev/null 2>&1; then
+      pass "fm_tasks_axi's $runner descendant cleanup (skipped: no $runner binary on this host)"
+      continue
+    fi
+    case_dir=$(make_home "fm-tasks-axi-descendant-$runner")
+    fb=$(make_fallback_bin "$case_dir" '#!/bin/bash
 (trap "" TERM; exec sleep 30) &
-wait')
-  started=$SECONDS
-  out=$(run_bounded_fm_tasks_axi "$fb" 2 show never-answers) || rc=$?
-  [ "$rc" -eq 124 ] \
-    || fail "the perl watchdog did not time out the descendant fixture (rc=$rc, out=$out)"
-  [ $((SECONDS - started)) -ge 2 ] \
-    || fail "the perl watchdog fired before the bound elapsed"
-  [ $((SECONDS - started)) -lt 20 ] \
-    || fail "a TERM-ignoring descendant kept the output pipe open after timeout"
-  pass "fm_tasks_axi's perl watchdog kills descendants even after their parent exits"
+wait' "$runner")
+    rc=0
+    started=$SECONDS
+    out=$(run_bounded_fm_tasks_axi "$fb" 2 show never-answers) || rc=$?
+    [ "$rc" -eq 124 ] \
+      || fail "$runner did not time out the descendant fixture (rc=$rc, out=$out)"
+    [ $((SECONDS - started)) -ge 2 ] \
+      || fail "$runner fired before the bound elapsed"
+    [ $((SECONDS - started)) -lt 20 ] \
+      || fail "a TERM-ignoring descendant kept the output pipe open after $runner expired"
+    pass "fm_tasks_axi's $runner kills descendants even after their parent exits"
+  done
 }
 
 test_fm_tasks_axi_fails_closed_when_nothing_can_bound_the_call() {
@@ -378,13 +390,10 @@ test_fm_tasks_axi_gnu_timeout_forces_termination_of_a_sigterm_ignoring_child() {
   # (the ignored disposition survives exec into sleep). timeout alone would
   # wait forever for such a child; only its kill-after stops it, so this
   # test fails on an unforced bound and passes once TERM is followed by
-  # KILL at one further bound.
-  fb="$case_dir/gnubin"
-  mkdir -p "$fb"
-  ln -s "$(command -v timeout)" "$fb/timeout"
-  ln -s "$(command -v sleep)" "$fb/sleep"
-  printf '#!/bin/bash\ntrap "" TERM\nexec sleep 300\n' > "$fb/tasks-axi"
-  chmod +x "$fb/tasks-axi"
+  # KILL.
+  fb=$(make_fallback_bin "$case_dir" '#!/bin/bash
+trap "" TERM
+exec sleep 300' timeout)
   started=$SECONDS
   out=$(run_bounded_fm_tasks_axi "$fb" 2 show never-answers) || rc=$?
   case $rc in
@@ -395,7 +404,7 @@ test_fm_tasks_axi_gnu_timeout_forces_termination_of_a_sigterm_ignoring_child() {
     || fail "the GNU timeout path fired before the bound elapsed"
   [ $((SECONDS - started)) -lt 20 ] \
     || fail "the GNU timeout path did not force-terminate the TERM-ignoring child (${SECONDS}s)"
-  pass "fm_tasks_axi's GNU timeout kills a child that ignores SIGTERM after one further bound"
+  pass "fm_tasks_axi's GNU timeout kills a child that ignores SIGTERM"
 }
 
 change_row_on_second_show() {  # <case-dir> <done|rm>
@@ -580,7 +589,7 @@ run_spawn() {  # <case-dir> <args...>
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \
     PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$@" 2>&1
+    bash -c 'export FM_TEST_SPAWN_PID=$$; exec "$@"' _ "$SPAWN" "$@" 2>&1
 }
 
 run_ship_spawn() {  # <case-dir> <id>
@@ -1293,7 +1302,8 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
     HOME="$case_dir/user-home" FM_SPAWN_NO_GUARD=1 \
     FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
     FM_TASKS_AXI_TIMEOUT=3 PATH="$case_dir/fakebin:$PATH" \
-    fm_run_timed 30 "$SPAWN" "$id" "$case_dir/project" \
+    fm_run_timed 30 bash -c 'export FM_TEST_SPAWN_PID=$$; exec "$@"' _ \
+    "$SPAWN" "$id" "$case_dir/project" \
     --mode no-mistakes --yolo off 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   case "$rc" in
@@ -2657,7 +2667,7 @@ test_deferred_signal_never_claims_unverified_preservation
 test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi
 test_fm_tasks_axi_fallback_bounds_the_call_without_a_timeout_binary
 test_fm_tasks_axi_fallback_passes_the_child_status_and_output_through
-test_fm_tasks_axi_fallback_kills_a_sigterm_ignoring_descendant
+test_fm_tasks_axi_kills_a_sigterm_ignoring_descendant
 test_fm_tasks_axi_fails_closed_when_nothing_can_bound_the_call
 test_fm_tasks_axi_gnu_timeout_forces_termination_of_a_sigterm_ignoring_child
 test_dispatch_interruption_during_kimi_readiness_fails_before_commit

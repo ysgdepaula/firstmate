@@ -56,6 +56,8 @@
 # closes a row that reads as an open captain call. An answer that closed the row
 # first simply retires the record.
 
+_FM_BACKLOG_TRANSITION_LIB_DIR=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+
 # Set by fm_backlog_transition_applies for a return-1 exemption.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_BACKLOG_TRANSITION_SKIP=
@@ -263,12 +265,9 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
 # fallback adds no new tool). Every bounded path forces termination: a
 # tasks-axi that ignores SIGTERM must not outlive the bound, since an
 # unbounded call under the lock is exactly the hang the bound exists to
-# prevent - so the GNU variants carry a kill-after of one further bound
-# (TERM at the bound, KILL after that grace) and the watchdog kills the
-# same way. When a bound was requested but no bounding mechanism exists at
+# prevent. When a bound was requested but no bounding mechanism exists at
 # all, the call fails closed instead of running unbounded. Must be the last
-# command of a subshell: the exec keeps the tasks-axi process exactly where
-# the plain call sat, and the bound kills the child, not the caller.
+# command of a subshell.
 fm_tasks_axi_timeout_expired() {  # <status>
   case $1 in
     124 | 137) return 0 ;;
@@ -277,14 +276,20 @@ fm_tasks_axi_timeout_expired() {  # <status>
 }
 
 fm_tasks_axi() {
-  local bound=${FM_TASKS_AXI_TIMEOUT:-}
+  local bound=${FM_TASKS_AXI_TIMEOUT:-} runner=
   if [ -z "$bound" ]; then
     exec tasks-axi "$@"
   fi
   if command -v timeout >/dev/null 2>&1; then
-    exec timeout -k "$bound" "$bound" tasks-axi "$@"
+    runner=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
-    exec gtimeout -k "$bound" "$bound" tasks-axi "$@"
+    runner=gtimeout
+  fi
+  if [ -n "$runner" ]; then
+    # shellcheck source=bin/fm-timeout-lib.sh
+    . "$_FM_BACKLOG_TRANSITION_LIB_DIR/fm-timeout-lib.sh"
+    fm_run_external_timeout "$runner" "$bound" tasks-axi "$@"
+    exit $?
   elif command -v perl >/dev/null 2>&1; then
     # Fork, run tasks-axi in the child, and poll waitpid(WNOHANG) until the
     # child exits or the bound expires: the same contract as
