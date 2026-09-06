@@ -480,7 +480,7 @@ report_child() { # <id>
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0 recorded_pr
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -523,9 +523,16 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   # the contract asks for, so it outranks that sentence. The same verdict with no
   # recorded pull request carries no such proof and stays withheld - the recorded
   # pull request is what separates them, not the state word.
+  # RECORDED means this task's own metadata field, which bin/fm-pr-check.sh writes
+  # when the work is raised and bin/fm-pr-merge.sh rewrites when it lands.
+  # Deliberately NOT pr_for_task's whole-log scan, which accepts any pull URL the
+  # worker's prose happened to cite and would publish someone else's pull request
+  # to the captain as this task's completion.
   held_done=0
   if [ "$state" = 'done' ] && status_done_contract_unmet "$status" "$last"; then
-    [ -n "$pr" ] || return 0
+    recorded_pr=$(clean_field "$(meta_field "$meta" pr)")
+    [ -n "$recorded_pr" ] || return 0
+    pr=$recorded_pr
     held_done=1
   fi
   incarnation=$(meta_incarnation "$meta")

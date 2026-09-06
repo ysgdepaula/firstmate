@@ -1234,7 +1234,7 @@ EOF
   fi
   if [ "$rc" -eq 0 ]; then
     rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
-      "$state/.$task.done-guard" \
+      "$state/.$task.done-guard" "$state/.$task.done-superseded" \
       "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
   fi
   fm_lock_release "$lock" || rc=1
@@ -1691,7 +1691,10 @@ _fm_status_open_decision_origins() {  # <status-file>
 # The guard judges a task's CURRENT state and never its history: only the log's
 # newest line is acted on (status_line_is_newest owns why), and a linkless done
 # replayed by a whole-log re-read is dropped rather than re-steered or
-# re-presented. Every consumer that decides whether a line is a FINISH asks the
+# re-presented - but only one PROVABLY judged already
+# (status_done_guard_line_was_judged owns the witnesses), because one span covers
+# every byte since the cursor, so a done can be seen for the first time already
+# non-newest and swallowing that one would arm neither bounded path. Every consumer that decides whether a line is a FINISH asks the
 # pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
 # the away-mode supervisor's signal and stale wake classifications and its wedge
 # aging, both of bin/fm-crew-state.sh's status-log paths (its verb mapping and
@@ -1702,7 +1705,10 @@ _fm_status_open_decision_origins() {  # <status-file>
 # about whether a task is finished, and nothing retires a captain's open decision
 # on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
 # status_done_guard_holds instead, because a line whose reminder budget is spent
-# is deliberately firstmate's to see and must stay recoverable.
+# is deliberately firstmate's to see and must stay recoverable. One absorbing a
+# wake BECAUSE the worker holds a durable instruction asks status_done_guard_steering,
+# which a superseded line no longer answers: the steering that bounds such an
+# absorption ended when the outcome was published.
 #
 # A withheld done is published nowhere, with ONE named exception: inactive
 # reconciliation may publish a terminal outcome for such a line when the run-step
@@ -1889,10 +1895,35 @@ _fm_done_guard_superseded_path() {  # <status-file>
 # publishes that outcome (bin/fm-inactive-reconcile.sh owns when), never by
 # classification - this library stays the owner of the marker's shape alone.
 status_done_guard_supersede() {  # <status-file> <status-line>
-  local f=$1 line=$2 pos
+  local f=$1 line=$2 pos ident
   [ -n "$line" ] || return 1
   pos=$(_fm_done_guard_position "$f") || return 1
-  printf '%s\t%s\n' "$pos" "$line" > "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+  ident=$(_fm_open_decisions_file_ident "$f") || return 1
+  printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" > "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+}
+
+# Read the marker into FM_DONE_SUPERSEDED_POSITION / _IDENT / _LINE, leaving all
+# three empty when there is none to read or it does not describe THIS log. The
+# identity check is what stops a marker left behind by an earlier task of the
+# same reused id from suppressing the guard for its successor: a relaunch writes
+# a new status log, so the recorded identity no longer matches and the marker
+# reads as absent - the teardown sweep is the second line of defence, not the
+# only one.
+_fm_done_guard_superseded_read() {  # <status-file>
+  local f=$1 marker pos='' ident='' line='' current
+  FM_DONE_SUPERSEDED_POSITION=''
+  FM_DONE_SUPERSEDED_IDENT=''
+  FM_DONE_SUPERSEDED_LINE=''
+  marker=$(_fm_done_guard_superseded_path "$f")
+  [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 0
+  IFS=$(printf '\t') read -r pos ident line < "$marker" 2>/dev/null || return 0
+  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
+  [ -n "$ident" ] && [ -n "$line" ] || return 0
+  current=$(_fm_open_decisions_file_ident "$f") || return 0
+  [ "$ident" = "$current" ] || return 0
+  FM_DONE_SUPERSEDED_POSITION=$pos
+  FM_DONE_SUPERSEDED_IDENT=$ident
+  FM_DONE_SUPERSEDED_LINE=$line
 }
 
 # 0 when this exact line, at this exact log length, is one such published outcome
@@ -1900,14 +1931,49 @@ status_done_guard_supersede() {  # <status-file> <status-line>
 # reads as no supersession, which steers the worker rather than silently
 # absorbing a line nothing has answered.
 status_done_guard_superseded() {  # <status-file> <status-line>
-  local f=$1 line=$2 marker pos rec_pos='' rec_line=''
+  local f=$1 line=$2 pos
   [ -n "$line" ] || return 1
-  marker=$(_fm_done_guard_superseded_path "$f")
-  [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 1
-  IFS=$(printf '\t') read -r rec_pos rec_line < "$marker" 2>/dev/null || return 1
-  case "$rec_pos" in ''|*[!0-9]*) return 1 ;; esac
+  _fm_done_guard_superseded_read "$f"
+  [ -n "$FM_DONE_SUPERSEDED_LINE" ] || return 1
+  [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] || return 1
   pos=$(_fm_done_guard_position "$f") || return 1
-  [ "$rec_pos" = "$pos" ] && [ "$rec_line" = "$line" ]
+  [ "$FM_DONE_SUPERSEDED_POSITION" = "$pos" ]
+}
+
+# 0 when a linkless done that is NO LONGER the log's newest line can be shown to
+# have been judged already, which is the only warrant for dropping it: a line no
+# path has judged is presented instead, because withholding one steers nobody and
+# wakes nobody and would escape both of the guard's bounded paths. One span
+# covers every byte appended since the cursor, so a done can be seen for the
+# first time already non-newest, and that first sight is exactly the case this
+# refuses to swallow. Three witnesses, each provable from durable state:
+#   - the reminder budget names this exact text, so the worker was steered about
+#     this sentence (a later append of it is judged on its own at that position);
+#   - a published run-step outcome superseded this exact text (see the exception
+#     named in the header above);
+#   - the log's newest line is a done that SATISFIES the contract, so the task
+#     delivered after this line and the handoff it replaced is moot;
+#   - the presentation backstop has committed past the whole log, so every line
+#     in it, this one included, already reached firstmate.
+status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> [delivery-mode]
+  local f=$1 line=$2 newest=$3 backstop size
+  _fm_done_guard_read "$f"
+  [ "$FM_DONE_GUARD_LINE" = "$line" ] && return 0
+  _fm_done_guard_superseded_read "$f"
+  [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && return 0
+  if [ "$(status_line_verb "$newest")" = 'done' ]; then
+    if [ "$#" -ge 4 ]; then
+      status_done_contract_unmet "$f" "$newest" "$4" || return 0
+    else
+      status_done_contract_unmet "$f" "$newest" || return 0
+    fi
+  fi
+  backstop=$(status_outcome_backstop_cursor_offset "$f") || return 1
+  size=$(_fm_status_file_size "$f") || return 1
+  size=${size//[[:space:]]/}
+  case "$size" in ''|*[!0-9]*) return 1 ;; esac
+  case "$backstop" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$backstop" -gt 0 ] && [ "$backstop" -ge "$size" ]
 }
 
 # Forget the budget once the contract is satisfied. Scoped to the newest line for
@@ -1928,14 +1994,33 @@ status_done_guard_clear() {  # <status-file> <status-line> [newest-line]
 # The log's length must match the record's too, so a hold taken over an EARLIER
 # append cannot be read as covering a later append of the same text: that later
 # one may be a line whose budget was spent and which firstmate is therefore owed.
+# A superseded line answers this too, and must: it is still a line the guard
+# withheld from presentation, so a backstop that recovered it would present
+# exactly the false completion the guard never showed - and the budget record
+# behind it may not exist at all, when the outcome was published before the guard
+# ever spent a reminder.
 status_done_guard_holds() {  # <status-file> [<status-line>]
-  local pos
+  local pos newest
+  newest=$(last_status_line "$1")
+  [ "$#" -lt 2 ] || [ "$2" = "$newest" ] || return 1
+  status_done_guard_superseded "$1" "$newest" && return 0
   _fm_done_guard_read "$1"
   [ -n "$FM_DONE_GUARD_LINE" ] || return 1
   pos=$(_fm_done_guard_position "$1") || return 1
   [ "$pos" = "$FM_DONE_GUARD_POSITION" ] || return 1
-  [ "$FM_DONE_GUARD_LINE" = "$(last_status_line "$1")" ] || return 1
-  [ "$#" -lt 2 ] || [ "$2" = "$FM_DONE_GUARD_LINE" ]
+  [ "$FM_DONE_GUARD_LINE" = "$newest" ]
+}
+
+# 0 when the guard is holding this task's newest line AND still steering its
+# worker about it. The sibling above answers "may this line be presented"; this
+# answers "does the worker hold a durable instruction", which a superseded line
+# no longer implies - the guard stopped steering it the moment its outcome was
+# published. A consumer that absorbs a wake BECAUSE the worker is being steered,
+# and whose absorption the steering inbox's re-ring ladder is what bounds, must
+# ask this one rather than claim a steer that has ended.
+status_done_guard_steering() {  # <status-file> [<status-line>]
+  status_done_guard_superseded "$1" "$(last_status_line "$1")" && return 1
+  status_done_guard_holds "$@"
 }
 
 # The reminder body: the worker's own line, its recorded contract, and the exact
@@ -2121,12 +2206,14 @@ EOF
             else
               status_done_guard_clear "$f" "$line" "$guard_newest"
             fi
-          elif status_done_contract_unmet "$f" "$line" "$guard_mode"; then
-            # A linkless done the task has already moved past. It was judged when
-            # it WAS the current line - withheld and steered, or handed to
-            # firstmate once the budget was spent - and replaying it now can
+          elif status_done_contract_unmet "$f" "$line" "$guard_mode" \
+            && status_done_guard_line_was_judged "$f" "$line" "$guard_newest" "$guard_mode"; then
+            # A linkless done the task has already moved past, and PROVABLY judged
+            # when it was the current line - withheld and steered, superseded, or
+            # handed to firstmate once the budget was spent. Replaying it now can
             # neither steer the worker again nor become a captain event a second
-            # time, so a whole-log re-read drops it instead.
+            # time, so a whole-log re-read drops it. One this span is seeing for
+            # the first time is not that line and falls through to be presented.
             continue
           fi
         fi

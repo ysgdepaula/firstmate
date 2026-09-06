@@ -521,6 +521,39 @@ test_guard_ignores_historical_done_lines() {
   pass "a whole-log re-read neither steers a worker about a done it has moved past nor re-presents it"
 }
 
+# One span classification covers every byte appended since the cursor, so a
+# linkless done can be seen for the FIRST time already non-newest: the worker
+# appended it and a `working:` line inside the same window. Dropping that one
+# would arm neither bounded path - no reminder is written and no event reaches
+# firstmate - so it is presented instead, which is what happened before the guard
+# existed and is the safe direction.
+test_a_first_sight_non_newest_linkless_done_is_not_swallowed() {
+  local dir state event
+  dir="$TMP_ROOT/first-sight"; state="$dir/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes \
+    'done: local tests pass' \
+    'working: starting no-mistakes'
+
+  event=$(status_span_first_actionable "$state/t.status" 0) \
+    || fail "a linkless done seen first as a non-newest line was presented to no one and steered no one"
+  [ "$event" = 'done: local tests pass' ] \
+    || fail "the unjudged done was not the presented event: '$event'"
+
+  # The divergence: once that same line HAS been judged at its own position, the
+  # replay is dropped exactly as before. Build the same log one append at a time
+  # so the guard judges the done while it is still the newest line.
+  make_task "$state" u no-mistakes 'done: local tests pass'
+  status_span_has_actionable "$state/u.status" 0 \
+    && fail "the linkless done was presented instead of withheld while newest"
+  [ "$(inbox_records "$state" u)" = 1 ] || fail "the newest linkless done did not steer the worker"
+  printf 'working: starting no-mistakes\n' >> "$state/u.status"
+  status_span_has_actionable "$state/u.status" 0 \
+    && fail "an already-judged linkless done was re-presented by a whole-log re-read"
+  [ "$(inbox_records "$state" u)" = 1 ] \
+    || fail "an already-judged linkless done was steered a second time"
+  pass "a linkless done is dropped only once it is provably judged, never on first sight"
+}
+
 test_a_historical_delivered_done_does_not_release_a_live_hold() {
   local dir state
   dir="$TMP_ROOT/historical-clear"; state="$dir/state"; mkdir -p "$state"
@@ -737,6 +770,7 @@ test_a_reappended_identical_done_is_steered_again
 test_unsteerable_worker_is_presented
 test_guard_steers_without_the_inbox_library_preloaded
 test_guard_ignores_historical_done_lines
+test_a_first_sight_non_newest_linkless_done_is_not_swallowed
 test_a_historical_delivered_done_does_not_release_a_live_hold
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one
 test_watcher_absorbs_a_withheld_done

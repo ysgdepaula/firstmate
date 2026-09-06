@@ -283,7 +283,28 @@ test_run_step_done_publishes_a_held_line_only_with_a_recorded_pr() {
     || fail "a run-step done with no recorded PR published a line the guard withholds: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
   [ "$(outcome_count "$MATE" reported)" = 0 ] \
     || fail "a withheld done with no recorded PR minted a delivery receipt"
-  pass "a held done is published only when the run-step verdict carries a recorded pull request"
+
+  # The other arm, and the sharp one: the task records no pull request of its own,
+  # but its log CITES someone else's. A URL the worker merely mentioned is not a
+  # pull request recorded for this task, so it is no proof and must publish
+  # nothing - publishing it would hand the captain a completion carrying a pull
+  # request that belongs to another repository entirely.
+  make_world runstep-foreign; bind_secondmate local
+  write_child "$MATE" child 'done: implemented the parser'
+  fm_write_meta "$MATE/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MATE/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' 'spawn_gen=foreign.1'
+  printf 'working: mirroring the approach in %s\ndone: implemented the parser\n' \
+    'https://github.com/other/repo/pull/9' > "$MATE/state/child.status"
+  age "$MATE/state/child.meta" "$MATE/state/child.status"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
+  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "a foreign pull URL cited in prose published a line the guard withholds: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  ! grep -Fq 'other/repo/pull/9' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "a pull request belonging to another task was published to the captain"
+  [ "$(outcome_count "$MATE" reported)" = 0 ] \
+    || fail "a foreign pull URL minted a delivery receipt"
+  pass "a held done is published only when the task's OWN recorded pull request backs the verdict"
 }
 
 # A busy child cannot keep later ledger outcomes from being visited, and is
