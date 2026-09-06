@@ -134,8 +134,11 @@
 #     beside the backlog file, because a config that names no archive still has
 #     one). The archive is searched under the entry
 #     id and, for a concrete origin, under the legacy derived identity too, the
-#     same two identities a live row resolves through, because pre-collapse
-#     holds are the oldest population and so the likeliest to be purged. A
+#     two identities this home's own records can carry the entry under, because
+#     pre-collapse holds are the oldest population and so the likeliest to be
+#     purged. A live row resolves through a longer ladder that also reaches the
+#     rows a markdown-to-beads migration rehomed; those are backend row names no
+#     markdown archive and no status key can carry, so they stay out of this set. A
 #     purge frees an id for reuse and retention appends a fresh archived section
 #     without deduping ids, so the NEWEST archived row under an identity is the
 #     one that says whether THIS call was closed with an answer; an older
@@ -777,10 +780,10 @@ CAPTAIN_RESOLVED_HOW=
 require_row_absent() {  # <resolved-data-dir> <task-id>
   local data=$1 id=$2
   if fm_backlog_row_probe "$data" "$id"; then
-    fail "captain-held task $id is still in $CAPTAIN_BACKLOG_FILE but its record could not be resolved"
+    fail "captain-held task $id is still in this home's configured backlog (data directory $DATA) but its record could not be resolved"
   fi
   [ "$FM_BACKLOG_ROW_RESULT" = not_found ] \
-    || fail "captain-held task $id could not be read from $CAPTAIN_BACKLOG_FILE: $FM_BACKLOG_ROW_ERROR"
+    || fail "captain-held task $id could not be read from this home's configured backlog (data directory $DATA): $FM_BACKLOG_ROW_ERROR"
 }
 
 # An entry is genuinely purged only when the backlog carries no row under either
@@ -885,13 +888,13 @@ archived_identity_verdict() {  # <archive-file> <task-id>
 archived_purge_evidence() {  # <origin-or-empty> <entry>
   local origin=$1 entry=$2 archive identity under answer searched='' rows
   archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
-    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and this home's Done archive path could not be resolved, so whether the captain answered it cannot be established"
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its Done archive path could not be resolved, so whether the captain answered it cannot be established"
   if record_path_empty "$archive"; then
     CAPTAIN_PURGE_REFUSAL="retention has rotated nothing into $archive yet"
     return 1
   fi
   record_readable "$archive" \
-    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its Done archive $archive could not be read, so whether the captain answered it cannot be established"
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its Done archive $archive could not be read, so whether the captain answered it cannot be established"
   while IFS= read -r identity; do
     [ -n "$identity" ] || continue
     if [ "$identity" = "$entry" ]; then
@@ -954,7 +957,7 @@ EOF
     return 1
   fi
   record_readable "$status_file" \
-    || fail "captain-held task $entry is no longer in $CAPTAIN_BACKLOG_FILE and its origin status log $status_file could not be read, so whether the captain answered it cannot be established"
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its origin status log $status_file could not be read, so whether the captain answered it cannot be established"
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   while IFS= read -r identity; do
     [ -n "$identity" ] || continue
@@ -1008,8 +1011,8 @@ verify_inventory_entry() {  # <origin> <entry>
   [ "$rc" = 1 ] || exit 1
   require_entry_purged "$origin" "$entry"
   if entry_purge_evidence "$origin" "$entry"; then
-    printf 'purged: captain-held task %s is no longer in %s; accepted on %s\n' \
-      "$entry" "$CAPTAIN_BACKLOG_FILE" "$CAPTAIN_PURGE_EVIDENCE" >&2
+    printf 'purged: captain-held task %s is no longer in this home'"'"'s configured backlog (data directory %s); accepted on %s\n' \
+      "$entry" "$DATA" "$CAPTAIN_PURGE_EVIDENCE" >&2
     return 0
   fi
   fail "$(purged_entry_repair "$origin" "$entry" "$CAPTAIN_PURGE_REFUSAL")"
