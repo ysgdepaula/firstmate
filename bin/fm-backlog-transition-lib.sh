@@ -297,7 +297,7 @@ fm_tasks_axi() {
       exit 127 unless defined $bound && $bound =~ /\A[0-9]+\z/;
       my $pid = fork;
       exit 127 unless defined $pid;
-      if ($pid == 0) { exec @ARGV; exit 127 }
+      if ($pid == 0) { setpgrp(0, 0) or exit 127; exec @ARGV; exit 127 }
       my $step = 0.05;
       my $elapsed = 0;
       while (1) {
@@ -305,16 +305,16 @@ fm_tasks_axi() {
         exit(($? & 127) ? 128 + ($? & 127) : $? >> 8) if $done == $pid;
         exit 127 if $done == -1;
         if ($elapsed >= $bound) {
-          kill "TERM", $pid;
+          kill "TERM", -$pid;
           my $grace = 0;
           my $gone = waitpid $pid, WNOHANG;
-          while ($gone == 0 && $grace < $bound) {
+          while ($grace < $bound && kill 0, -$pid) {
             select undef, undef, undef, $step;
             $grace += $step;
-            $gone = waitpid $pid, WNOHANG;
+            $gone = waitpid $pid, WNOHANG if $gone == 0;
           }
-          kill "KILL", $pid if $gone == 0;
-          waitpid $pid, 0;
+          kill "KILL", -$pid;
+          waitpid $pid, 0 if $gone == 0;
           exit 124;
         }
         select undef, undef, undef, $step;

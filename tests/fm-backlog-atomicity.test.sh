@@ -25,6 +25,7 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+. "$ROOT/bin/fm-timeout-lib.sh"
 
 # An exported TASKS_AXI_BACKEND would outrank each case's .tasks.toml fixture
 # in fm_tasks_axi_backend, so the backend cases must start from a clean slate.
@@ -332,6 +333,23 @@ exit 7')
     || fail "the perl watchdog fallback did not pass the child status through (rc=$rc)"
   assert_contains "$out" "stub failed" "the perl watchdog fallback lost the child's output"
   pass "fm_tasks_axi's perl watchdog passes the child status and output through unchanged"
+}
+
+test_fm_tasks_axi_fallback_kills_a_sigterm_ignoring_descendant() {
+  local case_dir fb out rc=0 started
+  case_dir=$(make_home fm-tasks-axi-descendant)
+  fb=$(make_fallback_bin "$case_dir" '#!/bin/bash
+(trap "" TERM; exec sleep 30) &
+wait')
+  started=$SECONDS
+  out=$(run_bounded_fm_tasks_axi "$fb" 2 show never-answers) || rc=$?
+  [ "$rc" -eq 124 ] \
+    || fail "the perl watchdog did not time out the descendant fixture (rc=$rc, out=$out)"
+  [ $((SECONDS - started)) -ge 2 ] \
+    || fail "the perl watchdog fired before the bound elapsed"
+  [ $((SECONDS - started)) -lt 20 ] \
+    || fail "a TERM-ignoring descendant kept the output pipe open after timeout"
+  pass "fm_tasks_axi's perl watchdog kills descendants even after their parent exits"
 }
 
 test_fm_tasks_axi_fails_closed_when_nothing_can_bound_the_call() {
@@ -1269,14 +1287,13 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
 
   # The read-back's own `start` never answers, so the spawn must bound it
   # (FM_TASKS_AXI_TIMEOUT=3), print the attempted wording naming the timeout,
-  # and exit - the outer `timeout -k 5 30` only turns a regression back into
-  # the lock-held-forever hang it exists to catch.
+  # and exit.
   mkdir -p "$case_dir/user-home"
   out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     HOME="$case_dir/user-home" FM_SPAWN_NO_GUARD=1 \
     FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
     FM_TASKS_AXI_TIMEOUT=3 PATH="$case_dir/fakebin:$PATH" \
-    timeout -k 5 30 "$SPAWN" "$id" "$case_dir/project" \
+    fm_run_timed 30 "$SPAWN" "$id" "$case_dir/project" \
     --mode no-mistakes --yolo off 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
   case "$rc" in
@@ -2640,6 +2657,7 @@ test_deferred_signal_never_claims_unverified_preservation
 test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi
 test_fm_tasks_axi_fallback_bounds_the_call_without_a_timeout_binary
 test_fm_tasks_axi_fallback_passes_the_child_status_and_output_through
+test_fm_tasks_axi_fallback_kills_a_sigterm_ignoring_descendant
 test_fm_tasks_axi_fails_closed_when_nothing_can_bound_the_call
 test_fm_tasks_axi_gnu_timeout_forces_termination_of_a_sigterm_ignoring_child
 test_dispatch_interruption_during_kimi_readiness_fails_before_commit
