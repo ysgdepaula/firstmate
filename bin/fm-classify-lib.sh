@@ -1185,6 +1185,8 @@ status_retire_presentation_task() {  # <state> <task-id>
   if [ ! -e "$state/$task.status" ] && [ ! -L "$state/$task.status" ] \
     && [ ! -e "$state/.$task.open-decisions-cursor" ] \
     && [ ! -L "$state/.$task.open-decisions-cursor" ] \
+    && [ ! -e "$state/.$task.done-guard" ] && [ ! -L "$state/.$task.done-guard" ] \
+    && [ ! -e "$state/.$task.done-superseded" ] && [ ! -L "$state/.$task.done-superseded" ] \
     && [ ! -e "$signal_marker" ] && [ ! -L "$signal_marker" ] \
     && [ ! -e "$heartbeat_marker" ] && [ ! -L "$heartbeat_marker" ] \
     && [ ! -e "$daemon_marker" ] && [ ! -L "$daemon_marker" ]; then

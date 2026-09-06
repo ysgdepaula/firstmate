@@ -1895,6 +1895,41 @@ test_classify_stale_withheld_done_is_not_terminal() {
   pass "classify_stale reads a withheld linkless done as non-terminal and a delivered one as terminal"
 }
 
+# The wedge-aging gate itself, driven through handle_wake rather than the
+# classifier it calls: an idle pane behind a `done:` the delivery contract
+# withholds must KEEP aging toward a wedge, because that aging is the guard's
+# second bounded escalation path. Clearing the marker there would silently mute
+# the pane, since the withheld line wakes nobody by itself.
+test_handle_wake_withheld_done_keeps_wedge_aging() {
+  local dir state key win
+  dir=$(make_supercase handle-withheld-done)
+  state="$dir/state"
+
+  win="sess:fm-nm-w1"
+  printf 'window=%s\nkind=ship\nmode=no-mistakes\n' "$win" > "$state/nm-w1.meta"
+  printf 'done: local tests pass\n' > "$state/nm-w1.status"
+  seen_through "$state" "nm-w1"
+  key=$(printf '%s' "nm-w1" | tr ':/.' '___')
+  FM_ESCALATE_BATCH_SECS=999 FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "an idle pane behind a withheld done stopped aging toward a wedge"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a withheld done escalated to firstmate on the wake itself"
+
+  # The divergence: the same fixture whose done carries its PR link is a real
+  # finish, so its wedge marker is still cleared exactly as before.
+  win="sess:fm-nm-w2"
+  printf 'window=%s\nkind=ship\nmode=no-mistakes\n' "$win" > "$state/nm-w2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/nm-w2.status"
+  seen_through "$state" "nm-w2"
+  key=$(printf '%s' "nm-w2" | tr ':/.' '___')
+  date +%s > "$state/.subsuper-stale-$key"
+  FM_ESCALATE_BATCH_SECS=999 FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a delivered done no longer clears the wedge marker"
+  pass "handle_wake keeps wedge aging behind a withheld done and clears it for a delivered one"
+}
+
 test_pane_input_pending_bordered_idle_not_pending() {
   # THE regression: an idle claude composer is a bordered box ("│ > … │"). The
   # old idle regex only matched a BARE prompt, so every idle claude pane read as
@@ -2756,6 +2791,7 @@ test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale
 test_classify_stale_withheld_done_is_not_terminal
+test_handle_wake_withheld_done_keeps_wedge_aging
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending
 test_submit_ack_confirms_on_bordered_empty_composer
