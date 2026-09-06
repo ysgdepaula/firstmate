@@ -186,7 +186,7 @@ map_log_state() {  # <line> [<status-file>]
 # The detail this reader prints for a status-log verdict. A withheld `done:`
 # reports working, so its own note - which reads like a completion - would
 # misdescribe the state; say why it is working instead.
-log_state_detail() {  # <line> <mapped-state> <status-file>
+log_state_detail() {  # <line> <mapped-state>
   if [ "$2" = working ] && [ "$(status_line_verb "$1")" = 'done' ]; then
     printf '%s' "reported done without the pull-request link its delivery contract requires; the worker has been steered back to that contract"
     return
@@ -219,7 +219,7 @@ if [ -n "$REMOTE_HOST" ]; then
       if [ -n "$LOG_VERB" ]; then
         LOG_STATE=$(map_log_state "$LOG_LINE" "$LOG")
         if [ "$LOG_STATE" != unknown ]; then
-          emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE" "$LOG")${SEP}remote endpoint alive on $REMOTE_HOST"
+          emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
       fi
       emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
@@ -625,7 +625,7 @@ if [ "$HAVE_RUN" = 1 ]; then
   # `state: done` these emits print.
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     if status_done_contract_unmet "$LOG" "$LOG_LINE"; then
-      RUN_DETAIL="$RUN_DETAIL${SEP}$(log_state_detail "$LOG_LINE" working "$LOG")"
+      RUN_DETAIL="$RUN_DETAIL${SEP}$(log_state_detail "$LOG_LINE" working)"
     else
       if [ "$RUN_SOURCE" = coarse ]; then
         emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
@@ -763,7 +763,7 @@ fi
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE" "$LOG")
   if [ "$LOG_STATE" != unknown ]; then
-    emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE" "$LOG")"
+    emit "$LOG_STATE" status-log "$(log_state_detail "$LOG_LINE" "$LOG_STATE")"
   fi
 fi
 

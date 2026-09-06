@@ -1728,8 +1728,9 @@ status_task_delivery_mode() {  # <status-file>
 # This is deliberately a SHAPE test - "https://<host>/<path>/pull/<n>", plus
 # GitLab's "/-/merge_requests/<n>" spelling, each accepted whatever a browser
 # hung off the number ("/files", "#issuecomment-1", "?w=1") and whatever prose
-# wrapped it (brackets and quotes on either side, trailing sentence
-# punctuation), since a pasted review URL is the same delivered pull request -
+# or markdown wrapped it (brackets and quotes on either side, a code span,
+# emphasis, a labelled markdown link, trailing sentence punctuation), since a
+# pasted review URL is the same delivered pull request -
 # and deliberately NOT
 # bin/fm-pr-lib.sh's fm_pr_url_parse, even though that function is the one owner
 # of what a task PR URL is. The two answer different questions. fm_pr_url_parse
@@ -1748,17 +1749,21 @@ status_line_has_pr_link() {  # <status-line>
   case "$line" in *https://*) ;; *) return 1 ;; esac
   while IFS= read -r word; do
     # A wrapper or sentence punctuation on either side is prose, not part of the
-    # URL, and a worker that brackets its link has still delivered it.
+    # URL, and a worker that brackets its link has still delivered it. That
+    # includes the markdown forms an agent reaches for when it echoes the
+    # code-span example bin/fm-dod-lib.sh hands it: a code span, emphasis, and a
+    # labelled link whose URL follows the label's closing bracket.
     while :; do
       case "$word" in
-        \(*|\<*|\[*|\{*|\"*|\'*) word=${word#?} ;;
+        *\]\(https://*) word=${word#*\](} ;;
+        \(*|\<*|\[*|\{*|\"*|\'*|\`*|\**) word=${word#?} ;;
         *) break ;;
       esac
     done
     case "$word" in https://*) ;; *) continue ;; esac
     while :; do
       case "$word" in
-        *.|*,|*\;|*:|*!|*\)|*\]|*\}|*\>|*\"|*\') word=${word%?} ;;
+        *.|*,|*\;|*:|*!|*\)|*\]|*\}|*\>|*\"|*\'|*\`|*\*) word=${word%?} ;;
         *) break ;;
       esac
     done

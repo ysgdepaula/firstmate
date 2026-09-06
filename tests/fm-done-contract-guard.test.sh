@@ -144,8 +144,22 @@ test_pr_link_detection() {
     || fail "a quoted pull-request URL was read as no link"
   status_line_has_pr_link "done: PR [https://gitlab.com/g/p/-/merge_requests/3] shipped" \
     || fail "a bracketed merge-request URL was read as no link"
+  # bin/fm-dod-lib.sh hands the worker its terminal line inside a code span, so
+  # an agent echoing that markdown around the substituted URL is a real shape.
+  status_line_has_pr_link "done: PR \`https://github.com/o/r/pull/7\` checks green" \
+    || fail "a code-span pull-request URL was read as no link"
+  status_line_has_pr_link "done: PR **https://github.com/o/r/pull/7** checks green" \
+    || fail "an emphasized pull-request URL was read as no link"
+  status_line_has_pr_link "done: PR [#4242](https://github.com/o/r/pull/4242) checks green" \
+    || fail "a markdown-linked pull-request URL was read as no link"
+  status_line_has_pr_link "done: PR [!3](https://gitlab.com/g/p/-/merge_requests/3) shipped" \
+    || fail "a markdown-linked merge-request URL was read as no link"
   status_line_has_pr_link "done: local tests pass" \
     && fail "a done: with no link was read as carrying one"
+  status_line_has_pr_link "done: everything green, opening the pull request next" \
+    && fail "prose naming a pull request with no URL at all was read as a link"
+  status_line_has_pr_link "done: see [the repo](https://github.com/kunchenguid/firstmate)" \
+    && fail "a markdown-linked repository URL that is not a pull request was read as a PR link"
   status_line_has_pr_link "done: see (https://github.com/kunchenguid/firstmate)" \
     && fail "a bracketed repository URL that is not a pull request was read as a PR link"
   status_line_has_pr_link "done: see https://github.com/kunchenguid/firstmate" \
