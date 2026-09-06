@@ -132,7 +132,13 @@
 #     `[markdown] archive` when one names it, then the same key in the user
 #     config at `$HOME/.tasks-axi/config.toml`, else tasks-axi's own default
 #     beside the backlog file, because a config that names no archive still has
-#     one). The archive is searched under the entry
+#     one). Only a home whose RESOLVED backend is markdown has such an archive:
+#     on any other backend no markdown Done archive is authoritative, so none is
+#     read and none is named, and the status log below decides under the same
+#     identities. A markdown-to-beads migration leaves the pre-migration
+#     `backlog.md` and `done-archive.md` on disk, and an answer archived before
+#     that migration says nothing about the call that lives in the migrated
+#     graph now. The archive is searched under the entry
 #     id and, for a concrete origin, under the legacy derived identity too, the
 #     two identities this home's own records can carry the entry under, because
 #     pre-collapse holds are the oldest population and so the likeliest to be
@@ -815,42 +821,30 @@ record_readable() {  # <path>
   [ -f "$1" ] && [ -r "$1" ] && [ ! -L "$1" ]
 }
 
-# The archived record for one task id: its closed row plus the indented body, so
-# body_has_resolution_record applies to the archive exactly as it applies to a
-# live row. Retention appends a fresh archived section on every rotation and
-# never dedupes ids, so an id freed by a purge and later reused legitimately has
-# several closed rows; only the LAST one answers "was THIS call closed with an
-# answer", so that is the only one emitted. Only `- [x]` rows count, so an
-# archive that somehow holds an open row proves nothing.
-archived_task_record() {  # <archive-file> <task-id>
+# What the archive holds for one exact task id, from ONE pass over it: the
+# number of closed rows under that id on the first line, then its newest closed
+# row plus the indented body, so body_has_resolution_record applies to the
+# archive exactly as it applies to a live row. Count and record share the single
+# row predicate, so a refusal can never report a tally the record contradicts.
+# Retention appends a fresh archived section on every rotation and never dedupes
+# ids, so an id freed by a purge and later reused legitimately has several
+# closed rows; only the LAST one answers "was THIS call closed with an answer",
+# so that is the only one emitted. Only `- [x]` rows count, so an archive that
+# somehow holds an open row proves nothing. Returns 1 when the archive cannot be
+# opened or holds no such row.
+archived_task_scan() {  # <archive-file> <task-id>
   local archive=$1 id=$2
   record_readable "$archive" || return 1
   LC_ALL=C awk -v id="$id" '
-    BEGIN { want = "- [x] " id " -"; found = 0; capture = 0; record = "" }
+    BEGIN { want = "- [x] " id " -"; rows = 0; capture = 0; record = "" }
     /^- \[/ {
       capture = (index($0, want) == 1)
-      if (capture) { found = 1; record = $0 }
+      if (capture) { rows++; record = $0 }
       next
     }
     /^[^[:space:]]/ { capture = 0; next }
     capture { record = record "\n" $0 }
-    END { if (!found) exit 1; print record }
-  ' "$archive"
-}
-
-# How many closed rows the archive holds for one exact task id, so a refusal can
-# tell an archive that holds nothing from one holding an unanswered row on top
-# of an older answered one.
-archived_identity_rows() {  # <archive-file> <task-id>
-  local archive=$1 id=$2
-  if ! record_readable "$archive"; then
-    printf '0'
-    return 0
-  fi
-  LC_ALL=C awk -v id="$id" '
-    BEGIN { want = "- [x] " id " -"; rows = 0 }
-    /^- \[/ { if (index($0, want) == 1) rows++ }
-    END { printf "%d", rows }
+    END { if (!rows) exit 1; print rows; print record }
   ' "$archive"
 }
 
@@ -863,32 +857,44 @@ archived_rows_tally() {  # <row-count>
   printf '%s archived rows' "$1"
 }
 
-# The archive's verdict on one exact task id, read off its newest closed row:
-# `answered` when that row carries the captain's resolution record, `unanswered`
-# when it is there without one, `absent` when the archive holds no such row.
-archived_identity_verdict() {  # <archive-file> <task-id>
-  local record
-  if ! record=$(archived_task_record "$1" "$2"); then
-    printf 'absent'
-    return 0
+# Set by authoritative_archive_file to the Done archive that may speak here.
+CAPTAIN_ARCHIVE_FILE=
+
+# Resolve the Done archive this home's configured backend actually rotates into.
+# Sets CAPTAIN_ARCHIVE_FILE and returns 0 on a markdown home; returns 1 with
+# CAPTAIN_PURGE_REFUSAL set, and names no archive at all, on any other backend.
+# The one owner of that condition, so the archive evidence can never drift from
+# the backend the row probe and the mutations already address: only a markdown
+# home has a markdown Done archive, and a file a migration left behind on a home
+# that has since moved to another backend records nothing about the call that
+# lives in the migrated graph now. Deliberately not called through a command
+# substitution, so an unresolvable path aborts the gate here.
+authoritative_archive_file() {  # <entry>
+  local entry=$1 data root backend
+  CAPTAIN_ARCHIVE_FILE=
+  data=$(fm_backlog_data_absolute "$DATA") \
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and that data directory could not be resolved, so whether the captain answered it cannot be established"
+  root=$(fm_backlog_root "$data") \
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its backlog root could not be resolved, so whether the captain answered it cannot be established"
+  backend=$(fm_tasks_axi_backend "$root")
+  if [ "$backend" != markdown ]; then
+    CAPTAIN_PURGE_REFUSAL="no markdown Done archive is authoritative on this home's $backend backend"
+    return 1
   fi
-  if body_has_resolution_record "$record"; then
-    printf 'answered'
-    return 0
-  fi
-  printf 'unanswered'
+  CAPTAIN_ARCHIVE_FILE=$(fm_backlog_archive_file "$data" 2>/dev/null) \
+    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its Done archive path could not be resolved, so whether the captain answered it cannot be established"
 }
 
-# What the archive says about this entry, under every identity resolve_entry
-# resolves a live row through. A row actually found there is authoritative about
+# What the archive says about this entry, under both identities this home's own
+# records can carry it under. A row actually found there is authoritative about
 # itself: its newest row proves the captain answered, or it proves the call was
 # closed with no answer. Returns 0 with the evidence named, 2 when the archive
-# itself refuses the entry, and 1 only when the archive holds no row for it at
-# all, which is the one case the status log may still speak to.
+# itself refuses the entry, and 1 only when no archive can speak for the entry
+# here, which is the one case the status log may still speak to.
 archived_purge_evidence() {  # <origin-or-empty> <entry>
-  local origin=$1 entry=$2 archive identity under answer searched='' rows
-  archive=$(fm_backlog_archive_file "$DATA" 2>/dev/null) \
-    || fail "captain-held task $entry is no longer in this home's configured backlog (data directory $DATA) and its Done archive path could not be resolved, so whether the captain answered it cannot be established"
+  local origin=$1 entry=$2 archive identity under answer searched='' rows scan record
+  authoritative_archive_file "$entry" || return 1
+  archive=$CAPTAIN_ARCHIVE_FILE
   if record_path_empty "$archive"; then
     CAPTAIN_PURGE_REFUSAL="retention has rotated nothing into $archive yet"
     return 1
@@ -905,17 +911,15 @@ archived_purge_evidence() {  # <origin-or-empty> <entry>
       answer="the archived captain answer for its legacy identity $identity in $archive"
     fi
     searched=${searched:+$searched or }$identity
-    case "$(archived_identity_verdict "$archive" "$identity")" in
-      answered)
-        CAPTAIN_PURGE_EVIDENCE=$answer
-        return 0
-        ;;
-      unanswered)
-        rows=$(archived_identity_rows "$archive" "$identity")
-        CAPTAIN_PURGE_REFUSAL="the newest of the $(archived_rows_tally "$rows") in $archive under $under is closed with no recorded captain answer"
-        return 2
-        ;;
-    esac
+    scan=$(archived_task_scan "$archive" "$identity") || continue
+    rows=${scan%%$'\n'*}
+    record=${scan#*$'\n'}
+    if body_has_resolution_record "$record"; then
+      CAPTAIN_PURGE_EVIDENCE=$answer
+      return 0
+    fi
+    CAPTAIN_PURGE_REFUSAL="the newest of the $(archived_rows_tally "$rows") in $archive under $under is closed with no recorded captain answer"
+    return 2
   done <<EOF
 $(entry_identities "$origin" "$entry")
 EOF
@@ -996,7 +1000,7 @@ purged_entry_repair() {  # <origin> <entry> <refusal-reason>
 # command substitution: a lost resolution must abort here with its own named
 # entry, never pass an unnamed task down to the durability check.
 verify_inventory_entry() {  # <origin> <entry>
-  local origin=$1 entry=$2 resolved archive archive_note rc=0
+  local origin=$1 entry=$2 resolved rc=0
   CAPTAIN_RESOLVED_ID=
   CAPTAIN_RESOLVED_HOW=
   resolved=$(resolve_entry "$origin" "$entry") || rc=$?
@@ -1545,8 +1549,8 @@ command_answers() {
 }
 
 command_complete() {
-  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc resolved
-  local resolved_how attested_by_prefix=''
+  local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
+  local attested_by_prefix=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1623,7 +1627,7 @@ EOF
 }
 
 command_verify() {
-  local origin=${1:-} meta reviewed keys entry key open resolved
+  local origin=${1:-} meta reviewed keys entry key open
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"

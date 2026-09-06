@@ -440,6 +440,116 @@ test_verify_resolves_a_pre_collapse_key_through_its_derived_marker() {
   pass "a pre-collapse key resolves through its derived identity's migration marker"
 }
 
+# A markdown-to-beads migration rehomes the held rows but leaves the old
+# data/backlog.md and data/done-archive.md sitting on disk. That archive records
+# answers given BEFORE the migration, which say nothing about the call that
+# lives in the migrated graph now, so it must not prove a purged entry on a home
+# whose resolved backend is no longer markdown: a migration, like retention,
+# never turns a refusal into an acceptance. Fully portable - the stubbed
+# tasks-axi and bd fake the beads backend and its empty graph, so no beads
+# install is needed to drive the refusal.
+test_stale_markdown_archive_proves_nothing_on_a_beads_home() {
+  local home fb scout call rc
+  home="$TMP_ROOT/captain-stub-stale-archive/home"
+  mkdir -p "$home/data" "$home/config" "$home/projects" "$home/graph/.beads"
+  (umask 077; mkdir -p "$home/state")
+  cat > "$home/.tasks.toml" <<'EOF'
+backend = "beads"
+
+[beads]
+path = "graph/.beads"
+binary = "bd"
+prefix = "fm"
+
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+EOF
+  scout=sample-stale-archive-scout
+  call=sample-stale-archive-call
+  fb=$(fm_fakebin "$home")
+  fm_fake_exit0 "$fb" tmux treehouse no-mistakes gh gh-axi
+  # The migrated graph carries no row for the attested call, and no row carries
+  # its migration marker, so the entry legitimately resolves to nothing here.
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) printf '%s\n' '0.2.5' ;;
+  update)
+    [ "${2:-}" = --help ] || exit 1
+    printf '%s\n' '--archive-body'
+    ;;
+  mv)
+    [ "${2:-}" = --help ] || exit 1
+    printf '%s\n' 'usage: tasks-axi mv [<id>...]'
+    ;;
+  hold)
+    case " $* " in
+      *" --help "*) printf '%s\n' '  --kind captain'; exit 0 ;;
+    esac
+    exit 1
+    ;;
+  show)
+    printf '%s\n' 'error: task not found' 'code: NOT_FOUND' >&2
+    exit 1
+    ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+  cat > "$fb/bd" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "list --all --json") printf '%s\n' '[]' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/bd"
+  write_scout_with_attested_inventory "$home" "$scout" "$call"
+  # Exactly the shape retention wrote before the migration: a closed row whose
+  # indented body carries the captain's recorded answer. On a markdown home this
+  # row proves the entry; here it must not be read at all.
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-09-01
+
+- [x] $call - Choose route: north, south
+  Resolution recorded by fm-captain-hold.
+  Decision digest: 0000000000000000000000000000000000000000000000000000000000000000
+  Resolution mode: done
+
+  Captain decision:
+  the captain chose north
+EOF
+
+  set +e
+  run_captain "$home" verify "$scout" > "$home/verify.out" 2> "$home/verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a pre-migration markdown archive proved a purged entry on a beads home"
+  assert_grep "$call" "$home/verify.err" \
+    "the refusal did not name the entry it could not prove"
+  assert_grep "beads backend" "$home/verify.err" \
+    "the refusal did not say why no markdown Done archive is authoritative here"
+  assert_no_grep "purged: captain-held task" "$home/verify.err" \
+    "the gate announced the entry as purged on a stale markdown archive"
+  assert_no_grep "done-archive.md" "$home/verify.err" \
+    "the refusal named a markdown Done archive that is not authoritative here"
+
+  set +e
+  run_captain "$home" complete "$scout" --none > "$home/none.out" 2> "$home/none.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "completion accepted a purged entry on a stale markdown archive"
+  assert_grep "$call" "$home/none.err" \
+    "the completion refusal did not name the entry"
+  assert_no_grep "purged: captain-held task" "$home/none.err" \
+    "completion announced the entry as purged on a stale markdown archive"
+  assert_no_grep "done-archive.md" "$home/none.err" \
+    "the completion refusal named a Done archive that is not authoritative here"
+  pass "a pre-migration markdown Done archive proves nothing on a beads home"
+}
+
 # The captain-hold mutation wrapper must address the configured backend like
 # the transition library does: on a beads-configured home its hold/answer/done
 # calls reach tasks-axi with no markdown file override. Fully portable - the
@@ -2831,4 +2941,5 @@ test_marker_noted_row_wins_over_a_prefix_namesake
 test_complete_accepts_a_migrated_inventory_on_beads
 test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
+test_stale_markdown_archive_proves_nothing_on_a_beads_home
 test_captain_hold_mutations_address_the_beads_backend
