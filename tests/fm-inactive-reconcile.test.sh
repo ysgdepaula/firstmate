@@ -254,6 +254,38 @@ test_direct_path_defers_only_to_a_real_terminal_line() {
   pass "the direct path's terminal deferral asks the shared done contract"
 }
 
+# The one named exception to "a line the guard withholds is published nowhere",
+# and its boundary. The authoritative current-state reader can answer `done` from
+# the run-step while the child's newest line is still the linkless handoff its own
+# brief asked for. When a pull request is recorded for that task, the verdict
+# carries the very proof the contract demands - green CI on a real pull request -
+# so it outranks the worker's sentence and is published with that link. The same
+# verdict with NO recorded pull request carries no such proof and stays withheld.
+test_run_step_done_publishes_a_held_line_only_with_a_recorded_pr() {
+  make_world runstep-pr; bind_secondmate local
+  write_child "$MATE" child 'done: implemented the parser'
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
+  grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" \
+    || fail "a run-step done backed by a recorded PR was not published: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  grep -Fq "pr=$PR_LINK" "$MAIN/state/mate.status" \
+    || fail "the published outcome did not carry the recorded pull request: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+
+  # The boundary: same held line, same run-step verdict, no recorded pull request
+  # anywhere for the task, so there is no proof and nothing may be published.
+  make_world runstep-nopr; bind_secondmate local
+  write_child "$MATE" child 'done: implemented the parser'
+  fm_write_meta "$MATE/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MATE/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' 'spawn_gen=nopr.1'
+  age "$MATE/state/child.meta"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
+  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "a run-step done with no recorded PR published a line the guard withholds: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  [ "$(outcome_count "$MATE" reported)" = 0 ] \
+    || fail "a withheld done with no recorded PR minted a delivery receipt"
+  pass "a held done is published only when the run-step verdict carries a recorded pull request"
+}
+
 # A busy child cannot keep later ledger outcomes from being visited, and is
 # retried on the next poll after its lifecycle lock becomes available.
 test_busy_child_does_not_starve_later_ledger_outcomes() {
@@ -854,6 +886,7 @@ test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_ledger_withholds_a_linkless_done
 test_direct_path_defers_only_to_a_real_terminal_line
+test_run_step_done_publishes_a_held_line_only_with_a_recorded_pr
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
 test_terminal_line_during_state_read_yields_to_ledger_delivery

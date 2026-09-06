@@ -480,7 +480,7 @@ report_child() { # <id>
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -516,6 +516,18 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     *) return 0 ;;
   esac
   pr=$(pr_for_task "$meta" "$status")
+  # The one named exception to "a withheld done is published nowhere"
+  # (bin/fm-classify-lib.sh's guard header states it): this verdict comes from the
+  # authoritative current-state reader rather than from the worker's sentence, and
+  # a run that reached green CI on a recorded pull request carries the very proof
+  # the contract asks for, so it outranks that sentence. The same verdict with no
+  # recorded pull request carries no such proof and stays withheld - the recorded
+  # pull request is what separates them, not the state word.
+  held_done=0
+  if [ "$state" = 'done' ] && status_done_contract_unmet "$status" "$last"; then
+    [ -n "$pr" ] || return 0
+    held_done=1
+  fi
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|$pr|$(clean_field "$last")")
   if [ -n "$self" ]; then
@@ -524,6 +536,9 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     outcome_key="inactive-outcome-main-$id-$state"
   fi
   ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct "upstream" "$pr" "$(sha256_text "$last")" || return 1
+  # This outcome answers the prose line, so the guard stops steering the worker
+  # about it while that line stays the newest one.
+  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" || true
   [ -n "$RECORD_PENDING" ] || return 0
   if [ -n "$self" ]; then
     if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then

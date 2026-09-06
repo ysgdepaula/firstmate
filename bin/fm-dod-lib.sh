@@ -211,6 +211,9 @@ fm_dod_done_form() {  # <mode> <task-id>
   esac
 }
 
+# The brief block for one delivery mode. fm_dod_done_form is the single owner of
+# which modes exist, so it refuses an unknown one here - naming that mode on
+# stderr - before this function's arms, which cover exactly the modes it accepts.
 fm_dod_block() {  # <mode> <task-id>
   local mode=$1 id=$2 done_form
   done_form=$(fm_dod_done_form "$mode" "$id") || return 1
@@ -275,8 +278,5 @@ Two firstmate-specific rules layer on top of that guidance:
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append the terminal status line above carrying that PR's real URL and stop. You are finished.
 EOF
       ;;
-    *)
-      echo "error: fm_dod_block: no brief block for delivery mode '$mode'" >&2
-      return 1 ;;
   esac
 }

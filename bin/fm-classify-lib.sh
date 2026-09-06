@@ -1703,6 +1703,16 @@ _fm_status_open_decision_origins() {  # <status-file>
 # on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
 # status_done_guard_holds instead, because a line whose reminder budget is spent
 # is deliberately firstmate's to see and must stay recoverable.
+#
+# A withheld done is published nowhere, with ONE named exception: inactive
+# reconciliation may publish a terminal outcome for such a line when the run-step
+# verdict behind it carries a recorded pull request, because a pipeline that
+# reached green CI on a real pull request is the contract's own proof and
+# outranks the worker's prose. The same verdict with NO recorded pull request is
+# not that proof and stays withheld. Publishing that outcome also SUPERSEDES the
+# prose line (status_done_guard_supersede), so a worker whose pull request is
+# already reported stops being steered about the sentence it wrote on the way
+# there; a later append of the same text is a new line the marker does not cover.
 FM_DONE_GUARD_REMINDER_MAX_DEFAULT=2
 
 fm_done_guard_reminder_max() {
@@ -1862,11 +1872,50 @@ status_line_is_newest() {  # <status-file> <status-line> [newest-line]
   fi
 }
 
+# The supersession marker for one linkless done, alongside its status log the way
+# the budget record is: "<log length when superseded><TAB><line superseded>".
+# Keyed on log position as well as text for the same reason the budget record is:
+# a LATER append of the same text is a new line this marker does not cover, so
+# the guard still judges it on its own.
+_fm_done_guard_superseded_path() {  # <status-file>
+  local f=$1 dir base
+  dir=$(dirname "$f")
+  base=$(basename "$f")
+  printf '%s/.%s.done-superseded' "$dir" "${base%.status}"
+}
+
+# Record that this line has been superseded by a published run-step outcome, so
+# the guard stops steering the worker about it. Written only by the path that
+# publishes that outcome (bin/fm-inactive-reconcile.sh owns when), never by
+# classification - this library stays the owner of the marker's shape alone.
+status_done_guard_supersede() {  # <status-file> <status-line>
+  local f=$1 line=$2 pos
+  [ -n "$line" ] || return 1
+  pos=$(_fm_done_guard_position "$f") || return 1
+  printf '%s\t%s\n' "$pos" "$line" > "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+}
+
+# 0 when this exact line, at this exact log length, is one such published outcome
+# already superseded. A pure read; an absent, unreadable, or malformed marker
+# reads as no supersession, which steers the worker rather than silently
+# absorbing a line nothing has answered.
+status_done_guard_superseded() {  # <status-file> <status-line>
+  local f=$1 line=$2 marker pos rec_pos='' rec_line=''
+  [ -n "$line" ] || return 1
+  marker=$(_fm_done_guard_superseded_path "$f")
+  [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 1
+  IFS=$(printf '\t') read -r rec_pos rec_line < "$marker" 2>/dev/null || return 1
+  case "$rec_pos" in ''|*[!0-9]*) return 1 ;; esac
+  pos=$(_fm_done_guard_position "$f") || return 1
+  [ "$rec_pos" = "$pos" ] && [ "$rec_line" = "$line" ]
+}
+
 # Forget the budget once the contract is satisfied. Scoped to the newest line for
 # the reason above: a replayed historical done that carried its link must not
 # release a hold the task's current line still earns.
 status_done_guard_clear() {  # <status-file> <status-line> [newest-line]
   status_line_is_newest "$@" || return 0
+  rm -f -- "$(_fm_done_guard_superseded_path "$1")" 2>/dev/null || true
   rm -f -- "$(_fm_done_guard_path "$1")" 2>/dev/null || true
 }
 
@@ -1930,6 +1979,9 @@ status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delive
     status_line_is_newest "$f" "$line" || return 1
   fi
   pos=$(_fm_done_guard_position "$f") || return 1
+  # Already answered by a published run-step outcome: the worker's pull request
+  # is green and reported, so this sentence has nothing left to steer about.
+  status_done_guard_superseded "$f" "$line" && return 0
   state=$(dirname "$f")
   id=$(basename "$f")
   id=${id%.status}

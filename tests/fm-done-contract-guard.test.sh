@@ -238,6 +238,40 @@ test_false_done_is_withheld_and_steered() {
   pass "a linkless done is withheld from presentation and the worker is steered with the exact contract"
 }
 
+# Inactive reconciliation may publish a terminal outcome for a held line when the
+# run-step verdict behind it carries the recorded pull request the contract asks
+# for (bin/fm-inactive-reconcile.sh owns that boundary). Publishing it ANSWERS the
+# prose line: the worker's pull request is green and reported, so the guard must
+# stop steering it about the sentence it wrote on the way there.
+test_a_superseded_done_is_no_longer_steered() {
+  local dir state
+  dir="$TMP_ROOT/superseded"; state="$dir/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes 'working: implementing' 'done: implemented the parser'
+  status_done_guard_supersede "$state/t.status" 'done: implemented the parser' \
+    || fail "the publishing path could not record the supersession"
+  status_span_has_actionable "$state/t.status" 0 \
+    && fail "a superseded done was presented to firstmate as an actionable event"
+  [ "$(inbox_records "$state" t)" = 0 ] \
+    || fail "a superseded done still steered the worker about its own sentence"
+
+  # The divergence: the identical fixture with nothing published is still steered,
+  # so the case above cannot pass merely because the guard stopped working.
+  make_task "$state" u no-mistakes 'working: implementing' 'done: implemented the parser'
+  status_span_has_actionable "$state/u.status" 0 \
+    && fail "an unpublished linkless done was presented instead of withheld"
+  [ "$(inbox_records "$state" u)" = 1 ] \
+    || fail "an unpublished linkless done was not steered"
+
+  # The marker is keyed on log position as well as text, so a LATER append of the
+  # same sentence is a new line it does not answer.
+  printf 'working: one more pass\ndone: implemented the parser\n' >> "$state/t.status"
+  status_span_has_actionable "$state/t.status" 0 \
+    && fail "a re-appended linkless done was presented instead of withheld"
+  [ "$(inbox_records "$state" t)" = 1 ] \
+    || fail "a linkless done re-appended past its supersession was not steered again"
+  pass "a published run-step outcome supersedes exactly the prose line it answered"
+}
+
 test_direct_pr_false_done_is_withheld() {
   local dir state
   dir="$TMP_ROOT/false-done-direct"; state="$dir/state"; mkdir -p "$state"
@@ -690,6 +724,7 @@ test_watcher_still_surfaces_a_real_done() {
 test_pr_link_detection
 test_contract_unmet_only_for_pr_delivery_modes
 test_false_done_is_withheld_and_steered
+test_a_superseded_done_is_no_longer_steered
 test_direct_pr_false_done_is_withheld
 test_real_done_is_presented_unchanged
 test_a_real_done_releases_a_held_task
