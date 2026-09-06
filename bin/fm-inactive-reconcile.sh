@@ -498,8 +498,17 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
+  # A child that states its own terminal outcome is the ledger path's to deliver,
+  # so this path stands down. The test is the shared predicate its ledger sibling
+  # asks, for the same reason: a `done:` with no pull-request link on a
+  # PR-delivery child is not a terminal outcome, so it may not stand this path
+  # down either, and the authoritative current-state reader below keeps the
+  # verdict - which is how a child actually failing behind a false done is still
+  # reported rather than swallowed on the word of that line.
   if [ -n "$self" ]; then
-    case "$(status_line_verb "$last")" in done|failed) return 0 ;; esac
+    case "$(status_line_verb "$last")" in
+      done|failed) status_done_contract_unmet "$status" "$last" || return 0 ;;
+    esac
   fi
   case "$state_line" in
     'state: done '*) state='done' ;;

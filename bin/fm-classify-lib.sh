@@ -1695,8 +1695,9 @@ _fm_status_open_decision_origins() {  # <status-file>
 # pure status_done_contract_unmet - the always-on watcher's stale-terminal test,
 # the away-mode supervisor's signal and stale wake classifications and its wedge
 # aging, both of bin/fm-crew-state.sh's status-log paths (its verb mapping and
-# its ci-ready gate), a secondmate's parent-channel ledger, and
-# bin/fm-captain-hold.sh's open-decision retirement -
+# its ci-ready gate), both of bin/fm-inactive-reconcile.sh's finish tests (a
+# secondmate's parent-channel ledger, and the direct path's deferral to that
+# ledger), and bin/fm-captain-hold.sh's open-decision retirement -
 # so the classifier and the authoritative current-state reader cannot disagree
 # about whether a task is finished, and nothing retires a captain's open decision
 # on the word of a line no other reader accepts. A consumer deciding whether to suppress a LIVE presentation asks
@@ -1781,12 +1782,14 @@ EOF
 # a pull-request link and it does not. A pure read of the line plus the task's
 # recorded delivery mode, so every presentation path can ask it without side
 # effects; only status_done_guard_defer below acts on the answer.
-status_done_contract_unmet() {  # <status-file> <status-line>
+# A caller classifying several lines of one log may pass that task's delivery
+# mode, which it cannot change mid-scan, rather than have it re-read per line.
+status_done_contract_unmet() {  # <status-file> <status-line> [delivery-mode]
   local f=$1 line=$2 mode
   [ -n "$line" ] || return 1
   [ "$(status_line_verb "$line")" = 'done' ] || return 1
   status_line_has_pr_link "$line" && return 1
-  mode=$(status_task_delivery_mode "$f")
+  if [ "$#" -ge 3 ]; then mode=$3; else mode=$(status_task_delivery_mode "$f"); fi
   case "$mode" in
     no-mistakes|direct-PR) return 0 ;;
   esac
@@ -1848,16 +1851,22 @@ _fm_done_guard_position() {  # <status-file>
 # no such test, one of those re-reads would steer a worker that has long since
 # delivered, about a line it wrote hours ago, and then escalate that
 # never-acknowledged reminder as a wake the guard itself invented.
-status_line_is_newest() {  # <status-file> <status-line>
+# A caller classifying several lines of one log may pass that log's newest line,
+# which it reads once, rather than have it re-read per line.
+status_line_is_newest() {  # <status-file> <status-line> [newest-line]
   [ -n "$2" ] || return 1
-  [ "$2" = "$(last_status_line "$1")" ]
+  if [ "$#" -ge 3 ]; then
+    [ "$2" = "$3" ]
+  else
+    [ "$2" = "$(last_status_line "$1")" ]
+  fi
 }
 
 # Forget the budget once the contract is satisfied. Scoped to the newest line for
 # the reason above: a replayed historical done that carried its link must not
 # release a hold the task's current line still earns.
-status_done_guard_clear() {  # <status-file> <status-line>
-  status_line_is_newest "$1" "$2" || return 0
+status_done_guard_clear() {  # <status-file> <status-line> [newest-line]
+  status_line_is_newest "$@" || return 0
   rm -f -- "$(_fm_done_guard_path "$1")" 2>/dev/null || true
 }
 
@@ -1909,11 +1918,17 @@ EOF
 # be presented to firstmate instead - a spent budget, an inbox that could not be
 # written, or a budget that could not be persisted.
 # NOT a pure read: this writes a steering-inbox record and the budget above.
-status_done_guard_defer() {  # <status-file> <status-line>
+status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delivery-mode]
   local f=$1 line=$2 state id guard mode text max pos
   # Current state only: a historical done replayed by a whole-log re-read is not
-  # something to steer a worker about (status_line_is_newest owns why).
-  status_line_is_newest "$f" "$line" || return 1
+  # something to steer a worker about (status_line_is_newest owns why). Both this
+  # test and the delivery-mode read below stand on their own for a caller that
+  # reaches here directly, and accept an already-read value from one that does not.
+  if [ "$#" -ge 3 ]; then
+    status_line_is_newest "$f" "$line" "$3" || return 1
+  else
+    status_line_is_newest "$f" "$line" || return 1
+  fi
   pos=$(_fm_done_guard_position "$f") || return 1
   state=$(dirname "$f")
   id=$(basename "$f")
@@ -1928,7 +1943,7 @@ status_done_guard_defer() {  # <status-file> <status-line>
   [ "$FM_DONE_GUARD_LINE" = "$line" ] && [ "$FM_DONE_GUARD_POSITION" = "$pos" ] && return 0
   max=$(fm_done_guard_reminder_max)
   [ "$FM_DONE_GUARD_COUNT" -lt "$max" ] || return 1
-  mode=$(status_task_delivery_mode "$f")
+  if [ "$#" -ge 4 ]; then mode=$4; else mode=$(status_task_delivery_mode "$f"); fi
   text=$(_fm_done_guard_reminder_text "$id" "$mode" "$line") || return 1
   if command -v fm_task_inbox_write >/dev/null 2>&1; then
     fm_task_inbox_write "$state" "$id" "$text" > /dev/null || return 1
@@ -1953,6 +1968,7 @@ status_done_guard_defer() {  # <status-file> <status-line>
 status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file full_file prefix_file result
   local line verb key origins='' folded=0 rc=1 failed=0 prefix_lines=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
+  local guard_read=0 guard_newest='' guard_mode=''
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
   ident=$(_fm_open_decisions_file_ident "$f") || return 2
@@ -2038,13 +2054,22 @@ EOF
         # its done: line. A linkless one is steered back to the worker instead of
         # being presented as a completion (see the done contract guard above).
         if [ "$verb" = 'done' ]; then
-          if status_line_is_newest "$f" "$line"; then
-            if status_done_contract_unmet "$f" "$line"; then
-              status_done_guard_defer "$f" "$line" && continue
+          # The newest line and the delivery mode are properties of the LOG, not
+          # of the line being judged, so one whole-log re-read reads each once
+          # however many done: lines it walks. Read on first need, because a span
+          # carrying none must not pay for either.
+          if [ "$guard_read" -eq 0 ]; then
+            guard_newest=$(last_status_line "$f")
+            guard_mode=$(status_task_delivery_mode "$f")
+            guard_read=1
+          fi
+          if status_line_is_newest "$f" "$line" "$guard_newest"; then
+            if status_done_contract_unmet "$f" "$line" "$guard_mode"; then
+              status_done_guard_defer "$f" "$line" "$guard_newest" "$guard_mode" && continue
             else
-              status_done_guard_clear "$f" "$line"
+              status_done_guard_clear "$f" "$line" "$guard_newest"
             fi
-          elif status_done_contract_unmet "$f" "$line"; then
+          elif status_done_contract_unmet "$f" "$line" "$guard_mode"; then
             # A linkless done the task has already moved past. It was judged when
             # it WAS the current line - withheld and steered, or handed to
             # firstmate once the budget was spent - and replaying it now can

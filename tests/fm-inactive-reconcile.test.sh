@@ -225,6 +225,35 @@ test_secondmate_ledger_withholds_a_linkless_done() {
   pass "a secondmate ledger withholds a done with no PR link and still delivers a real one"
 }
 
+# The direct reconciliation path stands down for a child that states its own
+# terminal outcome, because that outcome is the ledger path's to deliver. It asks
+# the same shared contract predicate its ledger sibling does, so a `done:` with
+# no pull-request link cannot stand it down: that line is not a terminal outcome,
+# the ledger refuses it too, and the authoritative current-state reader keeps the
+# verdict. Otherwise a child actually FAILING behind a false done is delivered by
+# neither path and the captain never hears about it.
+test_direct_path_defers_only_to_a_real_terminal_line() {
+  make_world direct-guard; bind_secondmate local
+  write_child "$MATE" child 'done: local tests pass'
+  FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE"
+  grep -q 'inactive-outcome-mate-child-failed' "$MAIN/state/mate.status" \
+    || fail "a child failing behind a linkless done was delivered by neither path: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  ! grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" \
+    || fail "the linkless done was published to the parent as a completion: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+
+  # The deliberate divergence: the same child, the same failing state read, a
+  # done that DOES carry its link is a real terminal outcome, so the direct path
+  # still stands down and the ledger delivers that line instead.
+  make_world direct-guard-real; bind_secondmate local
+  write_child "$MATE" child "done: PR $PR_LINK checks green"
+  FM_FAKE_CREW_STATE='failed' run_reconcile "$MATE"
+  grep -q 'child-outcome-child-done' "$MAIN/state/mate.status" \
+    || fail "the child's real terminal line was not delivered by the ledger: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  ! grep -q 'inactive-outcome-mate-child-failed' "$MAIN/state/mate.status" \
+    || fail "the direct path overrode a real terminal line the ledger owned: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
+  pass "the direct path's terminal deferral asks the shared done contract"
+}
+
 # A busy child cannot keep later ledger outcomes from being visited, and is
 # retried on the next poll after its lifecycle lock becomes available.
 test_busy_child_does_not_starve_later_ledger_outcomes() {
@@ -824,6 +853,7 @@ test_reconciliation_never_calls_forge() {
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_ledger_withholds_a_linkless_done
+test_direct_path_defers_only_to_a_real_terminal_line
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
 test_terminal_line_during_state_read_yields_to_ledger_delivery
