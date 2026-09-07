@@ -945,6 +945,7 @@ SH
   pass "direct publication waits for reminder retirement and retries beyond later status appends"
 }
 
+test_failed_reminder_retirement_blocks_publication_and_retries
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_ledger_withholds_a_linkless_done
@@ -979,4 +980,3 @@ test_reconciliation_never_calls_forge
 
 echo "all inactive reconciliation tests passed"
 
-test_failed_reminder_retirement_blocks_publication_and_retries

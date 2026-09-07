@@ -727,6 +727,35 @@ test_supersession_retires_only_its_bound_reminder() {
   pass "supersession retires its bound reminder while unrelated and later instructions remain deliverable"
 }
 
+test_cancelled_records_are_excluded_before_archival() {
+  local state
+  state="$TMP_ROOT/cancelled-selection/state"; mkdir -p "$state"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1/bin/fm-task-inbox-lib.sh"
+    state=$2
+    cancelled=$(fm_task_inbox_write "$state" t1 "cancelled instruction" "" done-test) || exit 1
+    unrelated=$(fm_task_inbox_write "$state" t1 "unrelated instruction") || exit 1
+    mv() { [ "$1" != "$cancelled" ] || return 1; command mv "$@"; }
+    fm_task_inbox_retire_binding "$state" t1 done-test && exit 1
+    [ -f "$cancelled" ] || exit 1
+    [ "$(fm_task_inbox_oldest_unhandled "$state" t1)" = "$unrelated" ] || exit 1
+    fm_task_inbox_doorbell_line "$cancelled" > "$state/cancelled-bell" && exit 1
+    [ ! -s "$state/cancelled-bell" ] || exit 1
+    bell=$(fm_task_inbox_doorbell_line "$unrelated") || exit 1
+    case "$bell" in *"$unrelated"*) ;; *) exit 1 ;; esac
+    case "$bell" in *"$cancelled"*|*"*.msg"*) exit 1 ;; esac
+    bash -c "$bell" || exit 1
+    [ -f "$cancelled" ] && [ -f "$unrelated" ] || exit 1
+    command mv "$unrelated" "$state/t1.inbox/handled/" || exit 1
+    [ "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=0 fm_task_inbox_due_action "$state" t1)" = quiet ] || exit 1
+    fm_task_inbox_oldest_unhandled "$state" t1 && exit 1
+    unset -f mv
+    fm_task_inbox_retry_retirements "$state" t1 || exit 1
+    [ ! -e "$cancelled" ] && [ -f "$state/t1.inbox/handled/${cancelled##*/}" ] || exit 1
+  ' _ "$ROOT" "$state" || fail "cancellation affected unrelated selection or remained deliverable"
+  pass "inbox: cancelled records cannot ring or escalate while unrelated instructions remain selectable"
+}
+
 test_write_is_durable_and_exact
 test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls
@@ -748,3 +777,5 @@ test_watcher_surfaces_unwritable_ladder
 test_watcher_escalates_once_after_budget
 test_watcher_dead_pane_escalates_once_without_ringing
 test_watcher_dead_pane_ignores_stale_busy_state
+
+test_cancelled_records_are_excluded_before_archival

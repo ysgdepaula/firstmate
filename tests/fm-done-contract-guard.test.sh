@@ -1085,10 +1085,18 @@ test_retirement_failure_remains_retryable() {
         status_done_guard_supersede "$state/t.status" "done: local tests pass" && exit 1
         [ ! -s "$state/.t.done-superseded" ] || exit 1
         [ -f "$reminder" ] && [ -f "$unrelated" ] || exit 1
-        [ "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=0 fm_task_inbox_due_action "$state" t)" = quiet ] || exit 1
-        fm_backend_agent_state() { : > "$state/unexpected-ring"; printf alive; }
-        fm_task_inbox_ring fake target "$unrelated" && exit 1
-        [ ! -e "$state/unexpected-ring" ] || exit 1
+        [ "$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t)" = "ring $unrelated" ] || exit 1
+        fm_backend_agent_state() { printf alive; }
+        fm_backend_composer_state() { printf empty; }
+        fm_backend_send_text_submit() { printf "%s\n" "$3" >> "$state/rings"; }
+        fm_task_inbox_ring fake target "$reminder" && exit 1
+        [ ! -e "$state/rings" ] || exit 1
+        fm_task_inbox_ring fake target "$unrelated" || exit 1
+        doorbell=$(cat "$state/rings")
+        case "$doorbell" in *"$unrelated"*) ;; *) exit 1 ;; esac
+        case "$doorbell" in *"$reminder"*|*"*.msg"*) exit 1 ;; esac
+        fm_task_inbox_record_ring "$state" t "$unrelated" || exit 1
+        [ "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=1 fm_task_inbox_due_action "$state" t)" = "escalate $unrelated 1" ] || exit 1
       ) || exit 1
       printf "working: after failed retirement\n" >> "$state/t.status"
       action=$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t) || exit 1
@@ -1101,9 +1109,10 @@ test_retirement_failure_remains_retryable() {
       [ "$(find "$state/t.inbox" -maxdepth 1 -name "*.msg" | wc -l | tr -d " ")" = 2 ] || exit 1
     ' _ "$ROOT" "$state" "$fault" || fail "$fault retirement failure lost cancellation or unrelated delivery"
   done
-  pass "failed retirement stays cancelled and retries after later status appends"
+  pass "failed retirement preserves unrelated delivery and escalation and remains retryable"
 }
 
+test_retirement_failure_remains_retryable
 test_pr_link_detection
 test_contract_unmet_only_for_pr_delivery_modes
 test_false_done_is_withheld_and_steered
@@ -1136,4 +1145,3 @@ test_stale_pane_behind_a_real_done_still_surfaces
 test_mixed_watcher_batch_filters_only_held_occurrences
 test_watcher_still_surfaces_a_real_done
 
-test_retirement_failure_remains_retryable

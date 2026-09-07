@@ -290,6 +290,13 @@ fm_task_inbox_retry_retirements() {
   return "$status"
 }
 
+fm_task_inbox_is_cancelled() {
+  local rec=$1 binding dir=${1%/*}
+  binding=$(fm_task_inbox_binding "$rec") || return 1
+  case "$binding" in ''|*[!a-zA-Z0-9._:-]*) return 1 ;; esac
+  [ -d "$dir/.retired-bindings/binding-$binding" ]
+}
+
 # The exact enqueued text back out of a record.
 fm_task_inbox_body() {  # <record-path>
   local line
@@ -311,12 +318,21 @@ fm_task_inbox_body() {  # <record-path>
 # A non-printable path fails without output so terminal controls never reach
 # the pane's line discipline.
 fm_task_inbox_doorbell_line() {  # <record-path>
-  local dir=${1%/*} abs quoted LC_ALL=C
+  local dir=${1%/*} abs quoted base LC_ALL=C
+  [ "${dir##*/}" != handled ] || return 1
+  fm_task_inbox_is_cancelled "$1" && return 1
   abs=$(cd "$dir" 2>/dev/null && pwd) || abs=$dir
   case "$abs" in
     *[![:print:]]*) return 1 ;;
   esac
   quoted=$(printf '%s' "$abs" | sed "s/'/'\\\\''/g")
+  if [ -d "$dir/.retired-bindings" ]; then
+    base=${1##*/}
+    fm_task_inbox_seq_of "$base" >/dev/null || return 1
+    printf ": Firstmate instruction waiting: read and act only on '%s/%s', then mv that handled file to '%s/handled/'." \
+      "$quoted" "$base" "$quoted"
+    return 0
+  fi
   printf ": Firstmate instruction waiting: list '%s'/*.msg and, in numeric order, read and act on each, then mv each handled file to '%s'/handled/." \
     "$quoted" "$quoted"
 }
@@ -338,7 +354,9 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict dir task
   dir=${rec%/*}; task=${dir##*/}; task=${task%.inbox}
-  fm_task_inbox_retry_retirements "${dir%/*}" "$task" || return 1
+  [ "${dir##*/}" != handled ] || return 1
+  fm_task_inbox_retry_retirements "${dir%/*}" "$task" || true
+  fm_task_inbox_is_cancelled "$rec" && return 1
   [ ! -f "$dir/handled/${rec##*/}" ] || return 1
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
@@ -382,6 +400,7 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
   dir=$(fm_task_inbox_dir "$1" "$2")
   for f in "$dir"/*.msg; do
     [ -e "$f" ] || continue
+    fm_task_inbox_is_cancelled "$f" && continue
     fm_task_inbox_is_fire_and_forget "$f" && continue
     n=$(fm_task_inbox_seq_of "${f##*/}") || continue
     if [ -z "$best" ] || [ "$n" -lt "$best_n" ]; then
@@ -403,10 +422,7 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
 fm_task_inbox_due_action() {  # <state-dir> <task-id>
   local dir oldest base now grace max ladder rec_base count last
   dir=$(fm_task_inbox_dir "$1" "$2")
-  if ! fm_task_inbox_retry_retirements "$1" "$2"; then
-    printf 'quiet'
-    return 0
-  fi
+  fm_task_inbox_retry_retirements "$1" "$2" || true
   if ! oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
     rm -f "$dir/.ring-state" "$dir/.escalated" 2>/dev/null || true
     printf 'quiet'
