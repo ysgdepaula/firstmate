@@ -284,8 +284,8 @@ test_a_superseded_done_is_no_longer_steered() {
     || fail "the second occurrence could not be superseded"
   status_span_has_actionable "$state/t.status" 0 \
     && fail "the second supersession lost evidence for the first occurrence"
-  [ "$(inbox_records "$state" t)" = 1 ] \
-    || fail "re-reading two superseded occurrences enqueued another reminder"
+  [ "$(inbox_records "$state" t)" = 0 ] \
+    || fail "supersession left its occurrence's reminder pending"
   pass "a published run-step outcome supersedes exactly the prose line it answered"
 }
 
@@ -630,6 +630,70 @@ test_identical_history_is_not_the_newest_occurrence() {
   pass "identical history is presented while only the newest occurrence is steered"
 }
 
+test_witnesses_preserve_payload_tabs() {
+  local dir state witness line=$'done:\tlocal tests pass\t' event i
+  dir="$TMP_ROOT/payload-tabs"; state="$dir/state"; mkdir -p "$state"
+  for witness in reminder supersession; do
+    make_task "$state" "$witness" no-mistakes "$line"
+    if [ "$witness" = supersession ]; then
+      status_done_guard_supersede "$state/$witness.status" "$line" \
+        || fail "the tab-terminated occurrence could not be superseded"
+    fi
+    for i in 1 2 3; do
+      status_span_has_actionable "$state/$witness.status" 0 \
+        && fail "a re-read of the tab payload was presented on pass $i"
+      status_done_guard_holds "$state/$witness.status" "$line" \
+        || fail "the tab payload did not match its own witness"
+    done
+    if [ "$witness" = reminder ]; then
+      [ "$(inbox_records "$state" "$witness")" = 1 ] || fail "tab replays spent more than one reminder"
+    else
+      [ "$(inbox_records "$state" "$witness")" = 0 ] || fail "a superseded tab payload steered the worker"
+    fi
+    printf 'working: again\n' >> "$state/$witness.status"
+    status_span_has_actionable "$state/$witness.status" 0 \
+      && fail "the historical tab payload lost its witness"
+    printf '%s\nworking: again\n' "$line" >> "$state/$witness.status"
+    event=$(status_span_first_actionable "$state/$witness.status" 0) \
+      || fail "a new identical tab payload was swallowed"
+    [ "$event" = "$line" ] || fail "the presented payload lost bytes"
+  done
+  pass "witnesses preserve payload tabs and distinguish later identical occurrences"
+}
+
+test_live_hold_reads_are_bounded_and_skip_absent_witnesses() {
+  local dir state reader log line='done: bounded hold' endpoint
+  dir="$TMP_ROOT/bounded-hold"; state="$dir/state"; mkdir -p "$state"
+  reader="$dir/reader"; log="$dir/reads"
+  make_task "$state" t no-mistakes
+  perl -e 'print "working: old history\n" x 20000' > "$state/t.status"
+  printf '%s\n' "$line" >> "$state/t.status"
+  endpoint=$(wc -c < "$state/t.status" | tr -d '[:space:]')
+  status_done_guard_defer "$state/t.status" "$line" "$line" no-mistakes "$endpoint" \
+    || fail "the large-log occurrence was not held"
+  cat > "$reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "$2" "$3" >> "$FM_HOLD_READ_LOG"
+[ "$2" -gt 0 ] && [ "$3" -le 65536 ] || exit 1
+perl -e 'open my $f, "<", $ARGV[0] or exit 1; seek $f, $ARGV[1], 0; read $f, my $s, $ARGV[2]; print $s' "$@"
+SH
+  chmod +x "$reader"
+  FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_holds "$state/t.status" "$line" \
+    || fail "a live hold attempted to read the entire lifetime log"
+  [ -s "$log" ] || fail "the live hold did not exercise the bounded reader"
+  : > "$log"
+  FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_occurrence_held "$state/t.status" "$line" "$endpoint" \
+    || fail "the captured occurrence lost its witness"
+  [ ! -s "$log" ] || fail "a captured occurrence reread the status log"
+  make_task "$state" absent no-mistakes "done: PR $PR_URL checks green"
+  FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_holds "$state/absent.status" \
+    && fail "a task with no witness was held"
+  FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_superseded "$state/absent.status" "done: PR $PR_URL checks green" \
+    && fail "a task with no witness was superseded"
+  [ ! -s "$log" ] || fail "absent witnesses still caused status reads"
+  pass "captured and absent-witness checks avoid reads, and live holds read at most 64 KiB"
+}
+
 test_trailing_blanks_preserve_occurrence_witnesses() {
   local dir state witness event
   dir="$TMP_ROOT/trailing-blanks"; state="$dir/state"; mkdir -p "$state"
@@ -665,7 +729,7 @@ test_trailing_blanks_preserve_occurrence_witnesses() {
 }
 
 test_completion_resets_budget_without_erasing_history() {
-  local dir state witness event
+  local dir state witness event expected
   local FM_DONE_GUARD_REMINDER_MAX=1
   dir="$TMP_ROOT/completion-history"; state="$dir/state"; mkdir -p "$state"
   for witness in reminder supersession; do
@@ -692,7 +756,8 @@ test_completion_resets_budget_without_erasing_history() {
     status_span_first_actionable "$state/$witness.status" 0 >/dev/null
     status_done_guard_holds "$state/$witness.status" \
       || fail "completion did not reset the active reminder budget"
-    [ "$(inbox_records "$state" "$witness")" = 2 ] \
+    if [ "$witness" = supersession ]; then expected=1; else expected=2; fi
+    [ "$(inbox_records "$state" "$witness")" = "$expected" ] \
       || fail "the new occurrence did not receive a fresh reminder"
   done
   rm "$state/supersession.status"
@@ -1016,6 +1081,8 @@ test_guard_ignores_historical_done_lines
 test_a_first_sight_non_newest_linkless_done_is_not_swallowed
 test_historical_witnesses_cover_only_the_judged_occurrence
 test_identical_history_is_not_the_newest_occurrence
+test_witnesses_preserve_payload_tabs
+test_live_hold_reads_are_bounded_and_skip_absent_witnesses
 test_trailing_blanks_preserve_occurrence_witnesses
 test_completion_resets_budget_without_erasing_history
 test_a_historical_delivered_done_does_not_release_a_live_hold

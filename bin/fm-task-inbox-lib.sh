@@ -35,6 +35,7 @@
 #   schema=fm-task-inbox.v1
 #   at=<utc timestamp>
 #   delivery=fire-and-forget   present only when the re-ring ladder must ignore it
+#   binding=<opaque token>    optional key for retiring only matching instructions
 #   --
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
@@ -143,8 +144,8 @@ fm_task_inbox_lock_acquire() {  # <lock-path>
 
 # Write one record into the next sequence slot: temp-write, then atomic
 # rename. Prints the record path. Caller must hold .seq.lock.
-_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
-  local dir=$1 text=$2 delivery_mode=${3:-} seq tmp rec status=0
+_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode] [binding]
+  local dir=$1 text=$2 delivery_mode=${3:-} binding=${4:-} seq tmp rec status=0
   seq=$(fm_task_inbox_next_seq "$dir")
   rec="$dir/$seq.msg"
   tmp=$(mktemp "$dir/.staging.XXXXXX") || return 1
@@ -152,6 +153,7 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
     printf 'schema=%s\n' "$FM_TASK_INBOX_SCHEMA"
     printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     [ "$delivery_mode" != fire-and-forget ] || printf 'delivery=fire-and-forget\n'
+    [ -z "$binding" ] || printf 'binding=%s\n' "$binding"
     printf -- '--\n'
     printf '%s' "$text"
   } > "$tmp" && mv "$tmp" "$rec" || status=1
@@ -161,13 +163,14 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
 
 # Durably enqueue one steer: temp-write, then atomic rename into the next
 # sequence slot. Prints the record path. Fails without a partial record.
-fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock rec status=0
+fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode] [binding]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} binding=${5:-} dir lock rec status=0
+  case "$binding" in *[!a-zA-Z0-9._:-]*) return 1 ;; esac
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
-  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
+  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$binding") || status=1
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
@@ -184,8 +187,9 @@ fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
 # secondmate request embeds a per-request correlation token in its body. The
 # local plane keeps plain fm_task_inbox_write: its outcome is synchronous, so
 # a repeated identical local steer is a deliberate new instruction.
-fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock want have f rec='' status=0
+fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode] [binding]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} binding=${5:-} dir lock want have f rec='' status=0
+  case "$binding" in *[!a-zA-Z0-9._:-]*) return 1 ;; esac
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
@@ -202,6 +206,7 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
             *) continue ;;
           esac
         fi
+        [ "$(fm_task_inbox_binding "$f")" = "$binding" ] || continue
         if [ "$delivery_mode" = fire-and-forget ]; then
           fm_task_inbox_is_fire_and_forget "$f" || continue
         elif fm_task_inbox_is_fire_and_forget "$f"; then
@@ -230,11 +235,41 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
     status=1
   fi
   if [ "$status" -eq 0 ] && [ -z "$rec" ]; then
-    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
+    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$binding") || status=1
   fi
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
+}
+
+fm_task_inbox_binding() {
+  local line rec=$1
+  [ -f "$rec" ] || rec="${rec%/*}/handled/${rec##*/}"
+  [ -f "$rec" ] && [ ! -L "$rec" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      --) return 0 ;;
+      binding=*) printf '%s' "${line#binding=}"; return 0 ;;
+    esac
+  done < "$rec"
+}
+
+fm_task_inbox_retire_binding() {
+  local state=$1 task=$2 binding=$3 dir lock rec status=0
+  case "$binding" in ''|*[!a-zA-Z0-9._:-]*) return 1 ;; esac
+  dir=$(fm_task_inbox_dir "$state" "$task")
+  [ -d "$dir" ] || return 0
+  lock="$dir/.seq.lock"
+  fm_task_inbox_lock_acquire "$lock" || return 1
+  for rec in "$dir"/*.msg; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    [ "$(fm_task_inbox_binding "$rec")" = "$binding" ] || continue
+    if ! mkdir -p "$dir/handled" || ! mv "$rec" "$dir/handled/"; then
+      [ -f "$dir/handled/${rec##*/}" ] && [ ! -e "$rec" ] || status=1
+    fi
+  done
+  fm_lock_release "$lock"
+  return "$status"
 }
 
 # The exact enqueued text back out of a record.

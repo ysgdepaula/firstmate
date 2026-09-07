@@ -692,6 +692,41 @@ test_watcher_dead_pane_ignores_stale_busy_state() {
   pass "watcher: dead-pane recovery overrides stale busy state"
 }
 
+test_supersession_retires_only_its_bound_reminder() {
+  local dir state
+  dir=$(make_case supersession-binding); state="$dir/state"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    set -eu
+    . "$1/bin/fm-classify-lib.sh"
+    . "$1/bin/fm-task-inbox-lib.sh"
+    state=$2
+    line=$(printf "done: local tests pass\t")
+    printf "kind=ship\nmode=no-mistakes\n" > "$state/t.meta"
+    printf "%s\n" "$line" > "$state/t.status"
+    status_span_has_actionable "$state/t.status" 0 && exit 11
+    reminder=$(fm_task_inbox_oldest_unhandled "$state" t)
+    unrelated=$(fm_task_inbox_write "$state" t "keep this unrelated instruction")
+    endpoint=$(wc -c < "$state/t.status" | tr -d "[:space:]")
+    ident=$(_fm_open_decisions_file_ident "$state/t.status")
+    printf "working: after capture\n" >> "$state/t.status"
+    status_done_guard_supersede "$state/t.status" "$line" "$endpoint" "$ident"
+    status_done_guard_supersede "$state/t.status" "$line" "$endpoint" "$ident"
+    test ! -e "$reminder"
+    test -f "$state/t.inbox/handled/${reminder##*/}"
+    test "$(fm_task_inbox_body "$unrelated")" = "keep this unrelated instruction"
+    action=$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t)
+    test "$action" = "ring $unrelated"
+    mv "$unrelated" "$state/t.inbox/handled/"
+    test "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=0 fm_task_inbox_due_action "$state" t)" = quiet
+    printf "%s\n" "$line" >> "$state/t.status"
+    status_span_has_actionable "$state/t.status" 0 && exit 12
+    next=$(fm_task_inbox_oldest_unhandled "$state" t)
+    test "$next" != "$reminder"
+    test "$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t)" = "ring $next"
+  ' _ "$ROOT" "$state" || fail "supersession did not retire exactly the captured occurrence reminder"
+  pass "supersession retires its bound reminder while unrelated and later instructions remain deliverable"
+}
+
 test_write_is_durable_and_exact
 test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls
@@ -704,6 +739,7 @@ test_writer_retries_after_a_vanished_lock_collision
 test_ladder_writes_ignore_vanished_inbox
 test_fire_and_forget_records_never_enter_the_ladder
 test_ring_ladder_policy
+test_supersession_retires_only_its_bound_reminder
 test_watcher_rerings_idle_pane_quietly
 test_watcher_waits_on_busy_pane
 test_watcher_quiet_on_healthy_inbox

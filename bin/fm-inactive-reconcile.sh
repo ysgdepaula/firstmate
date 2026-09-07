@@ -480,7 +480,7 @@ report_child() { # <id>
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0 recorded_pr
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0 recorded_pr captured_endpoint='' captured_ident='' captured_size
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -498,6 +498,14 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
+  if [ -n "$last" ]; then
+    captured_size=$(_fm_status_file_size "$status") || return 0
+    captured_size=${captured_size//[[:space:]]/}
+    captured_ident=$(_fm_open_decisions_file_ident "$status") || return 0
+    status_snapshot_latest_event "$status" "$captured_size" "$captured_ident" || return 0
+    last=$FM_STATUS_SNAPSHOT_EVENT_LINE
+    captured_endpoint=$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT
+  fi
   # A child that states its own terminal outcome is the ledger path's to deliver,
   # so this path stands down. The test is the shared predicate its ledger sibling
   # asks, for the same reason: a `done:` with no pull-request link on a
@@ -545,7 +553,7 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct "upstream" "$pr" "$(sha256_text "$last")" || return 1
   # This outcome answers the prose line, so the guard stops steering the worker
   # about it while that line stays the newest one.
-  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" || true
+  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" "$captured_endpoint" "$captured_ident" || true
   [ -n "$RECORD_PENDING" ] || return 0
   if [ -n "$self" ]; then
     if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then

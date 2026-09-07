@@ -505,6 +505,73 @@ test_backstop_output_is_bounded() {
   pass "the outcome backstop caps each item and its total task output deterministically"
 }
 
+test_backstop_uses_the_captured_held_occurrence() {
+  local dir state verdict out reader identity trigger appended body
+  for verdict in held spent; do
+    dir=$(make_case "captured-$verdict"); state="$dir/state"; out="$dir/drain.out"
+    reader="$dir/span-reader"; identity="$dir/identity-reader"
+    trigger="$dir/captured"; appended="$dir/appended"
+    printf 'kind=ship\nmode=no-mistakes\n' > "$state/t.meta"
+    perl -e 'print "working: older event\n" x 8000; print "done: captured local tests pass\n"' > "$state/t.status"
+    FM_STATE_OVERRIDE="$state" FM_DONE_GUARD_REMINDER_MAX=1 bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      status_done_guard_defer "$2/t.status" "done: captured local tests pass"
+    ' _ "$ROOT" "$state" || fail "the setup could not hold its occurrence"
+    if [ "$verdict" = spent ]; then
+      printf 'working: retry\ndone: captured local tests pass\n' >> "$state/t.status"
+    fi
+    cat > "$reader" <<'SH'
+#!/usr/bin/env bash
+perl -e 'open my $f, "<", $ARGV[0] or exit 1; seek $f, $ARGV[1], 0; read $f, my $s, $ARGV[2]; print $s' "$@" || exit 1
+if [ "$1" = "$FM_CAPTURE_STATUS" ] && [ "$2" -gt 0 ] && [ "$3" = 65536 ]; then
+  : > "$FM_CAPTURE_TRIGGER"
+fi
+SH
+    cat > "$identity" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = "$FM_CAPTURE_STATUS" ] && [ -f "$FM_CAPTURE_TRIGGER" ] && [ ! -f "$FM_CAPTURE_APPENDED" ]; then
+  printf 'working: appended after capture\n' >> "$1"
+  : > "$FM_CAPTURE_APPENDED"
+fi
+printf 'capture-test-identity'
+SH
+    chmod +x "$reader" "$identity"
+    FM_STATE_OVERRIDE="$state" FM_STATUS_SPAN_READER="$reader" FM_STATUS_IDENTITY_READER="$identity" \
+      FM_CAPTURE_STATUS="$state/t.status" FM_CAPTURE_TRIGGER="$trigger" FM_CAPTURE_APPENDED="$appended" \
+      "$DRAIN" > "$out" 2>/dev/null || fail "the capture-race drain failed"
+    [ -f "$appended" ] || fail "the post-capture append never occurred"
+    [ "$(tail -1 "$state/t.status")" = 'working: appended after capture' ] \
+      || fail "the live state did not diverge from the captured done"
+    body=$(backstop_body "$out")
+    if [ "$verdict" = held ]; then
+      assert_not_contains "$body" 'done: captured local tests pass' "the held captured occurrence was published"
+    else
+      assert_contains "$body" 'done: captured local tests pass' "the exhausted captured occurrence was suppressed"
+    fi
+  done
+  pass "backstop suppression uses the captured occurrence even after a live working append"
+}
+
+test_backstop_preserves_crlf_occurrence_bytes() {
+  local dir state out body
+  dir=$(make_case crlf-witness); state="$dir/state"; out="$dir/drain.out"
+  printf 'kind=ship\nmode=no-mistakes\n' > "$state/held.meta"
+  printf 'done: held CRLF completion\r\n' > "$state/held.status"
+  printf 'kind=ship\nmode=no-mistakes\n' > "$state/spent.meta"
+  printf 'done: exhausted CRLF completion\r\n' > "$state/spent.status"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_span_has_actionable "$2/held.status" 0 && exit 1
+    status_done_guard_holds "$2/held.status" || exit 1
+    FM_DONE_GUARD_REMINDER_MAX=0 status_span_has_actionable "$2/spent.status" 0 || exit 1
+  ' _ "$ROOT" "$state" || fail "the CRLF setup did not establish divergent holds"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2>/dev/null || fail "the CRLF drain failed"
+  body=$(backstop_body "$out")
+  assert_not_contains "$body" 'held CRLF completion' "CRLF normalization defeated the witness"
+  assert_contains "$body" 'exhausted CRLF completion' "the exhausted CRLF completion was suppressed"
+  pass "CRLF payloads keep their exact witness bytes until presentation"
+}
+
 test_uncovered_keyless_captain_events_surface_on_the_next_main_drain
 test_newer_task_outcome_and_routine_latest_events_stay_silent
 test_older_or_other_task_outcome_cannot_hide_a_new_captain_event
@@ -523,3 +590,5 @@ test_held_lock_mode_accepts_a_lock_owner_descendant
 test_index_self_heal_runs_under_the_outcome_lock
 test_overbound_routine_event_stays_silent
 test_backstop_output_is_bounded
+test_backstop_uses_the_captured_held_occurrence
+test_backstop_preserves_crlf_occurrence_bytes

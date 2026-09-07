@@ -931,7 +931,7 @@ status_snapshot_latest_event() {  # <status-file> <captured-endpoint> <captured-
     my ($latest, $end);
     while (defined(my $line = <$file>)) {
       next unless $line =~ /[^\s]/;
-      $line =~ s/[\r\n]+\z//;
+      $line =~ s/\n\z//;
       ($latest, $end) = ($line, $start + tell($file));
     }
     exit 1 unless defined $end;
@@ -1842,13 +1842,18 @@ _fm_done_guard_path() {  # <status-file>
 # behind in the earlier two-field shape reads that way too, because its second
 # field is a status line rather than a length.
 _fm_done_guard_read() {  # <status-file> [endpoint]
-  local guard count='' pos='' line=''
+  local guard count='' pos='' line='' record rest
   FM_DONE_GUARD_COUNT=0
   FM_DONE_GUARD_POSITION=''
   FM_DONE_GUARD_LINE=''
   guard=$(_fm_done_guard_path "$1")
   [ -f "$guard" ] && [ -r "$guard" ] && [ ! -L "$guard" ] || return 0
-  while IFS=$(printf '\t') read -r count pos line; do
+  while IFS= read -r record; do
+    case "$record" in *$'\t'*$'\t'*) ;; *) continue ;; esac
+    count=${record%%$'\t'*}
+    rest=${record#*$'\t'}
+    pos=${rest%%$'\t'*}
+    line=${rest#*$'\t'}
     case "$count" in ''|*[!0-9]*) continue ;; esac
     case "$pos" in ''|*[!0-9]*) continue ;; esac
     [ "$#" -lt 2 ] || [ "$pos" = "$2" ] || continue
@@ -1873,20 +1878,50 @@ _fm_status_line_records() {
 # Fails rather than guessing when it cannot be read, and every caller reads that
 # failure as "no provable hold", which presents the line instead of withholding it.
 _fm_done_guard_position() {  # <status-file> [expected-line]
-  local size content record line newest='' pos=''
+  _fm_done_guard_latest "$1" || return 1
+  [ "$#" -lt 2 ] || [ "$FM_STATUS_SNAPSHOT_EVENT_LINE" = "$2" ] || return 1
+  printf '%s' "$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT"
+}
+
+_fm_done_guard_latest() {
+  local size ident
   size=$(_fm_status_file_size "$1") || return 1
   size=${size//[[:space:]]/}
-  case "$size" in ''|*[!0-9]*) return 1 ;; esac
-  content=$(_fm_status_read_span "$1" 0 "$size") || return 1
-  while IFS= read -r record; do
-    line=${record#*$'\t'}
-    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
-    pos=${record%%$'\t'*}
-    newest=$line
-  done < <(printf '%s' "$content" | _fm_status_line_records 0 "$size")
-  [ -n "$pos" ] || return 1
-  [ "$#" -lt 2 ] || [ "$newest" = "$2" ] || return 1
-  printf '%s' "$pos"
+  ident=$(_fm_open_decisions_file_ident "$1") || return 1
+  status_snapshot_latest_event "$1" "$size" "$ident"
+}
+
+_fm_done_guard_has_witnesses() {
+  local path
+  for path in "$(_fm_done_guard_path "$1")" "$(_fm_done_guard_superseded_path "$1")"; do
+    [ -f "$path" ] && [ -r "$path" ] && [ ! -L "$path" ] && return 0
+  done
+  return 1
+}
+
+_fm_done_guard_binding() {
+  local ident=${4:-}
+  [ -n "$ident" ] || ident=$(_fm_open_decisions_file_ident "$1") || return 1
+  printf '%s\0%s\0%s' "$ident" "$2" "$3" | perl -MDigest::SHA=sha256_hex -e '
+    local $/;
+    print "done-", sha256_hex(<STDIN>);
+  '
+}
+
+_fm_done_guard_inbox() {
+  local state=$1 action=$2
+  shift 2
+  if command -v "$action" >/dev/null 2>&1; then
+    "$action" "$state" "$@"
+  else
+    # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+    FM_STATE_OVERRIDE=$state "${BASH:-bash}" -c '
+      . "$1/fm-task-inbox-lib.sh" 2>/dev/null || exit 1
+      action=$2
+      shift 2
+      "$action" "$@"
+    ' _ "$_FM_CLASSIFY_LIB_DIR" "$action" "$state" "$@"
+  fi
 }
 
 # 0 when this line is the status log's newest line. The guard is a verdict about
@@ -1926,14 +1961,19 @@ _fm_done_guard_superseded_path() {  # <status-file>
 # Record that this line has been superseded by a published run-step outcome, so
 # the guard stops steering the worker about it. Written only by the path that
 # publishes that outcome (bin/fm-inactive-reconcile.sh owns when), never by
-# classification - this library stays the owner of the marker's shape alone.
-status_done_guard_supersede() {  # <status-file> <status-line>
-  local f=$1 line=$2 pos ident
+# classification; the guard owns the marker and retires its bound pending reminder.
+status_done_guard_supersede() {  # <status-file> <status-line> [endpoint] [identity]
+  local f=$1 line=$2 pos=${3:-} ident=${4:-} binding state id
   [ -n "$line" ] || return 1
-  pos=$(_fm_done_guard_position "$f" "$line") || return 1
-  ident=$(_fm_open_decisions_file_ident "$f") || return 1
-  status_done_guard_superseded "$f" "$line" && return 0
-  printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" >> "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+  [ -n "$pos" ] || pos=$(_fm_done_guard_position "$f" "$line") || return 1
+  [ -n "$ident" ] || ident=$(_fm_open_decisions_file_ident "$f") || return 1
+  _fm_done_guard_superseded_read "$f" "$pos" "$ident"
+  if [ "$FM_DONE_SUPERSEDED_LINE" != "$line" ] || [ "$FM_DONE_SUPERSEDED_POSITION" != "$pos" ]; then
+    printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" >> "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+  fi
+  binding=$(_fm_done_guard_binding "$f" "$pos" "$line" "$ident") || return 1
+  state=${f%/*}; id=${f##*/}; id=${id%.status}
+  _fm_done_guard_inbox "$state" fm_task_inbox_retire_binding "$id" "$binding"
 }
 
 # Read the marker into FM_DONE_SUPERSEDED_POSITION / _LINE, leaving both empty
@@ -1944,14 +1984,19 @@ status_done_guard_supersede() {  # <status-file> <status-line>
 # successor: a relaunch writes a new status log, so the recorded identity no
 # longer matches and the marker reads as absent - the teardown sweep is the
 # second line of defence, not the only one.
-_fm_done_guard_superseded_read() {  # <status-file> [endpoint]
-  local f=$1 marker pos='' ident='' line='' current
+_fm_done_guard_superseded_read() {  # <status-file> [endpoint] [captured-identity]
+  local f=$1 marker pos='' ident='' line='' current=${3:-} record rest
   FM_DONE_SUPERSEDED_POSITION=''
   FM_DONE_SUPERSEDED_LINE=''
   marker=$(_fm_done_guard_superseded_path "$f")
   [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 0
-  current=$(_fm_open_decisions_file_ident "$f") || return 0
-  while IFS=$(printf '\t') read -r pos ident line; do
+  [ -n "$current" ] || current=$(_fm_open_decisions_file_ident "$f") || return 0
+  while IFS= read -r record; do
+    case "$record" in *$'\t'*$'\t'*) ;; *) continue ;; esac
+    pos=${record%%$'\t'*}
+    rest=${record#*$'\t'}
+    ident=${rest%%$'\t'*}
+    line=${rest#*$'\t'}
     case "$pos" in ''|*[!0-9]*) continue ;; esac
     [ -n "$ident" ] && [ -n "$line" ] || continue
     [ "$ident" = "$current" ] || continue
@@ -1965,11 +2010,13 @@ _fm_done_guard_superseded_read() {  # <status-file> [endpoint]
 # already superseded. A pure read; an absent, unreadable, or malformed marker
 # reads as no supersession, which steers the worker rather than silently
 # absorbing a line nothing has answered.
-status_done_guard_superseded() {  # <status-file> <status-line>
-  local f=$1 line=$2 pos
+status_done_guard_superseded() {  # <status-file> <status-line> [endpoint] [captured-identity]
+  local f=$1 line=$2 pos=${3:-} marker
   [ -n "$line" ] || return 1
-  pos=$(_fm_done_guard_position "$f" "$line") || return 1
-  _fm_done_guard_superseded_read "$f" "$pos"
+  marker=$(_fm_done_guard_superseded_path "$f")
+  [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 1
+  [ -n "$pos" ] || pos=$(_fm_done_guard_position "$f" "$line") || return 1
+  _fm_done_guard_superseded_read "$f" "$pos" "${4:-}"
   [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && [ "$FM_DONE_SUPERSEDED_POSITION" = "$pos" ]
 }
 
@@ -1979,7 +2026,7 @@ status_done_guard_occurrence_held() {
   _fm_done_guard_read "$f" "$endpoint"
   [ "$FM_DONE_GUARD_COUNT" -gt 0 ] && [ "$FM_DONE_GUARD_LINE" = "$line" ] \
     && [ "$FM_DONE_GUARD_POSITION" = "$endpoint" ] && return 0
-  _fm_done_guard_superseded_read "$f" "$endpoint"
+  _fm_done_guard_superseded_read "$f" "$endpoint" "${4:-}"
   [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && [ "$FM_DONE_SUPERSEDED_POSITION" = "$endpoint" ]
 }
 
@@ -2003,9 +2050,9 @@ status_done_guard_occurrence_held() {
 # only a log's LAST non-blank line and then commits at that line's endpoint
 # (bin/fm-wake-drain.sh owns that), so its cursor reaching the log's end proves
 # the last line was presented and says nothing about any line before it.
-status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> <endpoint> [delivery-mode]
+status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> <endpoint> [delivery-mode] [captured-identity]
   local f=$1 line=$2 newest=$3 endpoint=$4
-  status_done_guard_occurrence_held "$f" "$line" "$endpoint" && return 0
+  status_done_guard_occurrence_held "$f" "$line" "$endpoint" "${6:-}" && return 0
   [ "$(status_line_verb "$newest")" = 'done' ] || return 1
   if [ "$#" -ge 5 ]; then
     status_done_contract_unmet "$f" "$newest" "$5" && return 1
@@ -2019,12 +2066,12 @@ status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-lin
 # teardown. Scoped to the newest line for the reason above: a replayed historical done that carried its link must not
 # release a hold the task's current line still earns.
 status_done_guard_clear() {  # <status-file> <status-line> [newest-line] [endpoint]
-  local pos
-  status_line_is_newest "$@" || return 0
-  pos=$(_fm_done_guard_position "$1" "$2") || return 1
-  [ "$#" -lt 4 ] || [ "$pos" = "$4" ] || return 1
+  local pos=${4:-}
   _fm_done_guard_read "$1"
   [ "$FM_DONE_GUARD_COUNT" -gt 0 ] || return 0
+  status_line_is_newest "$@" || return 0
+  [ -n "$pos" ] || pos=$(_fm_done_guard_position "$1" "$2") || return 1
+  [ "$FM_DONE_GUARD_POSITION" -le "$pos" ] || return 0
   printf '0\t%s\t%s\n' "$pos" "$2" >> "$(_fm_done_guard_path "$1")"
 }
 
@@ -2043,11 +2090,10 @@ status_done_guard_clear() {  # <status-file> <status-line> [newest-line] [endpoi
 # behind it may not exist at all, when the outcome was published before the guard
 # ever spent a reminder.
 status_done_guard_holds() {  # <status-file> [<status-line>]
-  local pos newest
-  newest=$(last_status_line "$1")
-  [ "$#" -lt 2 ] || [ "$2" = "$newest" ] || return 1
-  pos=$(_fm_done_guard_position "$1" "$newest") || return 1
-  status_done_guard_occurrence_held "$1" "$newest" "$pos"
+  _fm_done_guard_has_witnesses "$1" || return 1
+  _fm_done_guard_latest "$1" || return 1
+  [ "$#" -lt 2 ] || [ "$2" = "$FM_STATUS_SNAPSHOT_EVENT_LINE" ] || return 1
+  status_done_guard_occurrence_held "$1" "$FM_STATUS_SNAPSHOT_EVENT_LINE" "$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT"
 }
 
 # 0 when the guard is holding this task's newest line AND still steering its
@@ -2058,8 +2104,9 @@ status_done_guard_holds() {  # <status-file> [<status-line>]
 # and whose absorption the steering inbox's re-ring ladder is what bounds, must
 # ask this one rather than claim a steer that has ended.
 status_done_guard_steering() {  # <status-file> [<status-line>]
-  status_done_guard_superseded "$1" "$(last_status_line "$1")" && return 1
-  status_done_guard_holds "$@"
+  status_done_guard_holds "$@" || return 1
+  status_done_guard_superseded "$1" "$FM_STATUS_SNAPSHOT_EVENT_LINE" "$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT" && return 1
+  return 0
 }
 
 # The reminder body: the worker's own line, its recorded contract, and the exact
@@ -2091,8 +2138,8 @@ EOF
 # be presented to firstmate instead - a spent budget, an inbox that could not be
 # written, or a budget that could not be persisted.
 # NOT a pure read: this writes a steering-inbox record and the budget above.
-status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delivery-mode] [endpoint]
-  local f=$1 line=$2 state id guard mode text max pos
+status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delivery-mode] [endpoint] [captured-identity]
+  local f=$1 line=$2 state id guard mode text max pos=${5:-} binding
   # Current state only: a historical done replayed by a whole-log re-read is not
   # something to steer a worker about (status_line_is_newest owns why). Both this
   # test and the delivery-mode read below stand on their own for a caller that
@@ -2102,11 +2149,10 @@ status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delive
   else
     status_line_is_newest "$f" "$line" || return 1
   fi
-  pos=$(_fm_done_guard_position "$f" "$line") || return 1
-  [ "$#" -lt 5 ] || [ "$pos" = "$5" ] || return 1
+  [ -n "$pos" ] || pos=$(_fm_done_guard_position "$f" "$line") || return 1
   # Already answered by a published run-step outcome: the worker's pull request
   # is green and reported, so this sentence has nothing left to steer about.
-  status_done_guard_superseded "$f" "$line" && return 0
+  status_done_guard_superseded "$f" "$line" "$pos" "${6:-}" && return 0
   state=$(dirname "$f")
   id=$(basename "$f")
   id=${id%.status}
@@ -2122,20 +2168,11 @@ status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delive
   [ "$FM_DONE_GUARD_COUNT" -lt "$max" ] || return 1
   if [ "$#" -ge 4 ]; then mode=$4; else mode=$(status_task_delivery_mode "$f"); fi
   text=$(_fm_done_guard_reminder_text "$id" "$mode" "$line") || return 1
-  if command -v fm_task_inbox_write >/dev/null 2>&1; then
-    fm_task_inbox_write "$state" "$id" "$text" > /dev/null || return 1
-  else
-    # A consumer that never loads the steering-inbox library still has to be able
-    # to steer, so it is loaded here instead - in a separate shell pinned to THIS
-    # task's state directory, because that library's own dependencies resolve a
-    # state root at load time and must not reach for another home's on behalf of
-    # a caller that never declared one. A prefix assignment on an external command
-    # keeps that pin out of the calling shell entirely.
-    # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
-    FM_STATE_OVERRIDE=$state "${BASH:-bash}" -c '
-      . "$1/fm-task-inbox-lib.sh" 2>/dev/null || exit 1
-      fm_task_inbox_write "$2" "$3" "$4" > /dev/null
-    ' _ "$_FM_CLASSIFY_LIB_DIR" "$state" "$id" "$text" || return 1
+  binding=$(_fm_done_guard_binding "$f" "$pos" "$line" "${6:-}") || return 1
+  _fm_done_guard_inbox "$state" fm_task_inbox_write "$id" "$text" '' "$binding" >/dev/null || return 1
+  if status_done_guard_superseded "$f" "$line" "$pos" "${6:-}"; then
+    _fm_done_guard_inbox "$state" fm_task_inbox_retire_binding "$id" "$binding" || return 1
+    return 0
   fi
   guard=$(_fm_done_guard_path "$f")
   printf '%s\t%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$pos" "$line" >> "$guard" 2>/dev/null || return 1
@@ -2239,18 +2276,18 @@ EOF
           # carrying none must not pay for either.
           if [ "$guard_read" -eq 0 ]; then
             guard_last_line=$(awk '/[^[:space:]]/ { last=NR } END { print last+0 }' "$chunk_file")
-            guard_newest=$(last_status_line "$f")
+            guard_newest=$(last_status_line "$chunk_file")
             guard_mode=$(status_task_delivery_mode "$f")
             guard_read=1
           fi
           if [ "$line_number" -eq "$guard_last_line" ] && status_line_is_newest "$f" "$line" "$guard_newest"; then
             if status_done_contract_unmet "$f" "$line" "$guard_mode"; then
-              status_done_guard_defer "$f" "$line" "$guard_newest" "$guard_mode" "$endpoint" && continue
+              status_done_guard_defer "$f" "$line" "$guard_newest" "$guard_mode" "$endpoint" "$ident" && continue
             else
               status_done_guard_clear "$f" "$line" "$guard_newest" "$endpoint"
             fi
           elif status_done_contract_unmet "$f" "$line" "$guard_mode" \
-            && status_done_guard_line_was_judged "$f" "$line" "$guard_newest" "$endpoint" "$guard_mode"; then
+            && status_done_guard_line_was_judged "$f" "$line" "$guard_newest" "$endpoint" "$guard_mode" "$ident"; then
             # A linkless done the task has already moved past, and PROVABLY judged
             # when it was the current line - withheld and steered, superseded, or
             # handed to firstmate once the budget was spent. Replaying it now can
