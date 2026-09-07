@@ -1832,6 +1832,7 @@ EOF
 
 FM_WAKE_EVENT_LINE=
 FM_WAKE_UNREAD_LINES=
+FM_WAKE_UNREAD_RECORDS=
 fm_wake_status_cursor_offset() {  # <validated-status-path> -> already-presented byte offset
   local path=$1 offset
   command -v status_presentation_cursor_offset >/dev/null 2>&1 || return 1
@@ -1849,6 +1850,8 @@ fm_wake_unread_events() {  # <validated-status-path> <unused-tail-byte-cap> <min
   local LC_ALL=C
   FM_WAKE_EVENT_LINE=
   FM_WAKE_UNREAD_LINES=
+  FM_WAKE_UNREAD_RECORDS=
+  _fm_wake_require_classify || return 1
   case "$min_offset" in ''|*[!0-9]*) min_offset=0 ;; esac
   result=$(perl -MFcntl=:DEFAULT -e '
     my ($path, $start, $end) = @ARGV;
@@ -1876,14 +1879,9 @@ fm_wake_unread_events() {  # <validated-status-path> <unused-tail-byte-cap> <min
   [ -n "$chunk" ] || return 1
   [ "$min_offset" -lt "$size" ] || return 1
   chunk_start=$min_offset
-  FM_WAKE_UNREAD_LINES=$(printf '%s' "$chunk" | LC_ALL=C awk -v start="$chunk_start" -v min="$min_offset" '
-    BEGIN { pos = start + 0 }
-    {
-      line_start = pos
-      pos += length($0) + 1
-      if ($0 ~ /[^[:space:]]/ && line_start >= min) print $0
-    }
-  ') || return 1
+  FM_WAKE_UNREAD_RECORDS=$(printf '%s' "$chunk" | _fm_status_line_records "$chunk_start" "$size" \
+    | LC_ALL=C awk 'substr($0, index($0, "\t")+1) ~ /[^[:space:]]/') || return 1
+  FM_WAKE_UNREAD_LINES=$(printf '%s\n' "$FM_WAKE_UNREAD_RECORDS" | cut -f2-) || return 1
   [ -n "$FM_WAKE_UNREAD_LINES" ] || return 1
   FM_WAKE_EVENT_LINE=$(printf '%s\n' "$FM_WAKE_UNREAD_LINES" | tail -1)
   FM_WAKE_EVENT_LINE=$(printf '%s' "$FM_WAKE_EVENT_LINE" | LC_ALL=C tr '\t\r' '  ')
@@ -1897,7 +1895,7 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
 # raw queue consumption and released the append lock.
 fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
   local rows=$1 snapshot=${2:-} manifest status_key mode path prefix line task endpoint
-  local snapshot_task snapshot_endpoint _snapshot_ident offset last_event event_line
+  local snapshot_task snapshot_endpoint _snapshot_ident offset last_event event_line event_record event_endpoint
   local LC_ALL=C
 
   manifest=$(fm_wake_annotation_manifest "$rows" | awk -F '\t' '
@@ -1960,8 +1958,11 @@ EOF
       continue
     fi
     last_event=$FM_WAKE_EVENT_LINE
-    while IFS= read -r event_line || [ -n "$event_line" ]; do
+    while IFS= read -r event_record || [ -n "$event_record" ]; do
+      event_endpoint=${event_record%%$'\t'*}
+      event_line=${event_record#*$'\t'}
       [ -n "$event_line" ] || continue
+      status_done_guard_occurrence_held "$path" "$event_line" "$event_endpoint" && continue
       event_line=$(printf '%s' "$event_line" | LC_ALL=C tr '\t\r' '  ')
       prefix="wake annotation: latest wake-EVENT observed at drain, not current state"
       if [ "$event_line" != "$last_event" ]; then
@@ -1973,7 +1974,7 @@ EOF
       line="$prefix: $status_key: $event_line"
       printf '%s\n' "$line" || return 1
     done <<EOF
-$FM_WAKE_UNREAD_LINES
+$FM_WAKE_UNREAD_RECORDS
 EOF
   done <<EOF
 $manifest

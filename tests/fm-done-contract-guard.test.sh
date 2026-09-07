@@ -331,7 +331,7 @@ test_a_real_done_releases_a_held_task() {
     *"$PR_URL"*) ;;
     *) fail "the corrected done was not the presented event: got '$event'" ;;
   esac
-  [ -e "$state/.t.done-guard" ] && fail "the guard was not released by the corrected done"
+  status_done_guard_holds "$state/t.status" && fail "the guard was not released by the corrected done"
   pass "the worker's corrected done releases the hold and is presented"
 }
 
@@ -630,6 +630,83 @@ test_identical_history_is_not_the_newest_occurrence() {
   pass "identical history is presented while only the newest occurrence is steered"
 }
 
+test_trailing_blanks_preserve_occurrence_witnesses() {
+  local dir state witness event
+  dir="$TMP_ROOT/trailing-blanks"; state="$dir/state"; mkdir -p "$state"
+  for witness in reminder supersession; do
+    make_task "$state" "$witness" no-mistakes 'working: préparation' 'done: tests validés' '' '  '
+    if [ "$witness" = supersession ]; then
+      status_done_guard_supersede "$state/$witness.status" 'done: tests validés' \
+        || fail "the done with trailing blanks could not be superseded"
+    fi
+    status_span_has_actionable "$state/$witness.status" 0 \
+      && fail "the done with trailing blanks was presented"
+    status_done_guard_holds "$state/$witness.status" \
+      || fail "the $witness did not hold its occurrence"
+    printf '\n' >> "$state/$witness.status"
+    status_done_guard_holds "$state/$witness.status" \
+      || fail "an extra blank line invalidated the $witness hold"
+    printf 'working: continuing\n' >> "$state/$witness.status"
+    status_span_has_actionable "$state/$witness.status" 0 \
+      && fail "trailing blanks invalidated the historical $witness witness"
+    printf 'done: tests validés\nworking: again\n' >> "$state/$witness.status"
+    event=$(status_span_first_actionable "$state/$witness.status" 0) \
+      || fail "the $witness swallowed an unseen identical occurrence"
+    [ "$event" = 'done: tests validés' ] \
+      || fail "the $witness did not present exactly the unseen occurrence: $event"
+  done
+  make_task "$state" unterminated no-mistakes
+  printf 'done: no final newline' > "$state/unterminated.status"
+  status_span_has_actionable "$state/unterminated.status" 0 \
+    && fail "an unterminated done was presented instead of steered"
+  status_done_guard_holds "$state/unterminated.status" \
+    || fail "an unterminated occurrence did not retain its hold"
+  pass "writers and readers agree on occurrence endpoints despite trailing blanks"
+}
+
+test_completion_resets_budget_without_erasing_history() {
+  local dir state witness event
+  local FM_DONE_GUARD_REMINDER_MAX=1
+  dir="$TMP_ROOT/completion-history"; state="$dir/state"; mkdir -p "$state"
+  for witness in reminder supersession; do
+    make_task "$state" "$witness" no-mistakes 'done: local tests pass' ''
+    status_span_has_actionable "$state/$witness.status" 0 \
+      && fail "the original linkless done was not held"
+    if [ "$witness" = supersession ]; then
+      status_done_guard_supersede "$state/$witness.status" 'done: local tests pass' \
+        || fail "the held occurrence could not be superseded"
+    fi
+    printf 'done: PR %s checks green\n' "$PR_URL" >> "$state/$witness.status"
+    event=$(status_span_first_actionable "$state/$witness.status" 0) \
+      || fail "the valid completion was not presented"
+    [ "$event" = "done: PR $PR_URL checks green" ] \
+      || fail "the valid completion exposed the old linkless done: $event"
+    status_done_guard_holds "$state/$witness.status" \
+      && fail "a valid completion retained an active hold"
+    printf 'needs-decision: choose the follow-up\n' >> "$state/$witness.status"
+    event=$(status_span_first_actionable "$state/$witness.status" 0) \
+      || fail "the later decision was not presented"
+    assert_contains "$event" 'needs-decision: choose the follow-up' "the decision disappeared"
+    assert_not_contains "$event" 'done: local tests pass' "completion erased the $witness history"
+    printf 'done: local tests pass\n' >> "$state/$witness.status"
+    status_span_first_actionable "$state/$witness.status" 0 >/dev/null
+    status_done_guard_holds "$state/$witness.status" \
+      || fail "completion did not reset the active reminder budget"
+    [ "$(inbox_records "$state" "$witness")" = 2 ] \
+      || fail "the new occurrence did not receive a fresh reminder"
+  done
+  rm "$state/supersession.status"
+  status_retire_presentation_task "$state" supersession \
+    || fail "the marker-only teardown retry failed"
+  [ ! -e "$state/.supersession.done-guard" ] && [ ! -e "$state/.supersession.done-superseded" ] \
+    || fail "teardown retained occurrence evidence after retiring the task"
+  make_task "$state" supersession no-mistakes 'done: local tests pass' 'working: new task'
+  event=$(status_span_first_actionable "$state/supersession.status" 0) \
+    || fail "retired evidence suppressed a reused task's first occurrence"
+  [ "$event" = 'done: local tests pass' ] || fail "the new task's event changed: $event"
+  pass "completion resets only the active budget and teardown retires occurrence evidence"
+}
+
 test_a_historical_delivered_done_does_not_release_a_live_hold() {
   local dir state
   dir="$TMP_ROOT/historical-clear"; state="$dir/state"; mkdir -p "$state"
@@ -854,6 +931,50 @@ test_watcher_absorbs_a_withheld_done() {
   pass "the watcher absorbs a withheld done and steers the worker instead of waking firstmate"
 }
 
+test_mixed_watcher_batch_filters_only_held_occurrences() {
+  local dir state fakebin out drain_out pid verdict
+  local FM_DONE_GUARD_REMINDER_MAX=1
+  export FM_DONE_GUARD_REMINDER_MAX
+  for verdict in held spent history; do
+    dir=$(make_case "mixed-$verdict"); state="$dir/state"; fakebin="$dir/fakebin"
+    out="$dir/watch.out"; drain_out="$dir/drain.out"
+    make_task "$state" a no-mistakes 'working: implementing'
+    make_task "$state" b local-only 'working: preparing'
+    if [ "$verdict" = spent ]; then
+      printf 'done: earlier attempt\n' >> "$state/a.status"
+      status_span_has_actionable "$state/a.status" 0 \
+        && fail "the setup did not spend a reminder"
+      [ "$(inbox_records "$state" a)" = 1 ] || fail "the setup did not steer task a"
+    fi
+    prime_status_seen "$state" "$state/a.status"
+    prime_status_seen "$state" "$state/b.status"
+    printf 'done: mixed batch local tests pass\n\n' >> "$state/a.status"
+    printf 'blocked: another task needs help\n' >> "$state/b.status"
+    export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    wait_for_exit "$pid" 300 || fail "the mixed batch failed to wake firstmate"
+    if [ "$verdict" = history ]; then
+      status_done_guard_holds "$state/a.status" || fail "the original occurrence was never held"
+      printf 'working: continuing\ndone: mixed batch local tests pass\nworking: again\n' >> "$state/a.status"
+    fi
+    FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null \
+      || fail "the mixed batch drain failed"
+    assert_contains "$(cat "$drain_out")" 'blocked: another task needs help' "the other task was not presented"
+    if [ "$verdict" = held ]; then
+      status_done_guard_holds "$state/a.status" || fail "task a was never held"
+      assert_not_contains "$(cat "$drain_out")" 'done: mixed batch local tests pass' "the held occurrence leaked through annotations"
+    elif [ "$verdict" = history ]; then
+      [ "$(grep -c 'done: mixed batch local tests pass' "$drain_out")" = 1 ] \
+        || fail "annotations did not distinguish held history from the unseen identical occurrence"
+    else
+      status_done_guard_holds "$state/a.status" && fail "the spent-budget occurrence was still held"
+      assert_contains "$(cat "$drain_out")" 'done: mixed batch local tests pass' "the spent-budget occurrence was hidden"
+    fi
+  done
+  pass "mixed watcher batches present other tasks and exhausted dones while hiding held occurrences"
+}
+
 test_watcher_still_surfaces_a_real_done() {
   local dir state fakebin out drain_out pid
   dir=$(make_case watcher-real-done); state="$dir/state"; fakebin="$dir/fakebin"
@@ -895,10 +1016,13 @@ test_guard_ignores_historical_done_lines
 test_a_first_sight_non_newest_linkless_done_is_not_swallowed
 test_historical_witnesses_cover_only_the_judged_occurrence
 test_identical_history_is_not_the_newest_occurrence
+test_trailing_blanks_preserve_occurrence_witnesses
+test_completion_resets_budget_without_erasing_history
 test_a_historical_delivered_done_does_not_release_a_live_hold
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one
 test_a_done_the_backstop_jumped_past_is_not_swallowed
 test_watcher_absorbs_a_withheld_done
 test_stale_pane_behind_a_withheld_done_is_absorbed
 test_stale_pane_behind_a_real_done_still_surfaces
+test_mixed_watcher_batch_filters_only_held_occurrences
 test_watcher_still_surfaces_a_real_done

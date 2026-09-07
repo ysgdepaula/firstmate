@@ -15,3 +15,5 @@ When this session owns supervision and away mode is not active:
 
 OpenCode's persistent TUI plugin runtime is the wake mechanism.
 The plugin applies in the main primary checkout and a secondmate's own home, and stays silent only in child crewmate and scout worktrees.
+
+Mixed-signal digests and drain annotations follow the shared occurrence-based done guard in `bin/fm-classify-lib.sh`.

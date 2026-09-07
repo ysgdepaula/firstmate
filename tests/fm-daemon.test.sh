@@ -1789,6 +1789,41 @@ test_classify_signal_withheld_done_is_not_already_escalated() {
   pass "classify_signal calls a withheld linkless done routine and a delivered one already escalated"
 }
 
+test_classify_mixed_signal_filters_only_held_occurrences() {
+  local dir state verdict out
+  local FM_DONE_GUARD_REMINDER_MAX=1
+  for verdict in held spent; do
+    dir=$(make_supercase "signal-mixed-$verdict"); state="$dir/state"
+    printf 'kind=ship\nmode=no-mistakes\n' > "$state/a.meta"
+    printf 'done: mixed signal local tests pass\n\n' > "$state/a.status"
+    printf 'blocked: another task needs help\n' > "$state/b.status"
+    if [ "$verdict" = spent ]; then
+      status_span_has_actionable "$state/a.status" 0 \
+        && fail "the setup did not spend a reminder"
+      status_done_guard_holds "$state/a.status" || fail "the setup did not hold the first occurrence"
+      printf 'working: retrying\ndone: mixed signal local tests pass\n' >> "$state/a.status"
+    fi
+    out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/a.status $state/b.status" "$state")
+    case "$out" in escalate\|*) ;; *) fail "the mixed signal failed to escalate: $out" ;; esac
+    assert_contains "$out" 'blocked: another task needs help' "the actionable task was omitted"
+    if [ "$verdict" = held ]; then
+      status_done_guard_holds "$state/a.status" || fail "the classifier never held task a"
+      assert_not_contains "$out" 'done: mixed signal local tests pass' "a held occurrence leaked into the digest"
+    else
+      assert_contains "$out" 'done: mixed signal local tests pass' "the exhausted occurrence was omitted"
+    fi
+    seen_through "$state" a
+    out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/a.status $state/b.status" "$state")
+    assert_contains "$out" 'blocked: another task needs help' "the other task disappeared on replay"
+    if [ "$verdict" = held ]; then
+      assert_not_contains "$out" 'done: mixed signal local tests pass' "a held occurrence leaked through the seen-cursor fallback"
+    else
+      assert_contains "$out" 'done: mixed signal local tests pass' "the fallback hid an exhausted occurrence"
+    fi
+  done
+  pass "mixed daemon signals suppress only the held occurrence and preserve other actionable events"
+}
+
 test_classify_stale_dedup_against_signal() {
   # If the signal path already escalated a status (seen marker matches),
   # classify_stale must self-handle to avoid a duplicate in the digest.
@@ -2787,6 +2822,7 @@ test_permission_recovery_reclassifies_catchall_status
 test_permanent_classification_failure_is_reported_and_acknowledged
 test_catchall_scan_surfaces_a_masked_event
 test_classify_signal_withheld_done_is_not_already_escalated
+test_classify_mixed_signal_filters_only_held_occurrences
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale

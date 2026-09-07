@@ -373,6 +373,7 @@ classify_signal() {  # <reason-after-colon> <state>
     fi
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
+    status_done_guard_holds "$f" "$last" && continue
     distilled="${distilled}$(basename "$f"): ${last} | "
     # Nothing captain-relevant is left ahead of the recorded offset. When the log
     # nonetheless ends on a captain-relevant line, this signal is a re-notification

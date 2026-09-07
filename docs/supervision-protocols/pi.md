@@ -35,3 +35,5 @@ Read the durable outcome store with the fm_branch_outcomes tool when the captain
 The turn-end guard extension lives at `__FM_PI_TURNEND_EXT__`.
 The watcher extension lives at `__FM_PI_EXT__`.
 Both are tracked, project-local `.pi/extensions/*.ts` files that Pi auto-discovers once the project is trusted; `bin/fm-session-start.sh` reports when the running Pi session has not loaded both required extensions.
+
+Mixed-signal digests and drain annotations follow the shared occurrence-based done guard in `bin/fm-classify-lib.sh`.
