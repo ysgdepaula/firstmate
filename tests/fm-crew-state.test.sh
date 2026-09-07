@@ -1007,7 +1007,8 @@ test_withheld_linkless_done_reports_working() {
   out=$(run_crew_state "$d" feat-guard)
   assert_contains "$out" "state: working" "a withheld linkless done must keep reading as working"
   assert_contains "$out" "source: status-log" "the withheld verdict still comes from the status log"
-  assert_contains "$out" "delivery contract" "the reader must say why it reports working"
+  assert_contains "$out" "reported done without the pull-request link its delivery contract requires" "the reader must say why it reports working"
+  assert_not_contains "$out" "has been steered" "a state read cannot prove reminder delivery"
   assert_not_contains "$out" "state: done" "a withheld linkless done must never read as a finish"
   pass "a done with no PR link on a PR-delivery task reports working, not done"
 }
@@ -1058,7 +1059,8 @@ EOF
   out=$(run_crew_state "$d" feat-ciwithheld)
   assert_contains "$out" "state: working" "a withheld linkless done must keep reading as working"
   assert_contains "$out" "source: run-step" "the withheld verdict falls through to the run-step"
-  assert_contains "$out" "delivery contract" "the reader must say why it reports working"
+  assert_contains "$out" "reported done without the pull-request link its delivery contract requires" "the reader must say why it reports working"
+  assert_not_contains "$out" "has been steered" "a state read cannot prove reminder delivery"
   assert_not_contains "$out" "state: done" "the ci-ready path must not turn a withheld done into a finish"
   pass "the run-step ci-ready path reports working for a withheld linkless done"
 }

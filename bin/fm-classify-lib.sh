@@ -1967,13 +1967,14 @@ status_done_guard_supersede() {  # <status-file> <status-line> [endpoint] [ident
   [ -n "$line" ] || return 1
   [ -n "$pos" ] || pos=$(_fm_done_guard_position "$f" "$line") || return 1
   [ -n "$ident" ] || ident=$(_fm_open_decisions_file_ident "$f") || return 1
+  binding=$(_fm_done_guard_binding "$f" "$pos" "$line" "$ident") || return 1
+  state=${f%/*}; id=${f##*/}; id=${id%.status}
+  _fm_done_guard_inbox "$state" fm_task_inbox_retire_binding "$id" "$binding" || return 1
   _fm_done_guard_superseded_read "$f" "$pos" "$ident"
   if [ "$FM_DONE_SUPERSEDED_LINE" != "$line" ] || [ "$FM_DONE_SUPERSEDED_POSITION" != "$pos" ]; then
     printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" >> "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
   fi
-  binding=$(_fm_done_guard_binding "$f" "$pos" "$line" "$ident") || return 1
-  state=${f%/*}; id=${f##*/}; id=${id%.status}
-  _fm_done_guard_inbox "$state" fm_task_inbox_retire_binding "$id" "$binding"
+  return 0
 }
 
 # Read the marker into FM_DONE_SUPERSEDED_POSITION / _LINE, leaving both empty

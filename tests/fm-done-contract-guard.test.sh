@@ -1062,6 +1062,48 @@ test_watcher_still_surfaces_a_real_done() {
   pass "a done carrying its PR link still wakes firstmate exactly as before"
 }
 
+test_retirement_failure_remains_retryable() {
+  local state fault
+  for fault in lock move; do
+    state="$TMP_ROOT/retirement-$fault/state"
+    mkdir -p "$state"
+    make_task "$state" t no-mistakes 'done: local tests pass'
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      . "$1/bin/fm-task-inbox-lib.sh"
+      state=$2; fault=$3
+      status_span_has_actionable "$state/t.status" 0 && exit 1
+      reminder=$(fm_task_inbox_oldest_unhandled "$state" t) || exit 1
+      binding=$(fm_task_inbox_binding "$reminder") || exit 1
+      unrelated=$(fm_task_inbox_write "$state" t "keep this instruction") || exit 1
+      (
+        if [ "$fault" = lock ]; then
+          fm_task_inbox_lock_acquire() { return 1; }
+        else
+          mv() { [ "$1" != "$reminder" ] || return 1; command mv "$@"; }
+        fi
+        status_done_guard_supersede "$state/t.status" "done: local tests pass" && exit 1
+        [ ! -s "$state/.t.done-superseded" ] || exit 1
+        [ -f "$reminder" ] && [ -f "$unrelated" ] || exit 1
+        [ "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=0 fm_task_inbox_due_action "$state" t)" = quiet ] || exit 1
+        fm_backend_agent_state() { : > "$state/unexpected-ring"; printf alive; }
+        fm_task_inbox_ring fake target "$unrelated" && exit 1
+        [ ! -e "$state/unexpected-ring" ] || exit 1
+      ) || exit 1
+      printf "working: after failed retirement\n" >> "$state/t.status"
+      action=$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t) || exit 1
+      [ "$action" = "ring $unrelated" ] || exit 1
+      [ ! -e "$reminder" ] && [ -f "$state/t.inbox/handled/${reminder##*/}" ] || exit 1
+      late=$(fm_task_inbox_write "$state" t "late enqueue" "" "$binding") || exit 1
+      case "$late" in "$state/t.inbox/handled/"*) ;; *) exit 1 ;; esac
+      printf "done: local tests pass\n" >> "$state/t.status"
+      status_span_has_actionable "$state/t.status" 0 && exit 1
+      [ "$(find "$state/t.inbox" -maxdepth 1 -name "*.msg" | wc -l | tr -d " ")" = 2 ] || exit 1
+    ' _ "$ROOT" "$state" "$fault" || fail "$fault retirement failure lost cancellation or unrelated delivery"
+  done
+  pass "failed retirement stays cancelled and retries after later status appends"
+}
+
 test_pr_link_detection
 test_contract_unmet_only_for_pr_delivery_modes
 test_false_done_is_withheld_and_steered
@@ -1093,3 +1135,5 @@ test_stale_pane_behind_a_withheld_done_is_absorbed
 test_stale_pane_behind_a_real_done_still_surfaces
 test_mixed_watcher_batch_filters_only_held_occurrences
 test_watcher_still_surfaces_a_real_done
+
+test_retirement_failure_remains_retryable

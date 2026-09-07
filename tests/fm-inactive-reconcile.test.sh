@@ -903,6 +903,48 @@ test_reconciliation_never_calls_forge() {
   pass "reconciliation makes zero forge or PR API calls"
 }
 
+test_failed_reminder_retirement_blocks_publication_and_retries() {
+  local reminder fault
+  make_world retirement-failure; bind_secondmate local
+  write_child "$MATE" child 'done: implemented the parser'
+  FM_STATE_OVERRIDE="$MATE/state" bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_span_has_actionable "$2/child.status" 0 && exit 1
+    exit 0
+  ' _ "$ROOT" "$MATE/state" || fail "the reminder setup failed"
+  reminder="$MATE/state/child.inbox/001.msg"
+  [ -f "$reminder" ] || fail "no reminder was queued"
+  fault="$WORLD/retire-fault"
+  : > "$fault"
+  cat > "$WORLD/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  */child.inbox/*.msg)
+    if [ -f "$FM_RETIRE_FAULT" ]; then
+      : > "$FM_RETIRE_FAULT.attempted"
+      exit 1
+    fi ;;
+esac
+exec /bin/mv "$@"
+SH
+  chmod +x "$WORLD/fakebin/mv"
+  FM_RETIRE_FAULT="$fault" FM_FAKE_CREW_STATE=done run_reconcile "$MATE" || true
+  [ -f "$fault.attempted" ] || fail "the retirement fault was not exercised"
+  [ -f "$reminder" ] || fail "the fault did not prevent archival"
+  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
+    || fail "completion was published despite failed reminder retirement"
+  [ ! -s "$MATE/state/.child.done-superseded" ] || fail "supersession preceded successful retirement"
+  printf 'working: follow-up after retirement failure\n' >> "$MATE/state/child.status"
+  age "$MATE/state/child.status"
+  rm "$fault"
+  FM_RETIRE_FAULT="$fault" FM_FAKE_CREW_STATE=done run_reconcile "$MATE" --startup
+  [ ! -e "$reminder" ] && [ -f "$MATE/state/child.inbox/handled/001.msg" ] \
+    || fail "a later status append stranded the retirement"
+  grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" \
+    || fail "completion did not recover once retirement succeeded"
+  pass "direct publication waits for reminder retirement and retries beyond later status appends"
+}
+
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_ledger_withholds_a_linkless_done
@@ -936,3 +978,5 @@ test_missing_parent_binding_names_itself
 test_reconciliation_never_calls_forge
 
 echo "all inactive reconciliation tests passed"
+
+test_failed_reminder_retirement_blocks_publication_and_retries

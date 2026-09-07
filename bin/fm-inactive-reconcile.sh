@@ -484,6 +484,9 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
+  if [ -d "$STATE/$id.inbox/.retired-bindings" ]; then
+    _fm_done_guard_inbox "$STATE" fm_task_inbox_retry_retirements "$id" || return 1
+  fi
   status="$STATE/$id.status"
   turn="$STATE/$id.turn-ended"
   last=$(last_status_line "$status")
@@ -553,7 +556,7 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct "upstream" "$pr" "$(sha256_text "$last")" || return 1
   # This outcome answers the prose line, so the guard stops steering the worker
   # about it while that line stays the newest one.
-  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" "$captured_endpoint" "$captured_ident" || true
+  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" "$captured_endpoint" "$captured_ident" || return 1
   [ -n "$RECORD_PENDING" ] || return 0
   if [ -n "$self" ]; then
     if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then

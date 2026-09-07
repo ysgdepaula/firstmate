@@ -148,6 +148,9 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode] [bi
   local dir=$1 text=$2 delivery_mode=${3:-} binding=${4:-} seq tmp rec status=0
   seq=$(fm_task_inbox_next_seq "$dir")
   rec="$dir/$seq.msg"
+  if [ -n "$binding" ] && [ -d "$dir/.retired-bindings/binding-$binding" ]; then
+    rec="$dir/handled/$seq.msg"
+  fi
   tmp=$(mktemp "$dir/.staging.XXXXXX") || return 1
   {
     printf 'schema=%s\n' "$FM_TASK_INBOX_SCHEMA"
@@ -258,7 +261,7 @@ fm_task_inbox_retire_binding() {
   local state=$1 task=$2 binding=$3 dir lock rec status=0
   case "$binding" in ''|*[!a-zA-Z0-9._:-]*) return 1 ;; esac
   dir=$(fm_task_inbox_dir "$state" "$task")
-  [ -d "$dir" ] || return 0
+  mkdir -p "$dir/handled" "$dir/.retired-bindings/binding-$binding" || return 1
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
   for rec in "$dir"/*.msg; do
@@ -269,6 +272,21 @@ fm_task_inbox_retire_binding() {
     fi
   done
   fm_lock_release "$lock"
+  return "$status"
+}
+
+fm_task_inbox_retry_retirements() {
+  local state=$1 task=$2 dir rec binding status=0
+  dir=$(fm_task_inbox_dir "$state" "$task")
+  [ -d "$dir/.retired-bindings" ] || return 0
+  for rec in "$dir"/*.msg; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    binding=$(fm_task_inbox_binding "$rec") || return 1
+    [ -n "$binding" ] || continue
+    case "$binding" in *[!a-zA-Z0-9._:-]*) continue ;; esac
+    [ -d "$dir/.retired-bindings/binding-$binding" ] || continue
+    fm_task_inbox_retire_binding "$state" "$task" "$binding" || status=1
+  done
   return "$status"
 }
 
@@ -318,7 +336,10 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # verdicts would starve a harness whose idle screen the classifier cannot
 # positively identify (that classifier is advisory here by design).
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
-  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict dir task
+  dir=${rec%/*}; task=${dir##*/}; task=${task%.inbox}
+  fm_task_inbox_retry_retirements "${dir%/*}" "$task" || return 1
+  [ ! -f "$dir/handled/${rec##*/}" ] || return 1
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -382,6 +403,10 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
 fm_task_inbox_due_action() {  # <state-dir> <task-id>
   local dir oldest base now grace max ladder rec_base count last
   dir=$(fm_task_inbox_dir "$1" "$2")
+  if ! fm_task_inbox_retry_retirements "$1" "$2"; then
+    printf 'quiet'
+    return 0
+  fi
   if ! oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
     rm -f "$dir/.ring-state" "$dir/.escalated" 2>/dev/null || true
     printf 'quiet'

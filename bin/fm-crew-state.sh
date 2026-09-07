@@ -188,7 +188,7 @@ map_log_state() {  # <line> [<status-file>]
 # misdescribe the state; say why it is working instead.
 log_state_detail() {  # <line> <mapped-state>
   if [ "$2" = working ] && [ "$(status_line_verb "$1")" = 'done' ]; then
-    printf '%s' "reported done without the pull-request link its delivery contract requires; the worker has been steered back to that contract"
+    printf '%s' "reported done without the pull-request link its delivery contract requires"
     return
   fi
   status_line_note "$1"

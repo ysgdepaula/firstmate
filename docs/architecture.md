@@ -143,6 +143,8 @@ That drop is conditional on the line having been judged already, because one cla
 Three witnesses warrant it - the reminder budget or a published run-step outcome names that exact sentence at its occurrence endpoint, or the log's newest line is a done that satisfies the contract, so the task delivered afterwards and the handoff it replaced is moot.
 A presentation cursor is not among them, since the recovery backstop shows only a log's last line and then commits past every earlier one it never showed; a line no witness covers is presented rather than swallowed, which is the safe direction and the behaviour that preceded the guard.
 Supersession retires only the inbox reminders bound to that occurrence, preserving unrelated instructions.
+The inbox durably cancels the binding before archiving its reminders; only successful archival allows the supersession marker and completion publication.
+Inbox polls retry interrupted archival independently of later status lines, and defer doorbells and escalation until cancelled reminders have left the pending inbox.
 The recovery backstop compares captured event bytes and endpoints against witnesses; uncaptured hold checks use the bounded latest-event reader and skip status reads when no witness exists.
 Occurrence witnesses survive later valid completions, which reset only the active reminder budget; teardown retires both record files.
 Mixed-signal digests and drain annotations apply the same occurrence-specific suppression while preserving other actionable events and budget-exhausted dones.
