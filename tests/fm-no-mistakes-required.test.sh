@@ -87,9 +87,9 @@ PY
   # A refreshed body passes in a new event; replaying the old event still fails.
   for event in synchronize edited synchronize; do
     rc=0
-    output=$(PR_BODY= PR_HEAD_SHA= PR_HEAD_REF= PR_AUTHOR= PR_NUMBER= \
-      NM_EXEMPT_AUTHORS= NM_EXEMPT_HEAD_BRANCHES= NM_EXEMPT_BOT_AUTHORS=false \
-      GITHUB_EVENT_PATH="$TMP_ROOT/$event.json" GITHUB_OUTPUT= \
+    output=$(PR_BODY='' PR_HEAD_SHA='' PR_HEAD_REF='' PR_AUTHOR='' PR_NUMBER='' \
+      NM_EXEMPT_AUTHORS='' NM_EXEMPT_HEAD_BRANCHES='' NM_EXEMPT_BOT_AUTHORS=false \
+      GITHUB_EVENT_PATH="$TMP_ROOT/$event.json" GITHUB_OUTPUT='' \
       python3 "$VERIFY" 2>&1) || rc=$?
     if [ "$event" = edited ]; then
       expect_code 0 "$rc" "refreshed event attestation did not recover the check"
