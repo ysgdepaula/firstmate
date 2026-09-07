@@ -5,7 +5,7 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ACTION_REF=32d396ac0f29135daf7fcb9964aba9d5f4e796d6
+ACTION_REF=76fa0921a9797b09e120c8b5979c4d0e65f88922
 TMP_ROOT=$(fm_test_tmproot fm-no-mistakes-required)
 VERIFY="$TMP_ROOT/verify.py"
 OLD_SHA=1111111111111111111111111111111111111111
@@ -66,90 +66,91 @@ test_missing_head_fails() {
   pass "shared action rejects an attestation with no head_sha"
 }
 
-test_body_refresh_recovers_event_check_without_changing_head() {
-  local event output rc
-  # Exercise the GitHub event JSON interface used when action PR inputs are empty.
-  python3 - "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PY'
-import json
-import pathlib
-import sys
-
-root, signature, steps, old, head = sys.argv[1:]
-for action, attested in (("synchronize", old), ("edited", head)):
-    attestation = json.dumps({"head_sha": attested, "steps": json.loads(steps)})
-    payload = {"action": action, "pull_request": {
-        "number": 3006, "head": {"sha": head, "ref": "regression"},
-        "user": {"login": "regression"},
-        "body": signature + "\n<!-- no-mistakes-pipeline-attestation:v1 " + attestation + " -->",
-    }}
-    pathlib.Path(root, action + ".json").write_text(json.dumps(payload), encoding="utf-8")
-PY
-  # A refreshed body passes in a new event; replaying the old event still fails.
-  for event in synchronize edited synchronize; do
-    rc=0
-    output=$(PR_BODY='' PR_HEAD_SHA='' PR_HEAD_REF='' PR_AUTHOR='' PR_NUMBER='' \
-      NM_EXEMPT_AUTHORS='' NM_EXEMPT_HEAD_BRANCHES='' NM_EXEMPT_BOT_AUTHORS=false \
-      GITHUB_EVENT_PATH="$TMP_ROOT/$event.json" GITHUB_OUTPUT='' \
-      python3 "$VERIFY" 2>&1) || rc=$?
-    if [ "$event" = edited ]; then
-      expect_code 0 "$rc" "refreshed event attestation did not recover the check"
-      assert_contains "$output" "Found structurally compliant pipeline step attestation." \
-        "refreshed event did not produce a compliant verdict"
-    else
-      expect_code 1 "$rc" "stale event passed without refreshing its attestation"
-      assert_contains "$output" "attestation.head_sha: $OLD_SHA" "stale attestation was not diagnosed"
-      assert_contains "$output" "PR head: $NEW_SHA" "event did not retain the actual PR head"
-    fi
-  done
-  pass "body refresh recovers the event check while stale event replay remains rejected"
-}
-
-test_ci_fix_push_requires_refreshed_event_attestation() {
-  # Exercise the action's default GitHub event input and GITHUB_OUTPUT contract.
-  # A CI auto-fix advances the head before the publisher refreshes the PR body.
-  python3 - "$VERIFY" "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PY' \
-    || fail "CI-fix publication sequence violated the commit-bound attestation contract"
+test_live_pr_state_overrides_archived_event() {
+  # Execute the pinned verifier against its HTTP and GitHub output interfaces.
+  python3 - "$VERIFY" "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PYTEST' \
+    || fail "live PR attestation contract failed"
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from threading import Thread
 
 verifier, root, signature, steps, old, new = sys.argv[1:]
 event = Path(root) / "pull_request.json"
 output = Path(root) / "action-output"
-env = {key: value for key, value in os.environ.items()
-       if not key.startswith(("PR_", "NM_EXEMPT_"))}
-env.update(GITHUB_EVENT_PATH=str(event), GITHUB_OUTPUT=str(output))
-for label, head, attested, expected in (
-    ("initial publication", old, old, 0),
-    ("CI-fix push with stale body", new, old, 1),
-    ("publisher refresh after CI fix", new, new, 0),
-):
+requests = []
+response = {}
+status = 200
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        requests.append((self.path, self.headers.get("Authorization")))
+        self.send_response(status)
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+
+    def log_message(self, *args):
+        pass
+
+def pr(head, attested, completed=True):
+    records = json.loads(steps)
+    if not completed:
+        records[0]["status"] = "skipped"
     body = signature + "\n<!-- no-mistakes-pipeline-attestation:v1 " + json.dumps({
-        "head_sha": attested, "steps": json.loads(steps),
+        "head_sha": attested, "steps": records,
     }) + " -->"
-    event.write_text(json.dumps({"action": "synchronize" if head != attested else "edited",
-                                "pull_request": {"number": 4, "body": body,
-                                                 "head": {"sha": head},
-                                                 "user": {"login": "regression"}}}),
-                     encoding="utf-8")
-    output.write_text("", encoding="utf-8")
-    result = subprocess.run([sys.executable, verifier], env=env,
-                            capture_output=True, text=True)
-    assert result.returncode == expected, (label, result.stdout, result.stderr)
-    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
-    assert fields["compliant"] == ("true" if expected == 0 else "false"), (label, fields)
-    assert fields["exempt"] == "false", (label, fields)
-    if expected:
-        assert old in result.stderr and new in result.stderr, result.stderr
-PY
-  pass "CI-fix push fails until the event carries a refreshed head-bound attestation"
+    return {"number": 4, "body": body, "head": {"sha": head, "ref": "regression"},
+            "user": {"login": "regression"}}
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+thread = Thread(target=server.serve_forever, daemon=True)
+thread.start()
+env = {key: value for key, value in os.environ.items()
+       if not key.startswith(("PR_", "NM_EXEMPT_", "GITHUB_"))}
+env.update(GITHUB_EVENT_PATH=str(event), GITHUB_OUTPUT=str(output),
+           GITHUB_TOKEN="fixture-token", GITHUB_REPOSITORY="fixture/firstmate",
+           GITHUB_API_URL=f"http://127.0.0.1:{server.server_port}")
+try:
+    for label, archived, live, http_status, expected, diagnostic in (
+        ("rerun after body refresh", pr(new, old), pr(new, new), 200, 0,
+         "Found structurally compliant"),
+        ("push before body refresh", pr(new, old), pr(new, old), 200, 1,
+         "head_sha does not match"),
+        ("old green event after new push", pr(old, old), pr(new, old), 200, 1,
+         "head_sha does not match"),
+        ("live skipped review", pr(old, old), pr(new, new, False), 200, 1,
+         "review (status=skipped)"),
+        ("denied API with green archived event", pr(old, old), {}, 403, 1,
+         "Could not verify this PR's live body/head"),
+        ("malformed API with green archived event", pr(old, old), {}, 200, 1,
+         "Could not verify this PR's live body/head"),
+    ):
+        event.write_text(json.dumps({"action": "synchronize", "pull_request": archived}),
+                         encoding="utf-8")
+        output.write_text("", encoding="utf-8")
+        response, status = live, http_status
+        requests.clear()
+        result = subprocess.run([sys.executable, verifier], env=env,
+                                capture_output=True, text=True, timeout=20)
+        assert result.returncode == expected, (label, result.stdout, result.stderr)
+        assert diagnostic in result.stdout + result.stderr, (label, result)
+        assert requests == [("/repos/fixture/firstmate/pulls/4", "Bearer fixture-token")], (label, requests)
+        fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert fields["compliant"] == ("true" if expected == 0 else "false"), (label, fields)
+        assert fields["exempt"] == "false", (label, fields)
+finally:
+    server.shutdown()
+    thread.join()
+    server.server_close()
+PYTEST
+  pass "live PR refresh recovers stale events; stale heads, skipped steps, and API failures are rejected"
 }
 
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
-test_body_refresh_recovers_event_check_without_changing_head
-test_ci_fix_push_requires_refreshed_event_attestation
+test_live_pr_state_overrides_archived_event

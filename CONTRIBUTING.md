@@ -15,7 +15,8 @@ It evaluates every PR opening and body edit independently, reruns after head syn
 GitHub Actions and Dependabot are exempt so their automation keeps working, but other contributor PRs that do not satisfy the attestation contract will not be reviewed or merged.
 
 If pipeline fixes move the PR head, no-mistakes must republish its attestation for that final head on the existing PR.
-Re-running a failed workflow uses its original event payload, so it cannot pick up a subsequently refreshed PR body; the body edit triggers a new compliance run.
+The shared action reads the live PR body and head through the GitHub API, so rerunning an older workflow evaluates the refreshed attestation even though GitHub replays the original event payload.
+The workflow grants `pull-requests: read`; if the live lookup fails, the check fails closed instead of trusting the archived event.
 Inside an active run, return a stale-attestation failure to the outer executor that owns PR publication instead of starting a nested pipeline or changing the head-binding check.
 The executable recovery regression is `bin/fm-test-run.sh tests/fm-no-mistakes-required.test.sh`.
 
