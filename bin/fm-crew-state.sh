@@ -56,11 +56,13 @@
 #      checks green, also reads done (held-for-merge), never failed: a monitor
 #      whose only remaining job is to observe a human merge decision must not
 #      convert the absence of that decision into a failure verdict
-#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). In the
+#      (nm_failed_run_is_green_held_ci). In the
 #      coarse runs-ledger fallback (no steps table, no ci log), a terminal
-#      FAILED record whose daemon an explicit probe proves down reads unknown,
+#      FAILED record whose bounded daemon-status probe fails reads unknown,
 #      never failed: an instrument failure must not read as work failure
-#      (nm_daemon_probe_down).
+#      (nm_daemon_probe_down); a failed probe leaves liveness unverified,
+#      rather than proving daemon death. tests/fm-crew-state.test.sh covers
+#      both reclassifications and genuine failures that must stay failed.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -438,11 +440,7 @@ nm_run_activity_is_recent() {
 # shape, all on positive evidence: a steps[] table where every step completed
 # except exactly `ci` failed (any other non-completed status, or a second
 # failed step, disqualifies), plus nm_ci_checks_state=green (a genuinely red
-# check, or an unreadable ci log, keeps the failure a failure). This is the
-# orphaned-CI-monitor gap (2026-09-05 jr-voice): a run held for a captain
-# merge decision polls until the shared daemon restarts under it and marks
-# the run failed, although GitHub's own check state - the actual shippability
-# authority - is green and every substantive step completed.
+# check, or an unreadable ci log, keeps the failure a failure).
 nm_failed_run_is_green_held_ci() {
   local rows row rest step status saw_ci_failed
   rows=$(nm_steps_rows)
@@ -482,7 +480,7 @@ nm_reclassify_failed_run_as_held_green() {
   return 0
 }
 
-# 0 when an explicit probe proves the shared daemon down: `no-mistakes daemon
+# 0 when an explicit probe cannot establish daemon liveness: `no-mistakes daemon
 # status` is the canonical down-probe (the same one fm-brief.sh hands crews
 # before a blocked append) and exits non-zero when the daemon is not running.
 # Bounded like every other CLI call; a probe that fails for any reason -
@@ -645,8 +643,8 @@ if [ "$HAVE_RUN" = 1 ]; then
       failed)
         # The ledger row is terminal but the coarse path has no steps table
         # and no ci log, so the orphaned-monitor shape cannot be recognized
-        # here. With the daemon provably down, the row is unverified evidence
-        # from a dead instrument and must not read as work failure.
+        # here. When the daemon probe fails, the row is unverified evidence
+        # and must not read as work failure.
         if nm_daemon_probe_down; then
           RUN_STATE=unknown
           RUN_DETAIL="no-mistakes daemon unreachable; last ledger record failed - unverified"

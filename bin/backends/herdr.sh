@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# bin/backends/herdr.sh - the herdr session-provider adapter (EXPERIMENTAL).
+# bin/backends/herdr.sh - the herdr session-provider adapter.
+# docs/herdr-backend.md owns its support status and active limits.
 #
 # Design: data/fm-backend-design-d7/herdr-addendum.md ("Interface mapping",
 # decisions D1-D6) and the empirical verification recorded in

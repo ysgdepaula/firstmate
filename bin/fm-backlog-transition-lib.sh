@@ -255,15 +255,15 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
 # holds a lock across the call - the spawn commit and its preservation
 # read-back run under the per-task meta lock - sets the bound, so an
 # unresponsive tasks-axi cannot hold that lock open indefinitely; a timed-out
-# call exits 124, or 137 when the kill-after had to fire (GNU timeout's own
-# status for a KILL-forced expiry), and the callers treat either as the bound
-# expiring and report the timeout as the reason through their existing error
-# plumbing. GNU timeout is used where it exists,
+# call exits 124 (fm_run_external_timeout normalizes GNU's KILL-forced 137).
+# Callers also recognize 137 as expiry and report the timeout through their
+# existing error plumbing. GNU timeout is used where it exists,
 # gtimeout where coreutils ships under that name, and a small perl watchdog
 # elsewhere (a stock macOS host has perl but no timeout variant; perl is
 # already a hard dependency of this library's byte validators, so the
-# fallback adds no new tool). Every bounded path forces termination: a
-# tasks-axi that ignores SIGTERM must not outlive the bound, since an
+# fallback adds no new tool). Every bounded path terminates the process group:
+# a TERM-ignoring descendant must not keep the output pipe and lock open
+# after expiry, even when the group leader exits first, since an
 # unbounded call under the lock is exactly the hang the bound exists to
 # prevent. When a bound was requested but no bounding mechanism exists at
 # all, the call fails closed instead of running unbounded. Must be the last
@@ -293,8 +293,9 @@ fm_tasks_axi() {
   elif command -v perl >/dev/null 2>&1; then
     # Fork, run tasks-axi in the child, and poll waitpid(WNOHANG) until the
     # child exits or the bound expires: the same contract as
-    # `timeout $bound tasks-axi ...`. Expiry kills the child with TERM, waits
-    # one further bound of grace, then KILL, and exits 124 so the callers'
+    # `timeout $bound tasks-axi ...`. Expiry sends TERM to the child's isolated
+    # process group, waits up to one further bound of grace while the group
+    # survives, then sends KILL and exits 124 so the callers'
     # timeout plumbing reports it. Polling rather than alarm+die keeps the
     # bound off perl's platform-dependent syscall-restart signal semantics.
     exec perl -MPOSIX=WNOHANG -e '
