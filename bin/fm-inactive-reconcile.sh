@@ -516,7 +516,7 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     *) return 0 ;;
   esac
   pr=$(pr_for_task "$meta" "$status")
-  if [ "$state" = done ] && status_done_contract_unmet "$status" "$last"; then
+  if [ "$state" = 'done' ] && status_done_contract_unmet "$status" "$last"; then
     return 0
   fi
   incarnation=$(meta_incarnation "$meta")

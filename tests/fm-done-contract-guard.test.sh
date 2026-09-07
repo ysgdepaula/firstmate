@@ -391,21 +391,28 @@ test_concurrent_classifications_charge_one_reminder() (
   state="$TMP_ROOT/concurrent-guard/state"; race="$TMP_ROOT/concurrent-guard/race"
   mkdir -p "$state" "$race"
   make_task "$state" t no-mistakes 'done: local tests pass'
+  # Keep wrapper reimports at the same analysis boundary as the suite imports;
+  # production modules are linted separately, not as subshell-local definitions.
+  # shellcheck disable=SC2329 # Called by each imported guard classification before locking.
   fm_lock_acquire_wait_bounded() {
     [ "${GUARD_RACER:-}" != second ] || : > "$race/second-arrived"
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-wake-lib.sh"
     fm_lock_acquire_wait_bounded "$@"
   }
   _fm_done_guard_read() {
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-classify-lib.sh"
     _fm_done_guard_read "$@"
     [ "${GUARD_RACER:-}" != second ] || : > "$race/second-arrived"
   }
+  # shellcheck disable=SC2329 # Called by the imported guard's locked enqueue path.
   fm_task_inbox_write() {
     if [ "${GUARD_RACER:-}" = first ]; then
       : > "$race/first-enqueue"
       while [ ! -e "$race/release" ]; do sleep 0.02; done
     fi
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-task-inbox-lib.sh"
     fm_task_inbox_write "$@"
   }
@@ -442,6 +449,7 @@ test_guard_lock_failure_preserves_presentation_and_budget() (
   state="$TMP_ROOT/guard-lock-failure/state"; mkdir -p "$state"
   make_task "$state" t no-mistakes 'done: local tests pass'
   event=$(
+    # shellcheck disable=SC2329 # Called by the imported guard's lock acquisition.
     fm_lock_acquire_wait_bounded() { return 1; }
     status_span_first_actionable "$state/t.status" 0
   ) || fail "lock failure swallowed the line"
@@ -450,6 +458,7 @@ test_guard_lock_failure_preserves_presentation_and_budget() (
   status_span_has_actionable "$state/t.status" 0 && fail "the available lock did not allow steering"
   printf 'done: PR %s checks green\n' "$PR_URL" >> "$state/t.status"
   (
+    # shellcheck disable=SC2329 # Called by the imported guard's budget-reset lock acquisition.
     fm_lock_acquire_wait_bounded() { return 1; }
     status_done_guard_clear "$state/t.status" "done: PR $PR_URL checks green"
   ) && fail "a budget reset succeeded without exclusive ownership"
