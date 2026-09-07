@@ -348,8 +348,16 @@ notice_parent_report_failed() { # <record> <fingerprint> <payload>
 }
 
 # The whole terminal line a child's ledger ends in, or non-zero when the ledger
-# is absent, unusable, still being appended (no trailing newline yet), or does
-# not end in a done or failed line.
+# is absent, unusable, still being appended (no trailing newline yet), does not
+# end in a done or failed line, or ends in a `done:` its delivery contract
+# withholds.
+# That last case is the same rule every other finish reader follows: a `done:`
+# with no pull-request link on a PR-delivery task is not a terminal outcome, the
+# shared classifier is withholding it and steering the child, and publishing it
+# here would hand the captain that finish through the parent channel by a route
+# the guard never sees. The test is the shared predicate and nothing else - a
+# pull request recorded elsewhere for the task does not make this line a finish,
+# because the child is being told, right now, that this line is not one.
 child_terminal_ledger_line() { # <status>
   local status=$1 snapshot last marker='__FM_LEDGER_SNAPSHOT_END__'
   [ -f "$status" ] && [ ! -L "$status" ] && [ -s "$status" ] || return 1
@@ -358,9 +366,11 @@ child_terminal_ledger_line() { # <status>
   snapshot=${snapshot%"$marker"}
   last=$(printf '%s' "$snapshot" | grep -v '^[[:space:]]*$' | tail -1)
   case "$(status_line_verb "$last")" in
-    done|failed) printf '%s\n' "$last" ;;
+    done|failed) ;;
     *) return 1 ;;
   esac
+  status_done_contract_unmet "$status" "$last" && return 1
+  printf '%s\n' "$last"
 }
 
 # Claim one already-delivered inactive fallback as the delivery of this ledger
@@ -488,8 +498,17 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
+  # A child that states its own terminal outcome is the ledger path's to deliver,
+  # so this path stands down. The test is the shared predicate its ledger sibling
+  # asks, for the same reason: a `done:` with no pull-request link on a
+  # PR-delivery child is not a terminal outcome, so it may not stand this path
+  # down either, and the authoritative current-state reader below keeps the
+  # verdict - which is how a child actually failing behind a false done is still
+  # reported rather than swallowed on the word of that line.
   if [ -n "$self" ]; then
-    case "$(status_line_verb "$last")" in done|failed) return 0 ;; esac
+    case "$(status_line_verb "$last")" in
+      done|failed) status_done_contract_unmet "$status" "$last" || return 0 ;;
+    esac
   fi
   case "$state_line" in
     'state: done '*) state='done' ;;
@@ -497,6 +516,9 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     *) return 0 ;;
   esac
   pr=$(pr_for_task "$meta" "$status")
+  if [ "$state" = 'done' ] && status_done_contract_unmet "$status" "$last"; then
+    return 0
+  fi
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|$pr|$(clean_field "$last")")
   if [ -n "$self" ]; then

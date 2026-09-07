@@ -1880,6 +1880,53 @@ run_drain() {  # <home>
     "$ROOT/bin/fm-wake-drain.sh" 2>/dev/null
 }
 
+# A `done:` its delivery contract withholds is not a finish, so it cannot retire
+# the captain's still-open decisions either. The completion gate reads the
+# origin's last status line and, for a finished origin, drops every open decision
+# before attesting. The shared classifier is reporting a task behind a withheld
+# line as working and steering its worker back to the contract, so letting that
+# line retire an unresolved needs-decision would attest away a call the captain
+# is still owed on the word of a line nothing else in the fleet reads as a finish.
+test_withheld_done_does_not_retire_open_decisions() {
+  local home id
+  home=$(make_home withheld-done-open-decisions)
+  id=sample-ship-work
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Ship sample work" --kind ship --repo sample --start >/dev/null \
+    || fail "could not create the ship backlog fixture"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$home/projects/missing-$id" \
+    "project=$home/projects/sample" "harness=codex" "kind=ship" \
+    "mode=no-mistakes" "spawn_gen=fixture-$id"
+  cat > "$home/state/$id.status" <<'EOF'
+working: implementing
+needs-decision [key=api-shape]: choose REST or RPC
+done: local tests pass
+EOF
+
+  if run_captain "$home" complete "$id" --none > "$home/withheld.out" 2> "$home/withheld.err"; then
+    fail "a withheld done retired the captain's open decision and let --none attest: $(cat "$home/withheld.err")"
+  fi
+  assert_no_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "a withheld done produced a false completion attestation"
+
+  # The deliberate divergence: the same fixture whose done carries its PR link is
+  # a real finish, so it retires the open decision exactly as before and --none
+  # attests. Without this half the case would pass even if the gate refused every
+  # origin unconditionally.
+  cat > "$home/state/$id.status" <<'EOF'
+working: implementing
+needs-decision [key=api-shape]: choose REST or RPC
+done: PR https://github.com/owner/repo/pull/9 checks green
+EOF
+  rm -f "$home/state/.$id.open-decisions-cursor"
+  run_captain "$home" complete "$id" --none >/dev/null 2> "$home/delivered.err" \
+    || fail "a done carrying its PR link no longer retires an open decision: $(cat "$home/delivered.err")"
+  assert_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "the delivered done did not record its completion attestation"
+  pass "a withheld done leaves the captain's open decisions open, a delivered one still retires them"
+}
+
 # Reconstructs the 2026-08-06 loss with synthetic names: the answer was posted
 # as a `resolved [key=...]` line and nothing else, so the status fold went quiet
 # while the durable captain-held task stayed open and kept reading as if the
@@ -2917,6 +2964,7 @@ test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
 test_legitimate_holds_produce_no_divergence_signal
+test_withheld_done_does_not_retire_open_decisions
 test_teardown_never_closes_a_captain_held_task
 test_interrupted_cleanup_keeps_the_captain_call_recoverable
 test_teardown_retains_captain_calls_in_a_relocated_backlog

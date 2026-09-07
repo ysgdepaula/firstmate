@@ -373,12 +373,18 @@ classify_signal() {  # <reason-after-colon> <state>
     fi
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
+    status_done_guard_holds "$f" "$last" && continue
     distilled="${distilled}$(basename "$f"): ${last} | "
     # Nothing captain-relevant is left ahead of the recorded offset. When the log
     # nonetheless ends on a captain-relevant line, this signal is a re-notification
     # of something already escalated, not a routine one; position is the whole
-    # dedupe, so no separate seen-marker comparison is needed.
-    status_is_captain_relevant "$last" && seen_rel=1
+    # dedupe, so no separate seen-marker comparison is needed. A `done:` the
+    # delivery contract withholds is the exception: the span reader steered its
+    # worker instead of presenting it, so no path escalated it and calling this
+    # signal a re-notification of one would be false.
+    if ! status_done_contract_unmet "$f" "$last"; then
+      status_is_captain_relevant "$last" && seen_rel=1
+    fi
   done
   # strip a trailing " | " separator so the distilled line is clean
   distilled="${distilled% | }"
@@ -425,12 +431,18 @@ classify_stale() {  # <window> <state> [<span-record> <span-status>]
     printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "$last"
     return
   fi
-  if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+  if [ -n "$last" ] && status_is_captain_relevant "$last" \
+    && ! status_done_contract_unmet "$state/$task.status" "$last"; then
     # Independent of free-text captain-relevant matching: a nonterminal progress
     # verb (working:) must never take the terminal stale path. Seen-status dedupe
     # must not permanently suppress or clear possible-wedge aging merely because
     # prose once looked captain-relevant. Real terminal verbs and legacy free-text
     # captain lines without those verbs keep the terminal escalate/dedupe path.
+    # A `done:` that does not carry the pull-request link its task's delivery
+    # contract requires is not a finish either (fm-classify-lib.sh's done contract
+    # guard is the one predicate every finish reader asks), so it takes the
+    # ordinary non-terminal path below: the caller ages it toward a wedge rather
+    # than reporting it as already escalated by a signal path that withheld it.
     if ! status_is_terminal_verb "$last"; then
       case "$(status_line_verb "$last")" in
         working|resolved|captain-held)
@@ -1403,9 +1415,13 @@ handle_wake() {  # <reason> <state>
         last=$(last_status_line "$state/$task.status")
         # Clear wedge aging only for terminal (or legacy free-text) captain lines.
         # Nonterminal progress verbs keep possible-wedge markers even if free text
-        # once looked captain-relevant or was written into a seen marker.
+        # once looked captain-relevant or was written into a seen marker. A done:
+        # that does not satisfy its task's pull-request delivery contract is not a
+        # finish either (fm-classify-lib.sh's done contract guard), so an idle pane
+        # behind one keeps aging toward a wedge instead of reading as complete.
         _clear_wedge=0
-        if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+        if [ -n "$last" ] && status_is_captain_relevant "$last" \
+          && ! status_done_contract_unmet "$state/$task.status" "$last"; then
           if status_is_terminal_verb "$last"; then
             _clear_wedge=1
           else

@@ -304,6 +304,14 @@ print_status_outcome_backstop_section() {  # <task-and-endpoint-snapshot>
     event_endpoint=$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT
     [ "$receipt" -lt "$event_endpoint" ] || continue
     status_is_captain_relevant "$event" || continue
+    # A done: the guard is actively holding was never presented as a done, and
+    # its worker holds the contract reminder instead, so recovering it here would
+    # present exactly the false completion the guard withheld. The test is
+    # whether the guard HOLDS this line, not merely whether the contract is
+    # unmet: once its reminder budget is spent the guard deliberately hands such
+    # a line to firstmate as a real event, and recovering a lost presentation of
+    # that event is precisely this backstop's job.
+    status_done_guard_occurrence_held "$STATE/$task.status" "$event" "$event_endpoint" && continue
     verb=$(status_line_verb "$event")
     case "$verb" in
       needs-decision|blocked)
@@ -327,7 +335,7 @@ print_status_outcome_backstop_section() {  # <task-and-endpoint-snapshot>
       continue
     fi
 
-    line="$task $event"
+    line="$task ${event%$'\r'}"
     fm_cap_line_var "$line" $((item_bytes - 1))
     line=$FM_LINE_CAP_LINE
     bytes=$(( ${#line} + 1 ))

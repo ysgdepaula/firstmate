@@ -1759,6 +1759,71 @@ test_classify_signal_dedup_against_scan() {
   pass "classify_signal dedupes against the catch-all scan seen marker"
 }
 
+# The done contract guard is the one predicate every finish reader asks. When the
+# span reader withholds a linkless done it steers the worker instead of
+# presenting it, so no path escalated that line and this signal is a routine one,
+# not a re-notification of something already escalated.
+test_classify_signal_withheld_done_is_not_already_escalated() {
+  local dir state out
+  dir=$(make_supercase signal-withheld-done)
+  state="$dir/state"
+  printf 'window=sess:fm-sig-nm1\nkind=ship\nmode=no-mistakes\n' > "$state/sig-nm1.meta"
+  printf 'done: local tests pass\n' > "$state/sig-nm1.status"
+  seen_through "$state" "sig-nm1"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/sig-nm1.status" "$state")
+  case "$out" in
+    self\|routine\ signal:*) ;;
+    *) fail "a withheld linkless done was reported as already escalated: $out" ;;
+  esac
+
+  # The divergence: the same fixture whose done carries its PR link really was
+  # escalated by another path, and is still reported that way.
+  printf 'window=sess:fm-sig-nm2\nkind=ship\nmode=no-mistakes\n' > "$state/sig-nm2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/sig-nm2.status"
+  seen_through "$state" "sig-nm2"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/sig-nm2.status" "$state")
+  case "$out" in
+    self\|signal\ already\ escalated*) ;;
+    *) fail "a delivered done is no longer reported as already escalated: $out" ;;
+  esac
+  pass "classify_signal calls a withheld linkless done routine and a delivered one already escalated"
+}
+
+test_classify_mixed_signal_filters_only_held_occurrences() {
+  local dir state verdict out
+  local FM_DONE_GUARD_REMINDER_MAX=1
+  for verdict in held spent; do
+    dir=$(make_supercase "signal-mixed-$verdict"); state="$dir/state"
+    printf 'kind=ship\nmode=no-mistakes\n' > "$state/a.meta"
+    printf 'done: mixed signal local tests pass\n\n' > "$state/a.status"
+    printf 'blocked: another task needs help\n' > "$state/b.status"
+    if [ "$verdict" = spent ]; then
+      status_span_has_actionable "$state/a.status" 0 \
+        && fail "the setup did not spend a reminder"
+      status_done_guard_holds "$state/a.status" || fail "the setup did not hold the first occurrence"
+      printf 'working: retrying\ndone: mixed signal local tests pass\n' >> "$state/a.status"
+    fi
+    out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/a.status $state/b.status" "$state")
+    case "$out" in escalate\|*) ;; *) fail "the mixed signal failed to escalate: $out" ;; esac
+    assert_contains "$out" 'blocked: another task needs help' "the actionable task was omitted"
+    if [ "$verdict" = held ]; then
+      status_done_guard_holds "$state/a.status" || fail "the classifier never held task a"
+      assert_not_contains "$out" 'done: mixed signal local tests pass' "a held occurrence leaked into the digest"
+    else
+      assert_contains "$out" 'done: mixed signal local tests pass' "the exhausted occurrence was omitted"
+    fi
+    seen_through "$state" a
+    out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/a.status $state/b.status" "$state")
+    assert_contains "$out" 'blocked: another task needs help' "the other task disappeared on replay"
+    if [ "$verdict" = held ]; then
+      assert_not_contains "$out" 'done: mixed signal local tests pass' "a held occurrence leaked through the seen-cursor fallback"
+    else
+      assert_contains "$out" 'done: mixed signal local tests pass' "the fallback hid an exhausted occurrence"
+    fi
+  done
+  pass "mixed daemon signals suppress only the held occurrence and preserve other actionable events"
+}
+
 test_classify_stale_dedup_against_signal() {
   # If the signal path already escalated a status (seen marker matches),
   # classify_stale must self-handle to avoid a duplicate in the digest.
@@ -1832,6 +1897,72 @@ test_afk_genuine_done_still_terminal_stale() {
   out=$(classify_check "check: /s/t.check.sh: merged")
   case "$out" in escalate\|*) ;; *) fail "validated merge-check did not escalate: $out" ;; esac
   pass "genuine done: and merge-check events still escalate"
+}
+
+# The done contract guard is the one predicate every finish reader asks. A
+# `done:` with no pull-request link on a PR-delivery task is not a finish, so an
+# idle pane behind one must not read as terminal-and-already-escalated: the
+# classifier withheld that line and escalated nothing, and the caller has to keep
+# aging the pane toward a wedge.
+test_classify_stale_withheld_done_is_not_terminal() {
+  local dir state out
+  dir=$(make_supercase stale-withheld-done)
+  state="$dir/state"
+  printf 'window=sess:fm-nm-w1\nkind=ship\nmode=no-mistakes\n' > "$state/nm-w1.meta"
+  printf 'done: local tests pass\n' > "$state/nm-w1.status"
+  seen_through "$state" "nm-w1"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-nm-w1" "$state")
+  case "$out" in
+    self\|*transient*) ;;
+    *) fail "a withheld linkless done took the terminal stale path: $out" ;;
+  esac
+
+  # The divergence: the same fixture whose done carries its PR link is a real
+  # finish and still takes the terminal arm.
+  printf 'window=sess:fm-nm-w2\nkind=ship\nmode=no-mistakes\n' > "$state/nm-w2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/nm-w2.status"
+  seen_through "$state" "nm-w2"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-nm-w2" "$state")
+  case "$out" in
+    self\|*terminal*) ;;
+    *) fail "a delivered done no longer takes the terminal stale path: $out" ;;
+  esac
+  pass "classify_stale reads a withheld linkless done as non-terminal and a delivered one as terminal"
+}
+
+# The wedge-aging gate itself, driven through handle_wake rather than the
+# classifier it calls: an idle pane behind a `done:` the delivery contract
+# withholds must KEEP aging toward a wedge, because that aging is the guard's
+# second bounded escalation path. Clearing the marker there would silently mute
+# the pane, since the withheld line wakes nobody by itself.
+test_handle_wake_withheld_done_keeps_wedge_aging() {
+  local dir state key win
+  dir=$(make_supercase handle-withheld-done)
+  state="$dir/state"
+
+  win="sess:fm-nm-w1"
+  printf 'window=%s\nkind=ship\nmode=no-mistakes\n' "$win" > "$state/nm-w1.meta"
+  printf 'done: local tests pass\n' > "$state/nm-w1.status"
+  seen_through "$state" "nm-w1"
+  key=$(printf '%s' "nm-w1" | tr ':/.' '___')
+  FM_ESCALATE_BATCH_SECS=999 FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "an idle pane behind a withheld done stopped aging toward a wedge"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a withheld done escalated to firstmate on the wake itself"
+
+  # The divergence: the same fixture whose done carries its PR link is a real
+  # finish, so its wedge marker is still cleared exactly as before.
+  win="sess:fm-nm-w2"
+  printf 'window=%s\nkind=ship\nmode=no-mistakes\n' "$win" > "$state/nm-w2.meta"
+  printf 'done: PR https://github.com/o/r/pull/12 checks green\n' > "$state/nm-w2.status"
+  seen_through "$state" "nm-w2"
+  key=$(printf '%s' "nm-w2" | tr ':/.' '___')
+  date +%s > "$state/.subsuper-stale-$key"
+  FM_ESCALATE_BATCH_SECS=999 FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a delivered done no longer clears the wedge marker"
+  pass "handle_wake keeps wedge aging behind a withheld done and clears it for a delivered one"
 }
 
 test_pane_input_pending_bordered_idle_not_pending() {
@@ -2690,9 +2821,13 @@ test_transient_unreadable_signal_recovers_without_advancing
 test_permission_recovery_reclassifies_catchall_status
 test_permanent_classification_failure_is_reported_and_acknowledged
 test_catchall_scan_surfaces_a_masked_event
+test_classify_signal_withheld_done_is_not_already_escalated
+test_classify_mixed_signal_filters_only_held_occurrences
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale
+test_classify_stale_withheld_done_is_not_terminal
+test_handle_wake_withheld_done_keeps_wedge_aging
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending
 test_submit_ack_confirms_on_bordered_empty_composer

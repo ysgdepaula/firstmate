@@ -900,7 +900,10 @@ EOF
     "harness=claude" "kind=ship" "mode=no-mistakes"
   record_claude_state "$mate/state" "done" idle
   record_claude_state "$mate/state" failed idle
-  printf 'done: complete\n' > "$mate/state/done.status"
+  # A no-mistakes done must carry its PR link, or the delivery-contract guard
+  # holds it as working and this row would never read as terminal at all.
+  printf 'done: PR https://github.com/acme/sample/pull/7 checks green\n' \
+    > "$mate/state/done.status"
   printf 'failed: stopped\n' > "$mate/state/failed.status"
   rm "$mate/state/parked.meta" "$mate/state/parked.status"
   refresh_local_secondmate_ledgers "$home"

@@ -433,7 +433,15 @@ origin_open_decisions() {  # <origin-id>
     last=$(last_status_line "$status_file")
     verb=$(status_line_verb "$last")
     case "$verb" in
-      done|failed) return 0 ;;
+      done|failed)
+        # A `done:` its delivery contract withholds is not a finish, so it cannot
+        # retire the captain's still-open decisions either. The shared classifier
+        # is reporting that task as working and steering its worker back to the
+        # contract; dropping an unresolved needs-decision behind such a line
+        # would lose a call the captain is still owed, on the word of a line
+        # nothing else in the fleet reads as a finish.
+        status_done_contract_unmet "$status_file" "$last" || return 0
+        ;;
     esac
   fi
   printf '%s' "$open"

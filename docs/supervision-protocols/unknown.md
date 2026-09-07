@@ -11,3 +11,5 @@ Never use shell `&` for watcher supervision.
 Failure or missing cycle only: inspect the failure and restore the same verified wait shape.
 
 Record new verification evidence before promoting an unknown harness to a named snippet.
+
+Mixed-signal digests and drain annotations follow the shared occurrence-based done guard in `bin/fm-classify-lib.sh`.

@@ -37,3 +37,5 @@ After any forced continuation, arm the watcher with the background protocol abov
 
 Interactive TUI primary sessions are the supported supervision host.
 Headless `grok -p` may wait for background process exit but does not reliably surface full auto-wake model output; do not run the primary firstmate as a one-shot headless process.
+
+Mixed-signal digests and drain annotations follow the shared occurrence-based done guard in `bin/fm-classify-lib.sh`.

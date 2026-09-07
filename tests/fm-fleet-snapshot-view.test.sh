@@ -1034,7 +1034,10 @@ EOF
     "kind=ship" \
     "mode=no-mistakes"
   record_claude_idle "$home/state" terminal-ship
-  printf 'done: complete\n' > "$home/state/terminal-ship.status"
+  # A no-mistakes done must carry its PR link, or the delivery-contract guard
+  # holds it as working and this fixture would never reach terminal at all.
+  printf 'done: PR https://github.com/acme/alpha/pull/7 checks green\n' \
+    > "$home/state/terminal-ship.status"
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary)
   printf '%s' "$out" | jq -e '
     .valid == false
