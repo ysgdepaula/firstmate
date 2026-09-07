@@ -66,7 +66,46 @@ test_missing_head_fails() {
   pass "shared action rejects an attestation with no head_sha"
 }
 
+test_body_refresh_recovers_event_check_without_changing_head() {
+  local event output rc
+  # Exercise the GitHub event JSON interface used when action PR inputs are empty.
+  python3 - "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PY'
+import json
+import pathlib
+import sys
+
+root, signature, steps, old, head = sys.argv[1:]
+for action, attested in (("synchronize", old), ("edited", head)):
+    attestation = json.dumps({"head_sha": attested, "steps": json.loads(steps)})
+    payload = {"action": action, "pull_request": {
+        "number": 3006, "head": {"sha": head, "ref": "regression"},
+        "user": {"login": "regression"},
+        "body": signature + "\n<!-- no-mistakes-pipeline-attestation:v1 " + attestation + " -->",
+    }}
+    pathlib.Path(root, action + ".json").write_text(json.dumps(payload), encoding="utf-8")
+PY
+  # A refreshed body passes in a new event; replaying the old event still fails.
+  for event in synchronize edited synchronize; do
+    rc=0
+    output=$(PR_BODY= PR_HEAD_SHA= PR_HEAD_REF= PR_AUTHOR= PR_NUMBER= \
+      NM_EXEMPT_AUTHORS= NM_EXEMPT_HEAD_BRANCHES= NM_EXEMPT_BOT_AUTHORS=false \
+      GITHUB_EVENT_PATH="$TMP_ROOT/$event.json" GITHUB_OUTPUT= \
+      python3 "$VERIFY" 2>&1) || rc=$?
+    if [ "$event" = edited ]; then
+      expect_code 0 "$rc" "refreshed event attestation did not recover the check"
+      assert_contains "$output" "Found structurally compliant pipeline step attestation." \
+        "refreshed event did not produce a compliant verdict"
+    else
+      expect_code 1 "$rc" "stale event passed without refreshing its attestation"
+      assert_contains "$output" "attestation.head_sha: $OLD_SHA" "stale attestation was not diagnosed"
+      assert_contains "$output" "PR head: $NEW_SHA" "event did not retain the actual PR head"
+    fi
+  done
+  pass "body refresh recovers the event check while stale event replay remains rejected"
+}
+
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
+test_body_refresh_recovers_event_check_without_changing_head
