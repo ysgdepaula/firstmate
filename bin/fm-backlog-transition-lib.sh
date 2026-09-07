@@ -237,6 +237,7 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
   if [ "$(fm_tasks_axi_backend "$root")" = markdown ]; then
     file=$(fm_backlog_file "$data")
     if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+      # shellcheck disable=SC2034 # Output global, read by fm-teardown.sh.
       FM_BACKLOG_TRANSITION_SKIP="this home keeps no backlog at $file"
       return 1
     fi
@@ -1095,6 +1096,7 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     elif [ "$cleanup_incomplete" = 1 ]; then
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
     else
+      # shellcheck disable=SC2034 # Output global, read by fm-bootstrap.sh.
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed
     fi
     return 0
