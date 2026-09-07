@@ -104,8 +104,52 @@ PY
   pass "body refresh recovers the event check while stale event replay remains rejected"
 }
 
+test_ci_fix_push_requires_refreshed_event_attestation() {
+  # Exercise the action's default GitHub event input and GITHUB_OUTPUT contract.
+  # A CI auto-fix advances the head before the publisher refreshes the PR body.
+  python3 - "$VERIFY" "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PY' \
+    || fail "CI-fix publication sequence violated the commit-bound attestation contract"
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+verifier, root, signature, steps, old, new = sys.argv[1:]
+event = Path(root) / "pull_request.json"
+output = Path(root) / "action-output"
+env = {key: value for key, value in os.environ.items()
+       if not key.startswith(("PR_", "NM_EXEMPT_"))}
+env.update(GITHUB_EVENT_PATH=str(event), GITHUB_OUTPUT=str(output))
+for label, head, attested, expected in (
+    ("initial publication", old, old, 0),
+    ("CI-fix push with stale body", new, old, 1),
+    ("publisher refresh after CI fix", new, new, 0),
+):
+    body = signature + "\n<!-- no-mistakes-pipeline-attestation:v1 " + json.dumps({
+        "head_sha": attested, "steps": json.loads(steps),
+    }) + " -->"
+    event.write_text(json.dumps({"action": "synchronize" if head != attested else "edited",
+                                "pull_request": {"number": 4, "body": body,
+                                                 "head": {"sha": head},
+                                                 "user": {"login": "regression"}}}),
+                     encoding="utf-8")
+    output.write_text("", encoding="utf-8")
+    result = subprocess.run([sys.executable, verifier], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == expected, (label, result.stdout, result.stderr)
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["compliant"] == ("true" if expected == 0 else "false"), (label, fields)
+    assert fields["exempt"] == "false", (label, fields)
+    if expected:
+        assert old in result.stderr and new in result.stderr, result.stderr
+PY
+  pass "CI-fix push fails until the event carries a refreshed head-bound attestation"
+}
+
 fetch_shared_verifier
 test_matching_head_and_completed_steps_pass
 test_mismatched_head_fails_with_both_shas
 test_missing_head_fails
 test_body_refresh_recovers_event_check_without_changing_head
+test_ci_fix_push_requires_refreshed_event_attestation
