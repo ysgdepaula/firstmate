@@ -1764,7 +1764,7 @@ status_task_delivery_mode() {  # <status-file>
 # An unaddressable-but-real PR is a merge-tooling problem, reported where the
 # merge tooling owns it, never a reason to call a delivered done a false one.
 status_line_has_pr_link() {  # <status-line>
-  local line=$1 word
+  local line=$1 word number
   case "$line" in *https://*) ;; *) return 1 ;; esac
   while IFS= read -r word; do
     # A wrapper or sentence punctuation on either side is prose, not part of the
@@ -1786,10 +1786,15 @@ status_line_has_pr_link() {  # <status-line>
         *) break ;;
       esac
     done
+    word=${word%%[?#]*}
     case "$word" in
-      https://?*/?*/pull/[1-9]|https://?*/?*/pull/[1-9][0-9]*|https://?*/?*/pull/[1-9][!0-9]*) return 0 ;;
-      https://?*/?*/-/merge_requests/[1-9]|https://?*/?*/-/merge_requests/[1-9][0-9]*|https://?*/?*/-/merge_requests/[1-9][!0-9]*) return 0 ;;
+      https://?*/?*/pull/*) number=${word##*/pull/} ;;
+      https://?*/?*/-/merge_requests/*) number=${word##*/-/merge_requests/} ;;
+      *) continue ;;
     esac
+    number=${number%%[/?#]*}
+    case "$number" in ''|0*|*[!0-9]*) continue ;; esac
+    return 0
   done <<EOF
 $(printf '%s' "$line" | tr '[:space:]' '\n')
 EOF
@@ -1815,7 +1820,7 @@ status_done_contract_unmet() {  # <status-file> <status-line> [delivery-mode]
 }
 
 # The task's reminder-budget record, alongside its status log the same way the
-# open-decisions cursor is:
+# open-decisions cursor is, with append-only rows and the latest row current:
 # "<reminders spent><TAB><log length when reminded><TAB><line reminded for>".
 # The length is what tells ONE append apart from a LATER append of the same text.
 # Keyed on the text alone, a worker that acknowledged its reminder and then wrote
@@ -1834,19 +1839,21 @@ _fm_done_guard_path() {  # <status-file>
 # budget, which spends a reminder rather than losing one - and a record left
 # behind in the earlier two-field shape reads that way too, because its second
 # field is a status line rather than a length.
-_fm_done_guard_read() {  # <status-file>
+_fm_done_guard_read() {  # <status-file> [endpoint]
   local guard count='' pos='' line=''
   FM_DONE_GUARD_COUNT=0
   FM_DONE_GUARD_POSITION=''
   FM_DONE_GUARD_LINE=''
   guard=$(_fm_done_guard_path "$1")
   [ -f "$guard" ] && [ -r "$guard" ] && [ ! -L "$guard" ] || return 0
-  IFS=$(printf '\t') read -r count pos line < "$guard" 2>/dev/null || return 0
-  case "$count" in ''|*[!0-9]*) return 0 ;; esac
-  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
-  FM_DONE_GUARD_COUNT=$count
-  FM_DONE_GUARD_POSITION=$pos
-  FM_DONE_GUARD_LINE=$line
+  while IFS=$(printf '\t') read -r count pos line; do
+    case "$count" in ''|*[!0-9]*) continue ;; esac
+    case "$pos" in ''|*[!0-9]*) continue ;; esac
+    [ "$#" -lt 2 ] || [ "$pos" = "$2" ] || continue
+    FM_DONE_GUARD_COUNT=$count
+    FM_DONE_GUARD_POSITION=$pos
+    FM_DONE_GUARD_LINE=$line
+  done < "$guard"
 }
 
 # The status log's current length: the position component of the record above.
@@ -1881,7 +1888,8 @@ status_line_is_newest() {  # <status-file> <status-line> [newest-line]
 }
 
 # The supersession marker for one linkless done, alongside its status log the way
-# the budget record is: "<log length when superseded><TAB><that log's identity><TAB><line superseded>".
+# the budget record is, with append-only rows and the latest row current:
+# "<log length when superseded><TAB><that log's identity><TAB><line superseded>".
 # Keyed on log position as well as text for the same reason the budget record is:
 # a LATER append of the same text is a new line this marker does not cover, so
 # the guard still judges it on its own. The identity field is what the reader
@@ -1902,7 +1910,8 @@ status_done_guard_supersede() {  # <status-file> <status-line>
   [ -n "$line" ] || return 1
   pos=$(_fm_done_guard_position "$f") || return 1
   ident=$(_fm_open_decisions_file_ident "$f") || return 1
-  printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" > "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
+  status_done_guard_superseded "$f" "$line" && return 0
+  printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" >> "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
 }
 
 # Read the marker into FM_DONE_SUPERSEDED_POSITION / _LINE, leaving both empty
@@ -1913,19 +1922,21 @@ status_done_guard_supersede() {  # <status-file> <status-line>
 # successor: a relaunch writes a new status log, so the recorded identity no
 # longer matches and the marker reads as absent - the teardown sweep is the
 # second line of defence, not the only one.
-_fm_done_guard_superseded_read() {  # <status-file>
+_fm_done_guard_superseded_read() {  # <status-file> [endpoint]
   local f=$1 marker pos='' ident='' line='' current
   FM_DONE_SUPERSEDED_POSITION=''
   FM_DONE_SUPERSEDED_LINE=''
   marker=$(_fm_done_guard_superseded_path "$f")
   [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 0
-  IFS=$(printf '\t') read -r pos ident line < "$marker" 2>/dev/null || return 0
-  case "$pos" in ''|*[!0-9]*) return 0 ;; esac
-  [ -n "$ident" ] && [ -n "$line" ] || return 0
   current=$(_fm_open_decisions_file_ident "$f") || return 0
-  [ "$ident" = "$current" ] || return 0
-  FM_DONE_SUPERSEDED_POSITION=$pos
-  FM_DONE_SUPERSEDED_LINE=$line
+  while IFS=$(printf '\t') read -r pos ident line; do
+    case "$pos" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$ident" ] && [ -n "$line" ] || continue
+    [ "$ident" = "$current" ] || continue
+    [ "$#" -lt 2 ] || [ "$pos" = "$2" ] || continue
+    FM_DONE_SUPERSEDED_POSITION=$pos
+    FM_DONE_SUPERSEDED_LINE=$line
+  done < "$marker"
 }
 
 # 0 when this exact line, at this exact log length, is one such published outcome
@@ -1950,16 +1961,9 @@ status_done_guard_superseded() {  # <status-file> <status-line>
 # first time already non-newest, and that first sight is exactly the case this
 # refuses to swallow. Three witnesses, each stating exactly what it proves about
 # THIS line and nothing broader:
-#   - the reminder budget names this exact text. Only status_done_guard_defer
-#     writes that record, and only after enqueueing a reminder quoting that
-#     sentence, so the worker provably holds an instruction about this sentence
-#     and the inbox re-ring ladder is running for it. It proves the SENTENCE was
-#     steered, not that this occurrence of it was: a later append of the same
-#     text is judged on its own at its own position, by the newest-line branch.
-#   - a published run-step outcome superseded this exact text. Only
-#     bin/fm-inactive-reconcile.sh writes that marker, and only after publishing
-#     an outcome recording that line, so firstmate provably saw it; the marker is
-#     identity-bound to this log. Same sentence-not-occurrence scope as above.
+#   - the reminder budget names this exact text at this occurrence's byte endpoint.
+#   - a published run-step outcome superseded this exact text at this occurrence's
+#     byte endpoint, with the marker identity-bound to this log.
 #   - the log's newest line is a done that SATISFIES the contract. This one
 #     proves the line is MOOT rather than judged: the task delivered afterwards,
 #     that delivery is itself presented as the actionable event of this very
@@ -1969,15 +1973,15 @@ status_done_guard_superseded() {  # <status-file> <status-line>
 # only a log's LAST non-blank line and then commits at that line's endpoint
 # (bin/fm-wake-drain.sh owns that), so its cursor reaching the log's end proves
 # the last line was presented and says nothing about any line before it.
-status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> [delivery-mode]
-  local f=$1 line=$2 newest=$3
-  _fm_done_guard_read "$f"
-  [ "$FM_DONE_GUARD_LINE" = "$line" ] && return 0
-  _fm_done_guard_superseded_read "$f"
-  [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && return 0
+status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-line> <endpoint> [delivery-mode]
+  local f=$1 line=$2 newest=$3 endpoint=$4
+  _fm_done_guard_read "$f" "$endpoint"
+  [ "$FM_DONE_GUARD_LINE" = "$line" ] && [ "$FM_DONE_GUARD_POSITION" = "$endpoint" ] && return 0
+  _fm_done_guard_superseded_read "$f" "$endpoint"
+  [ "$FM_DONE_SUPERSEDED_LINE" = "$line" ] && [ "$FM_DONE_SUPERSEDED_POSITION" = "$endpoint" ] && return 0
   [ "$(status_line_verb "$newest")" = 'done' ] || return 1
-  if [ "$#" -ge 4 ]; then
-    status_done_contract_unmet "$f" "$newest" "$4" && return 1
+  if [ "$#" -ge 5 ]; then
+    status_done_contract_unmet "$f" "$newest" "$5" && return 1
   else
     status_done_contract_unmet "$f" "$newest" && return 1
   fi
@@ -2106,14 +2110,14 @@ status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delive
     ' _ "$_FM_CLASSIFY_LIB_DIR" "$state" "$id" "$text" || return 1
   fi
   guard=$(_fm_done_guard_path "$f")
-  printf '%s\t%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$pos" "$line" > "$guard" 2>/dev/null || return 1
+  printf '%s\t%s\t%s\n' "$((FM_DONE_GUARD_COUNT + 1))" "$pos" "$line" >> "$guard" 2>/dev/null || return 1
   return 0
 }
 
 status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file full_file prefix_file result
   local line verb key origins='' folded=0 rc=1 failed=0 prefix_lines=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
-  local guard_read=0 guard_newest='' guard_mode=''
+  local guard_read=0 guard_newest='' guard_mode='' guard_last_line=0 endpoint LC_ALL=C
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
   ident=$(_fm_open_decisions_file_ident "$f") || return 2
@@ -2140,7 +2144,10 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
     rm -f "$chunk_file" "$full_file" "$prefix_file"; return 2;
   }
   [ "$cur_ident" = "$ident" ] || { rm -f "$chunk_file" "$full_file" "$prefix_file"; return 2; }
+  endpoint=$start
   while IFS= read -r line || [ -n "$line" ]; do
+    endpoint=$((endpoint + ${#line} + 1))
+    [ "$endpoint" -le "$size" ] || endpoint=$size
     line_number=$((line_number + 1))
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     if status_is_captain_held "$line"; then
@@ -2204,18 +2211,19 @@ EOF
           # however many done: lines it walks. Read on first need, because a span
           # carrying none must not pay for either.
           if [ "$guard_read" -eq 0 ]; then
+            guard_last_line=$(awk '/[^[:space:]]/ { last=NR } END { print last+0 }' "$chunk_file")
             guard_newest=$(last_status_line "$f")
             guard_mode=$(status_task_delivery_mode "$f")
             guard_read=1
           fi
-          if status_line_is_newest "$f" "$line" "$guard_newest"; then
+          if [ "$line_number" -eq "$guard_last_line" ] && status_line_is_newest "$f" "$line" "$guard_newest"; then
             if status_done_contract_unmet "$f" "$line" "$guard_mode"; then
               status_done_guard_defer "$f" "$line" "$guard_newest" "$guard_mode" && continue
             else
               status_done_guard_clear "$f" "$line" "$guard_newest"
             fi
           elif status_done_contract_unmet "$f" "$line" "$guard_mode" \
-            && status_done_guard_line_was_judged "$f" "$line" "$guard_newest" "$guard_mode"; then
+            && status_done_guard_line_was_judged "$f" "$line" "$guard_newest" "$endpoint" "$guard_mode"; then
             # A linkless done the task has already moved past, and PROVABLY judged
             # when it was the current line - withheld and steered, superseded, or
             # handed to firstmate once the budget was spent. Replaying it now can

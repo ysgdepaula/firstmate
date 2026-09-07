@@ -170,6 +170,17 @@ test_pr_link_detection() {
     && fail "a non-numeric pull-request id was read as a PR link"
   status_line_has_pr_link "done: see https://github.com/o/r/pull/0/files" \
     && fail "a malformed pull-request number with a suffix was read as a PR link"
+  local spelling suffix
+  for spelling in pull -/merge_requests; do
+    for suffix in 7oops 12oops 7oops/files '12oops?w=1' '12oops#comment' '12oops?next=/pull/7' 7-1 7.1; do
+      status_line_has_pr_link "done: PR https://git.corp.example/team/svc/$spelling/$suffix" \
+        && fail "a malformed request number was accepted: $spelling/$suffix"
+    done
+    for suffix in '12/files' '12?w=1' '12#comment' '12?next=/pull/invalid'; do
+      status_line_has_pr_link "done: PR https://git.corp.example/team/svc/$spelling/$suffix" \
+        || fail "a browser suffix was rejected: $spelling/$suffix"
+    done
+  done
   pass "the PR link test accepts a delivered pull request on any host and nothing else"
 }
 
@@ -269,6 +280,12 @@ test_a_superseded_done_is_no_longer_steered() {
     && fail "a re-appended linkless done was presented instead of withheld"
   [ "$(inbox_records "$state" t)" = 1 ] \
     || fail "a linkless done re-appended past its supersession was not steered again"
+  status_done_guard_supersede "$state/t.status" 'done: implemented the parser' \
+    || fail "the second occurrence could not be superseded"
+  status_span_has_actionable "$state/t.status" 0 \
+    && fail "the second supersession lost evidence for the first occurrence"
+  [ "$(inbox_records "$state" t)" = 1 ] \
+    || fail "re-reading two superseded occurrences enqueued another reminder"
   pass "a published run-step outcome supersedes exactly the prose line it answered"
 }
 
@@ -554,6 +571,65 @@ test_a_first_sight_non_newest_linkless_done_is_not_swallowed() {
   pass "a linkless done is dropped only once it is provably judged, never on first sight"
 }
 
+test_historical_witnesses_cover_only_the_judged_occurrence() {
+  local dir state witness handled oldest start event
+  local done_line='done: tests locaux validés'
+  dir="$TMP_ROOT/occurrence-witness"; state="$dir/state"; mkdir -p "$state"
+  for witness in reminder supersession; do
+    make_task "$state" "$witness" no-mistakes 'working: préparation' "$done_line"
+    start=$(wc -c < "$state/$witness.status" | tr -d '[:space:]')
+    if [ "$witness" = reminder ]; then
+      status_span_has_actionable "$state/$witness.status" 0 \
+        && fail "the first occurrence was presented instead of steered"
+      status_span_has_actionable "$state/$witness.status" 0 \
+        && fail "a second cursor presented the same occurrence"
+      [ "$(inbox_records "$state" "$witness")" = 1 ] \
+        || fail "two cursors did not enqueue exactly one reminder"
+      handled=$(fm_task_inbox_handled_dir "$state" "$witness")
+      mkdir -p "$handled"
+      oldest=$(fm_task_inbox_oldest_unhandled "$state" "$witness") \
+        || fail "the first reminder was not tracked"
+      mv "$oldest" "$handled/" || fail "the first reminder could not be acknowledged"
+      [ "$(fm_task_inbox_due_action "$state" "$witness")" = quiet ] \
+        || fail "the acknowledged reminder was still escalating"
+    else
+      status_done_guard_supersede "$state/$witness.status" "$done_line" \
+        || fail "the first occurrence could not be superseded"
+    fi
+    printf 'working: continuing\n' >> "$state/$witness.status"
+    status_span_has_actionable "$state/$witness.status" 0 \
+      && fail "the $witness witness did not suppress its own historical occurrence"
+    printf '%s\nworking: continuing again\n' "$done_line" >> "$state/$witness.status"
+    event=$(status_span_first_actionable "$state/$witness.status" "$start") \
+      || fail "the $witness witness swallowed an unseen identical occurrence"
+    [ "$event" = "$done_line" ] \
+      || fail "the later occurrence was not presented verbatim: $event"
+    event=$(status_span_first_actionable "$state/$witness.status" 0) \
+      || fail "a whole-log read swallowed the unseen occurrence"
+    [ "$event" = "$done_line" ] \
+      || fail "a whole-log read did not distinguish the two occurrences: $event"
+    [ "$(inbox_records "$state" "$witness")" = 0 ] \
+      || fail "the historical occurrence incorrectly steered the worker"
+  done
+  pass "reminder and supersession witnesses suppress only their own byte occurrence"
+}
+
+test_identical_history_is_not_the_newest_occurrence() {
+  local dir state event
+  dir="$TMP_ROOT/identical-current"; state="$dir/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes \
+    'done: local tests pass' 'working: retrying' 'done: local tests pass' ''
+  event=$(status_span_first_actionable "$state/t.status" 0) \
+    || fail "the unseen historical occurrence was treated as the newest done"
+  [ "$event" = 'done: local tests pass' ] \
+    || fail "the historical occurrence was not presented exactly once: $event"
+  [ "$(inbox_records "$state" t)" = 1 ] \
+    || fail "the newest occurrence did not enqueue exactly one reminder"
+  status_done_guard_holds "$state/t.status" \
+    || fail "the newest occurrence did not retain its hold"
+  pass "identical history is presented while only the newest occurrence is steered"
+}
+
 test_a_historical_delivered_done_does_not_release_a_live_hold() {
   local dir state
   dir="$TMP_ROOT/historical-clear"; state="$dir/state"; mkdir -p "$state"
@@ -817,6 +893,8 @@ test_unsteerable_worker_is_presented
 test_guard_steers_without_the_inbox_library_preloaded
 test_guard_ignores_historical_done_lines
 test_a_first_sight_non_newest_linkless_done_is_not_swallowed
+test_historical_witnesses_cover_only_the_judged_occurrence
+test_identical_history_is_not_the_newest_occurrence
 test_a_historical_delivered_done_does_not_release_a_live_hold
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one
 test_a_done_the_backstop_jumped_past_is_not_swallowed
