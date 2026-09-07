@@ -1667,12 +1667,15 @@ _fm_status_open_decision_origins() {  # <status-file>
 # working. That reminder write and the budget record below are this library's
 # SIXTH documented exception to the pure-read contract in the file header.
 #
-# Firstmate is woken only when the reminder does not take, along two independent
-# bounded paths:
+# After a successful steer, an unheeded reminder reaches firstmate along two
+# independent bounded paths:
 #   - the reminder is an ORDINARY inbox record, so the watcher's existing re-ring
-#     ladder escalates it as a stale wake once the worker has left it
-#     unacknowledged for FM_TASK_INBOX_GRACE_SECS * (FM_TASK_INBOX_RING_MAX + 1),
-#     about six minutes on the defaults (bin/fm-task-inbox-lib.sh owns the ladder);
+#     ladder escalates it as a stale wake on the poll after its final delivery
+#     attempt, without another grace period. For the oldest pending record on an
+#     available idle endpoint, the default three attempts spaced 90 seconds apart
+#     take about four and a half minutes from enqueue, plus polling delays.
+#     Busy panes and older pending records delay this schedule; dead or missing
+#     endpoints bypass the attempts (bin/fm-task-inbox-lib.sh owns the ladder);
 #   - the guard spends at most FM_DONE_GUARD_REMINDER_MAX reminders per task, so a
 #     worker that keeps re-reporting a linkless done has its next such line
 #     presented to firstmate unchanged instead of absorbed again. Re-reporting is
@@ -1680,9 +1683,9 @@ _fm_status_open_decision_origins() {  # <status-file>
 #     and then wrote the byte-identical done again has written a NEW line, so it
 #     is steered again and spends budget, while one append re-read by a second
 #     cursor is not (status_done_guard_defer owns how the two are told apart).
-# An inbox that cannot be written, or a budget that cannot be persisted, also
-# presents the line: the guard withholds a captain event only when it has provably
-# steered the worker in its place.
+# Failure to acquire the guard lock, complete the locked operation, write the
+# inbox, or persist the budget leaves the line presentable: the guard withholds
+# a captain event only when it has provably steered the worker in its place.
 #
 # local-only is deliberately out of scope. It has no pull request, its own
 # terminal form is unchanged, and nothing here reads or writes its state. A task
@@ -1943,6 +1946,9 @@ status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-lin
   return 0
 }
 
+# Reminder decisions and active-budget resets serialize on the same task lock.
+# Acquisition and the locked operation each have a ten-second bound, so a stuck
+# writer cannot indefinitely prevent another reader from presenting its event.
 _fm_done_guard_with_lock() (
   local lock
   if ! command -v fm_lock_acquire_wait_bounded >/dev/null 2>&1; then
