@@ -145,6 +145,7 @@ Two witnesses warrant it - the reminder budget names that exact sentence at its 
 A presentation cursor is not among them, since the recovery backstop shows only a log's last line and then commits past every earlier one it never showed; a line no witness covers is presented rather than swallowed, which is the safe direction and the behaviour that preceded the guard.
 The recovery backstop compares captured event bytes and endpoints against witnesses; uncaptured hold checks use the bounded latest-event reader and skip status reads when no witness exists.
 Occurrence witnesses survive later valid completions, which reset only the active reminder budget; teardown retires the budget record.
+Reminder decisions and budget resets share a per-task lock, with at most ten seconds to acquire it and ten seconds for the locked operation; failure to acquire ownership or persist the budget leaves the line presentable.
 Mixed-signal digests and drain annotations apply the same occurrence-specific suppression while preserving other actionable events and budget-exhausted dones.
 It counts re-reporting by append rather than by text, so one append re-read by a second cursor never spends a second reminder while a worker that acknowledges its reminder and then writes the byte-identical done again is steered again and still reaches its bound.
 Its link test is a deliberate shape test rather than the forge validation that owns a recorded pull-request URL, because a pull request the fleet's merge polling cannot address is still a delivered pull request.

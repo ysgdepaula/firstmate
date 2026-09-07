@@ -1943,10 +1943,28 @@ status_done_guard_line_was_judged() {  # <status-file> <status-line> <newest-lin
   return 0
 }
 
+_fm_done_guard_with_lock() (
+  local lock
+  if ! command -v fm_lock_acquire_wait_bounded >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    FM_STATE_OVERRIDE=$(dirname "$2") . "$_FM_CLASSIFY_LIB_DIR/fm-wake-lib.sh" || return 1
+  fi
+  _fm_wake_require_timeout || return 1
+  lock="$(_fm_done_guard_path "$2").lock"
+  fm_lock_acquire_wait_bounded "$lock" 10 || return 1
+  trap 'fm_lock_release "$lock"' EXIT
+  trap 'exit 1' HUP INT TERM
+  fm_run_bash_timeout 10 "$@"
+)
+
 # Reset the active budget once the contract is satisfied, retaining history until
 # teardown. Scoped to the newest line for the reason above: a replayed historical done that carried its link must not
 # release a hold the task's current line still earns.
 status_done_guard_clear() {  # <status-file> <status-line> [newest-line] [endpoint]
+  _fm_done_guard_with_lock _fm_done_guard_clear_locked "$@"
+}
+
+_fm_done_guard_clear_locked() {
   local pos=${4:-}
   _fm_done_guard_read "$1"
   [ "$FM_DONE_GUARD_COUNT" -gt 0 ] || return 0
@@ -2002,6 +2020,10 @@ EOF
 # written, or a budget that could not be persisted.
 # NOT a pure read: this writes a steering-inbox record and the budget above.
 status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delivery-mode] [endpoint]
+  _fm_done_guard_with_lock _fm_done_guard_defer_locked "$@"
+}
+
+_fm_done_guard_defer_locked() {
   local f=$1 line=$2 state id guard mode text max pos=${5:-}
   # Current state only: a historical done replayed by a whole-log re-read is not
   # something to steer a worker about (status_line_is_newest owns why). Both this
@@ -2016,14 +2038,16 @@ status_done_guard_defer() {  # <status-file> <status-line> [newest-line] [delive
   state=$(dirname "$f")
   id=$(basename "$f")
   id=${id%.status}
-  _fm_done_guard_read "$f"
+  _fm_done_guard_read "$f" "$pos"
   # One append is classified by more than one cursor (the signal path and the
   # heartbeat backstop each keep their own), so a repeat of the exact line already
   # reminded for AT THE SAME OCCURRENCE ENDPOINT is absorbed without spending a second
   # reminder on it. A later append of the same text is a different line at a
   # different endpoint: the worker has already acknowledged the first reminder and
   # written the same false done again, so it is steered like any other new one.
-  [ "$FM_DONE_GUARD_LINE" = "$line" ] && [ "$FM_DONE_GUARD_POSITION" = "$pos" ] && return 0
+  [ "$FM_DONE_GUARD_COUNT" -gt 0 ] && [ "$FM_DONE_GUARD_LINE" = "$line" ] && [ "$FM_DONE_GUARD_POSITION" = "$pos" ] && return 0
+  _fm_done_guard_read "$f"
+  [ -z "$FM_DONE_GUARD_POSITION" ] || [ "$FM_DONE_GUARD_POSITION" -le "$pos" ] || return 1
   max=$(fm_done_guard_reminder_max)
   [ "$FM_DONE_GUARD_COUNT" -lt "$max" ] || return 1
   if [ "$#" -ge 4 ]; then mode=$4; else mode=$(status_task_delivery_mode "$f"); fi

@@ -386,6 +386,81 @@ test_one_line_never_spends_two_reminders() {
   pass "re-classifying one withheld line neither re-steers the worker nor spends more budget"
 }
 
+test_concurrent_classifications_charge_one_reminder() (
+  local state race first second i event
+  state="$TMP_ROOT/concurrent-guard/state"; race="$TMP_ROOT/concurrent-guard/race"
+  mkdir -p "$state" "$race"
+  make_task "$state" t no-mistakes 'done: local tests pass'
+  fm_lock_acquire_wait_bounded() {
+    [ "${GUARD_RACER:-}" != second ] || : > "$race/second-arrived"
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_acquire_wait_bounded "$@"
+  }
+  _fm_done_guard_read() {
+    . "$ROOT/bin/fm-classify-lib.sh"
+    _fm_done_guard_read "$@"
+    [ "${GUARD_RACER:-}" != second ] || : > "$race/second-arrived"
+  }
+  fm_task_inbox_write() {
+    if [ "${GUARD_RACER:-}" = first ]; then
+      : > "$race/first-enqueue"
+      while [ ! -e "$race/release" ]; do sleep 0.02; done
+    fi
+    . "$ROOT/bin/fm-task-inbox-lib.sh"
+    fm_task_inbox_write "$@"
+  }
+  GUARD_RACER=first status_span_has_actionable "$state/t.status" 0 > "$race/first.out" &
+  first=$!
+  i=0
+  while [ ! -e "$race/first-enqueue" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$race/first-enqueue" ] || fail "the first classifier never reached enqueue"
+  GUARD_RACER=second status_span_has_actionable "$state/t.status" 0 > "$race/second.out" &
+  second=$!
+  i=0
+  while [ ! -e "$race/second-arrived" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  : > "$race/release"
+  [ -e "$race/second-arrived" ] || fail "the second classifier never overlapped the first"
+  wait "$first" && fail "the first classifier presented the held done"
+  wait "$second" && fail "the second classifier presented the held done"
+  [ "$(inbox_records "$state" t)" = 1 ] || fail "racing cursors enqueued duplicate reminders"
+  _fm_done_guard_read "$state/t.status"
+  [ "$FM_DONE_GUARD_COUNT" = 1 ] || fail "racing cursors did not charge exactly one reminder"
+  [ "$(wc -l < "$state/.t.done-guard" | tr -d '[:space:]')" = 1 ] || fail "racing cursors wrote duplicate budget charges"
+  printf 'working: trying again\ndone: local tests pass\n' >> "$state/t.status"
+  status_span_has_actionable "$state/t.status" 0 && fail "a new occurrence was not held"
+  [ "$(inbox_records "$state" t)" = 2 ] || fail "a new occurrence did not receive its own reminder"
+  _fm_done_guard_read "$state/t.status"
+  [ "$FM_DONE_GUARD_COUNT" = 2 ] || fail "a new occurrence did not spend its own budget"
+  printf 'working: another retry\ndone: local tests pass\n' >> "$state/t.status"
+  event=$(status_span_first_actionable "$state/t.status" 0) || fail "the exhausted budget still withheld a new occurrence"
+  [ "$event" = 'done: local tests pass' ] || fail "the exhausted occurrence changed during presentation"
+  pass "racing classifications charge once while new occurrences spend their own reminders"
+)
+
+test_guard_lock_failure_preserves_presentation_and_budget() (
+  local state event
+  state="$TMP_ROOT/guard-lock-failure/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes 'done: local tests pass'
+  event=$(
+    fm_lock_acquire_wait_bounded() { return 1; }
+    status_span_first_actionable "$state/t.status" 0
+  ) || fail "lock failure swallowed the line"
+  [ "$event" = 'done: local tests pass' ] || fail "lock failure did not present the original line"
+  [ "$(inbox_records "$state" t)" = 0 ] || fail "lock failure still enqueued a reminder"
+  status_span_has_actionable "$state/t.status" 0 && fail "the available lock did not allow steering"
+  printf 'done: PR %s checks green\n' "$PR_URL" >> "$state/t.status"
+  (
+    fm_lock_acquire_wait_bounded() { return 1; }
+    status_done_guard_clear "$state/t.status" "done: PR $PR_URL checks green"
+  ) && fail "a budget reset succeeded without exclusive ownership"
+  _fm_done_guard_read "$state/t.status"
+  [ "$FM_DONE_GUARD_COUNT" = 1 ] || fail "a failed reset changed the budget"
+  status_done_guard_clear "$state/t.status" "done: PR $PR_URL checks green" || fail "the available lock did not allow a reset"
+  _fm_done_guard_read "$state/t.status"
+  [ "$FM_DONE_GUARD_COUNT" = 0 ] || fail "the locked reset did not clear the active budget"
+  pass "lock failures present original events and cannot reset the budget"
+)
+
 test_a_reappended_identical_done_is_steered_again() {
   local dir state handled oldest
   dir="$TMP_ROOT/reappended"; state="$dir/state"; mkdir -p "$state"
@@ -989,6 +1064,8 @@ test_unregistered_task_done_is_untouched
 test_unheeded_reminder_rides_the_inbox_escalation_ladder
 test_reminder_budget_is_bounded
 test_one_line_never_spends_two_reminders
+test_concurrent_classifications_charge_one_reminder
+test_guard_lock_failure_preserves_presentation_and_budget
 test_a_reappended_identical_done_is_steered_again
 test_unsteerable_worker_is_presented
 test_guard_steers_without_the_inbox_library_preloaded
