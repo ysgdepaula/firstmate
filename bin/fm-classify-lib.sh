@@ -1905,17 +1905,17 @@ status_done_guard_supersede() {  # <status-file> <status-line>
   printf '%s\t%s\t%s\n' "$pos" "$ident" "$line" > "$(_fm_done_guard_superseded_path "$f")" 2>/dev/null || return 1
 }
 
-# Read the marker into FM_DONE_SUPERSEDED_POSITION / _IDENT / _LINE, leaving all
-# three empty when there is none to read or it does not describe THIS log. The
-# identity check is what stops a marker left behind by an earlier task of the
-# same reused id from suppressing the guard for its successor: a relaunch writes
-# a new status log, so the recorded identity no longer matches and the marker
-# reads as absent - the teardown sweep is the second line of defence, not the
-# only one.
+# Read the marker into FM_DONE_SUPERSEDED_POSITION / _LINE, leaving both empty
+# when there is none to read or it does not describe THIS log. The recorded
+# identity is checked here and not published, because the callers below judge a
+# line by position and text alone. That check is what stops a marker left behind
+# by an earlier task of the same reused id from suppressing the guard for its
+# successor: a relaunch writes a new status log, so the recorded identity no
+# longer matches and the marker reads as absent - the teardown sweep is the
+# second line of defence, not the only one.
 _fm_done_guard_superseded_read() {  # <status-file>
   local f=$1 marker pos='' ident='' line='' current
   FM_DONE_SUPERSEDED_POSITION=''
-  FM_DONE_SUPERSEDED_IDENT=''
   FM_DONE_SUPERSEDED_LINE=''
   marker=$(_fm_done_guard_superseded_path "$f")
   [ -f "$marker" ] && [ -r "$marker" ] && [ ! -L "$marker" ] || return 0
@@ -1925,7 +1925,6 @@ _fm_done_guard_superseded_read() {  # <status-file>
   current=$(_fm_open_decisions_file_ident "$f") || return 0
   [ "$ident" = "$current" ] || return 0
   FM_DONE_SUPERSEDED_POSITION=$pos
-  FM_DONE_SUPERSEDED_IDENT=$ident
   FM_DONE_SUPERSEDED_LINE=$line
 }
 
