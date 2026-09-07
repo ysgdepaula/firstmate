@@ -311,7 +311,7 @@ print_status_outcome_backstop_section() {  # <task-and-endpoint-snapshot>
     # unmet: once its reminder budget is spent the guard deliberately hands such
     # a line to firstmate as a real event, and recovering a lost presentation of
     # that event is precisely this backstop's job.
-    status_done_guard_occurrence_held "$STATE/$task.status" "$event" "$event_endpoint" "$ident" && continue
+    status_done_guard_occurrence_held "$STATE/$task.status" "$event" "$event_endpoint" && continue
     verb=$(status_line_verb "$event")
     case "$verb" in
       needs-decision|blocked)

@@ -1353,7 +1353,7 @@ signal_done_guard_steered() {  # <file> ...
       *)            return 1 ;;
     esac
     [ -n "$task" ] || return 1
-    status_done_guard_steering "$STATE/$task.status" || return 1
+    status_done_guard_holds "$STATE/$task.status" || return 1
   done
   return 0
 }
@@ -2068,7 +2068,7 @@ EOF
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
-            if status_done_guard_steering "$STATE/$task.status"; then
+            if status_done_guard_holds "$STATE/$task.status"; then
               # A fourth absorb reason, checked before the costly state read
               # because it is one file read: the PR-delivery done contract guard
               # is holding this task's newest line and has already handed its

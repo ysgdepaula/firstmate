@@ -249,46 +249,6 @@ test_false_done_is_withheld_and_steered() {
   pass "a linkless done is withheld from presentation and the worker is steered with the exact contract"
 }
 
-# Inactive reconciliation may publish a terminal outcome for a held line when the
-# run-step verdict behind it carries the recorded pull request the contract asks
-# for (bin/fm-inactive-reconcile.sh owns that boundary). Publishing it ANSWERS the
-# prose line: the worker's pull request is green and reported, so the guard must
-# stop steering it about the sentence it wrote on the way there.
-test_a_superseded_done_is_no_longer_steered() {
-  local dir state
-  dir="$TMP_ROOT/superseded"; state="$dir/state"; mkdir -p "$state"
-  make_task "$state" t no-mistakes 'working: implementing' 'done: implemented the parser'
-  status_done_guard_supersede "$state/t.status" 'done: implemented the parser' \
-    || fail "the publishing path could not record the supersession"
-  status_span_has_actionable "$state/t.status" 0 \
-    && fail "a superseded done was presented to firstmate as an actionable event"
-  [ "$(inbox_records "$state" t)" = 0 ] \
-    || fail "a superseded done still steered the worker about its own sentence"
-
-  # The divergence: the identical fixture with nothing published is still steered,
-  # so the case above cannot pass merely because the guard stopped working.
-  make_task "$state" u no-mistakes 'working: implementing' 'done: implemented the parser'
-  status_span_has_actionable "$state/u.status" 0 \
-    && fail "an unpublished linkless done was presented instead of withheld"
-  [ "$(inbox_records "$state" u)" = 1 ] \
-    || fail "an unpublished linkless done was not steered"
-
-  # The marker is keyed on log position as well as text, so a LATER append of the
-  # same sentence is a new line it does not answer.
-  printf 'working: one more pass\ndone: implemented the parser\n' >> "$state/t.status"
-  status_span_has_actionable "$state/t.status" 0 \
-    && fail "a re-appended linkless done was presented instead of withheld"
-  [ "$(inbox_records "$state" t)" = 1 ] \
-    || fail "a linkless done re-appended past its supersession was not steered again"
-  status_done_guard_supersede "$state/t.status" 'done: implemented the parser' \
-    || fail "the second occurrence could not be superseded"
-  status_span_has_actionable "$state/t.status" 0 \
-    && fail "the second supersession lost evidence for the first occurrence"
-  [ "$(inbox_records "$state" t)" = 0 ] \
-    || fail "supersession left its occurrence's reminder pending"
-  pass "a published run-step outcome supersedes exactly the prose line it answered"
-}
-
 test_direct_pr_false_done_is_withheld() {
   local dir state
   dir="$TMP_ROOT/false-done-direct"; state="$dir/state"; mkdir -p "$state"
@@ -575,43 +535,37 @@ test_historical_witnesses_cover_only_the_judged_occurrence() {
   local dir state witness handled oldest start event
   local done_line='done: tests locaux validés'
   dir="$TMP_ROOT/occurrence-witness"; state="$dir/state"; mkdir -p "$state"
-  for witness in reminder supersession; do
-    make_task "$state" "$witness" no-mistakes 'working: préparation' "$done_line"
-    start=$(wc -c < "$state/$witness.status" | tr -d '[:space:]')
-    if [ "$witness" = reminder ]; then
-      status_span_has_actionable "$state/$witness.status" 0 \
-        && fail "the first occurrence was presented instead of steered"
-      status_span_has_actionable "$state/$witness.status" 0 \
-        && fail "a second cursor presented the same occurrence"
-      [ "$(inbox_records "$state" "$witness")" = 1 ] \
-        || fail "two cursors did not enqueue exactly one reminder"
-      handled=$(fm_task_inbox_handled_dir "$state" "$witness")
-      mkdir -p "$handled"
-      oldest=$(fm_task_inbox_oldest_unhandled "$state" "$witness") \
-        || fail "the first reminder was not tracked"
-      mv "$oldest" "$handled/" || fail "the first reminder could not be acknowledged"
-      [ "$(fm_task_inbox_due_action "$state" "$witness")" = quiet ] \
-        || fail "the acknowledged reminder was still escalating"
-    else
-      status_done_guard_supersede "$state/$witness.status" "$done_line" \
-        || fail "the first occurrence could not be superseded"
-    fi
-    printf 'working: continuing\n' >> "$state/$witness.status"
-    status_span_has_actionable "$state/$witness.status" 0 \
-      && fail "the $witness witness did not suppress its own historical occurrence"
-    printf '%s\nworking: continuing again\n' "$done_line" >> "$state/$witness.status"
-    event=$(status_span_first_actionable "$state/$witness.status" "$start") \
-      || fail "the $witness witness swallowed an unseen identical occurrence"
-    [ "$event" = "$done_line" ] \
-      || fail "the later occurrence was not presented verbatim: $event"
-    event=$(status_span_first_actionable "$state/$witness.status" 0) \
-      || fail "a whole-log read swallowed the unseen occurrence"
-    [ "$event" = "$done_line" ] \
-      || fail "a whole-log read did not distinguish the two occurrences: $event"
-    [ "$(inbox_records "$state" "$witness")" = 0 ] \
-      || fail "the historical occurrence incorrectly steered the worker"
-  done
-  pass "reminder and supersession witnesses suppress only their own byte occurrence"
+  witness=reminder
+  make_task "$state" "$witness" no-mistakes 'working: préparation' "$done_line"
+  start=$(wc -c < "$state/$witness.status" | tr -d '[:space:]')
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "the first occurrence was presented instead of steered"
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "a second cursor presented the same occurrence"
+  [ "$(inbox_records "$state" "$witness")" = 1 ] \
+    || fail "two cursors did not enqueue exactly one reminder"
+  handled=$(fm_task_inbox_handled_dir "$state" "$witness")
+  mkdir -p "$handled"
+  oldest=$(fm_task_inbox_oldest_unhandled "$state" "$witness") \
+    || fail "the first reminder was not tracked"
+  mv "$oldest" "$handled/" || fail "the first reminder could not be acknowledged"
+  [ "$(fm_task_inbox_due_action "$state" "$witness")" = quiet ] \
+    || fail "the acknowledged reminder was still escalating"
+  printf 'working: continuing\n' >> "$state/$witness.status"
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "the $witness witness did not suppress its own historical occurrence"
+  printf '%s\nworking: continuing again\n' "$done_line" >> "$state/$witness.status"
+  event=$(status_span_first_actionable "$state/$witness.status" "$start") \
+    || fail "the $witness witness swallowed an unseen identical occurrence"
+  [ "$event" = "$done_line" ] \
+    || fail "the later occurrence was not presented verbatim: $event"
+  event=$(status_span_first_actionable "$state/$witness.status" 0) \
+    || fail "a whole-log read swallowed the unseen occurrence"
+  [ "$event" = "$done_line" ] \
+    || fail "a whole-log read did not distinguish the two occurrences: $event"
+  [ "$(inbox_records "$state" "$witness")" = 0 ] \
+    || fail "the historical occurrence incorrectly steered the worker"
+  pass "reminder witnesses suppress only their own byte occurrence"
 }
 
 test_identical_history_is_not_the_newest_occurrence() {
@@ -633,31 +587,22 @@ test_identical_history_is_not_the_newest_occurrence() {
 test_witnesses_preserve_payload_tabs() {
   local dir state witness line=$'done:\tlocal tests pass\t' event i
   dir="$TMP_ROOT/payload-tabs"; state="$dir/state"; mkdir -p "$state"
-  for witness in reminder supersession; do
-    make_task "$state" "$witness" no-mistakes "$line"
-    if [ "$witness" = supersession ]; then
-      status_done_guard_supersede "$state/$witness.status" "$line" \
-        || fail "the tab-terminated occurrence could not be superseded"
-    fi
-    for i in 1 2 3; do
-      status_span_has_actionable "$state/$witness.status" 0 \
-        && fail "a re-read of the tab payload was presented on pass $i"
-      status_done_guard_holds "$state/$witness.status" "$line" \
-        || fail "the tab payload did not match its own witness"
-    done
-    if [ "$witness" = reminder ]; then
-      [ "$(inbox_records "$state" "$witness")" = 1 ] || fail "tab replays spent more than one reminder"
-    else
-      [ "$(inbox_records "$state" "$witness")" = 0 ] || fail "a superseded tab payload steered the worker"
-    fi
-    printf 'working: again\n' >> "$state/$witness.status"
+  witness=reminder
+  make_task "$state" "$witness" no-mistakes "$line"
+  for i in 1 2 3; do
     status_span_has_actionable "$state/$witness.status" 0 \
-      && fail "the historical tab payload lost its witness"
-    printf '%s\nworking: again\n' "$line" >> "$state/$witness.status"
-    event=$(status_span_first_actionable "$state/$witness.status" 0) \
-      || fail "a new identical tab payload was swallowed"
-    [ "$event" = "$line" ] || fail "the presented payload lost bytes"
+      && fail "a re-read of the tab payload was presented on pass $i"
+    status_done_guard_holds "$state/$witness.status" "$line" \
+      || fail "the tab payload did not match its own witness"
   done
+  [ "$(inbox_records "$state" "$witness")" = 1 ] || fail "tab replays spent more than one reminder"
+  printf 'working: again\n' >> "$state/$witness.status"
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "the historical tab payload lost its witness"
+  printf '%s\nworking: again\n' "$line" >> "$state/$witness.status"
+  event=$(status_span_first_actionable "$state/$witness.status" 0) \
+    || fail "a new identical tab payload was swallowed"
+  [ "$event" = "$line" ] || fail "the presented payload lost bytes"
   pass "witnesses preserve payload tabs and distinguish later identical occurrences"
 }
 
@@ -688,8 +633,6 @@ SH
   make_task "$state" absent no-mistakes "done: PR $PR_URL checks green"
   FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_holds "$state/absent.status" \
     && fail "a task with no witness was held"
-  FM_STATUS_SPAN_READER="$reader" FM_HOLD_READ_LOG="$log" status_done_guard_superseded "$state/absent.status" "done: PR $PR_URL checks green" \
-    && fail "a task with no witness was superseded"
   [ ! -s "$log" ] || fail "absent witnesses still caused status reads"
   pass "captured and absent-witness checks avoid reads, and live holds read at most 64 KiB"
 }
@@ -697,28 +640,23 @@ SH
 test_trailing_blanks_preserve_occurrence_witnesses() {
   local dir state witness event
   dir="$TMP_ROOT/trailing-blanks"; state="$dir/state"; mkdir -p "$state"
-  for witness in reminder supersession; do
-    make_task "$state" "$witness" no-mistakes 'working: préparation' 'done: tests validés' '' '  '
-    if [ "$witness" = supersession ]; then
-      status_done_guard_supersede "$state/$witness.status" 'done: tests validés' \
-        || fail "the done with trailing blanks could not be superseded"
-    fi
-    status_span_has_actionable "$state/$witness.status" 0 \
-      && fail "the done with trailing blanks was presented"
-    status_done_guard_holds "$state/$witness.status" \
-      || fail "the $witness did not hold its occurrence"
-    printf '\n' >> "$state/$witness.status"
-    status_done_guard_holds "$state/$witness.status" \
-      || fail "an extra blank line invalidated the $witness hold"
-    printf 'working: continuing\n' >> "$state/$witness.status"
-    status_span_has_actionable "$state/$witness.status" 0 \
-      && fail "trailing blanks invalidated the historical $witness witness"
-    printf 'done: tests validés\nworking: again\n' >> "$state/$witness.status"
-    event=$(status_span_first_actionable "$state/$witness.status" 0) \
-      || fail "the $witness swallowed an unseen identical occurrence"
-    [ "$event" = 'done: tests validés' ] \
-      || fail "the $witness did not present exactly the unseen occurrence: $event"
-  done
+  witness=reminder
+  make_task "$state" "$witness" no-mistakes 'working: préparation' 'done: tests validés' '' '  '
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "the done with trailing blanks was presented"
+  status_done_guard_holds "$state/$witness.status" \
+    || fail "the $witness did not hold its occurrence"
+  printf '\n' >> "$state/$witness.status"
+  status_done_guard_holds "$state/$witness.status" \
+    || fail "an extra blank line invalidated the $witness hold"
+  printf 'working: continuing\n' >> "$state/$witness.status"
+  status_span_has_actionable "$state/$witness.status" 0 \
+    && fail "trailing blanks invalidated the historical $witness witness"
+  printf 'done: tests validés\nworking: again\n' >> "$state/$witness.status"
+  event=$(status_span_first_actionable "$state/$witness.status" 0) \
+    || fail "the $witness swallowed an unseen identical occurrence"
+  [ "$event" = 'done: tests validés' ] \
+    || fail "the $witness did not present exactly the unseen occurrence: $event"
   make_task "$state" unterminated no-mistakes
   printf 'done: no final newline' > "$state/unterminated.status"
   status_span_has_actionable "$state/unterminated.status" 0 \
@@ -728,48 +666,26 @@ test_trailing_blanks_preserve_occurrence_witnesses() {
   pass "writers and readers agree on occurrence endpoints despite trailing blanks"
 }
 
-test_completion_resets_budget_without_erasing_history() {
-  local dir state witness event expected
-  local FM_DONE_GUARD_REMINDER_MAX=1
-  dir="$TMP_ROOT/completion-history"; state="$dir/state"; mkdir -p "$state"
-  for witness in reminder supersession; do
-    make_task "$state" "$witness" no-mistakes 'done: local tests pass' ''
-    status_span_has_actionable "$state/$witness.status" 0 \
-      && fail "the original linkless done was not held"
-    if [ "$witness" = supersession ]; then
-      status_done_guard_supersede "$state/$witness.status" 'done: local tests pass' \
-        || fail "the held occurrence could not be superseded"
-    fi
-    printf 'done: PR %s checks green\n' "$PR_URL" >> "$state/$witness.status"
-    event=$(status_span_first_actionable "$state/$witness.status" 0) \
-      || fail "the valid completion was not presented"
-    [ "$event" = "done: PR $PR_URL checks green" ] \
-      || fail "the valid completion exposed the old linkless done: $event"
-    status_done_guard_holds "$state/$witness.status" \
-      && fail "a valid completion retained an active hold"
-    printf 'needs-decision: choose the follow-up\n' >> "$state/$witness.status"
-    event=$(status_span_first_actionable "$state/$witness.status" 0) \
-      || fail "the later decision was not presented"
-    assert_contains "$event" 'needs-decision: choose the follow-up' "the decision disappeared"
-    assert_not_contains "$event" 'done: local tests pass' "completion erased the $witness history"
-    printf 'done: local tests pass\n' >> "$state/$witness.status"
-    status_span_first_actionable "$state/$witness.status" 0 >/dev/null
-    status_done_guard_holds "$state/$witness.status" \
-      || fail "completion did not reset the active reminder budget"
-    if [ "$witness" = supersession ]; then expected=1; else expected=2; fi
-    [ "$(inbox_records "$state" "$witness")" = "$expected" ] \
-      || fail "the new occurrence did not receive a fresh reminder"
-  done
-  rm "$state/supersession.status"
-  status_retire_presentation_task "$state" supersession \
-    || fail "the marker-only teardown retry failed"
-  [ ! -e "$state/.supersession.done-guard" ] && [ ! -e "$state/.supersession.done-superseded" ] \
-    || fail "teardown retained occurrence evidence after retiring the task"
-  make_task "$state" supersession no-mistakes 'done: local tests pass' 'working: new task'
-  event=$(status_span_first_actionable "$state/supersession.status" 0) \
-    || fail "retired evidence suppressed a reused task's first occurrence"
-  [ "$event" = 'done: local tests pass' ] || fail "the new task's event changed: $event"
-  pass "completion resets only the active budget and teardown retires occurrence evidence"
+test_acknowledged_reminder_history_survives_delivery() {
+  local state oldest handled event
+  state="$TMP_ROOT/acknowledged-history/state"; mkdir -p "$state"
+  make_task "$state" t no-mistakes 'done: local tests pass'
+  status_span_has_actionable "$state/t.status" 0 && fail "the linkless done was presented"
+  oldest=$(fm_task_inbox_oldest_unhandled "$state" t) || fail "the reminder was not queued"
+  handled=$(fm_task_inbox_handled_dir "$state" t)
+  mkdir -p "$handled"
+  mv "$oldest" "$handled/" || fail "the worker could not acknowledge its reminder"
+  printf 'done: PR %s checks green\n' "$PR_URL" >> "$state/t.status"
+  event=$(status_span_first_actionable "$state/t.status" 0) || fail "the valid done was withheld"
+  [ "$event" = "done: PR $PR_URL checks green" ] || fail "delivery was not presented verbatim: $event"
+  printf 'needs-decision: choose the next task\n' >> "$state/t.status"
+  event=$(status_span_first_actionable "$state/t.status" 0) || fail "the decision was lost"
+  case "$event" in *'done: local tests pass'*) fail "delivery erased the historical judgment" ;; esac
+  case "$event" in *'needs-decision: choose the next task'*) ;; *) fail "the decision was not presented: $event" ;; esac
+  rm "$state/t.status"
+  status_retire_presentation_task "$state" t || fail "budget-only retirement failed"
+  [ ! -e "$state/.t.done-guard" ] || fail "retirement left the budget witness behind"
+  pass "acknowledged reminder evidence survives delivery until task retirement"
 }
 
 test_a_historical_delivered_done_does_not_release_a_live_hold() {
@@ -1062,61 +978,9 @@ test_watcher_still_surfaces_a_real_done() {
   pass "a done carrying its PR link still wakes firstmate exactly as before"
 }
 
-test_retirement_failure_remains_retryable() {
-  local state fault
-  for fault in lock move; do
-    state="$TMP_ROOT/retirement-$fault/state"
-    mkdir -p "$state"
-    make_task "$state" t no-mistakes 'done: local tests pass'
-    FM_STATE_OVERRIDE="$state" bash -c '
-      . "$1/bin/fm-classify-lib.sh"
-      . "$1/bin/fm-task-inbox-lib.sh"
-      state=$2; fault=$3
-      status_span_has_actionable "$state/t.status" 0 && exit 1
-      reminder=$(fm_task_inbox_oldest_unhandled "$state" t) || exit 1
-      binding=$(fm_task_inbox_binding "$reminder") || exit 1
-      unrelated=$(fm_task_inbox_write "$state" t "keep this instruction") || exit 1
-      (
-        if [ "$fault" = lock ]; then
-          fm_task_inbox_lock_acquire() { return 1; }
-        else
-          mv() { [ "$1" != "$reminder" ] || return 1; command mv "$@"; }
-        fi
-        status_done_guard_supersede "$state/t.status" "done: local tests pass" && exit 1
-        [ ! -s "$state/.t.done-superseded" ] || exit 1
-        [ -f "$reminder" ] && [ -f "$unrelated" ] || exit 1
-        [ "$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t)" = "ring $unrelated" ] || exit 1
-        fm_backend_agent_state() { printf alive; }
-        fm_backend_composer_state() { printf empty; }
-        fm_backend_send_text_submit() { printf "%s\n" "$3" >> "$state/rings"; }
-        fm_task_inbox_ring fake target "$reminder" && exit 1
-        [ ! -e "$state/rings" ] || exit 1
-        fm_task_inbox_ring fake target "$unrelated" || exit 1
-        doorbell=$(cat "$state/rings")
-        case "$doorbell" in *"$unrelated"*) ;; *) exit 1 ;; esac
-        case "$doorbell" in *"$reminder"*|*"*.msg"*) exit 1 ;; esac
-        fm_task_inbox_record_ring "$state" t "$unrelated" || exit 1
-        [ "$(FM_TASK_INBOX_GRACE_SECS=0 FM_TASK_INBOX_RING_MAX=1 fm_task_inbox_due_action "$state" t)" = "escalate $unrelated 1" ] || exit 1
-      ) || exit 1
-      printf "working: after failed retirement\n" >> "$state/t.status"
-      action=$(FM_TASK_INBOX_GRACE_SECS=0 fm_task_inbox_due_action "$state" t) || exit 1
-      [ "$action" = "ring $unrelated" ] || exit 1
-      [ ! -e "$reminder" ] && [ -f "$state/t.inbox/handled/${reminder##*/}" ] || exit 1
-      late=$(fm_task_inbox_write "$state" t "late enqueue" "" "$binding") || exit 1
-      case "$late" in "$state/t.inbox/handled/"*) ;; *) exit 1 ;; esac
-      printf "done: local tests pass\n" >> "$state/t.status"
-      status_span_has_actionable "$state/t.status" 0 && exit 1
-      [ "$(find "$state/t.inbox" -maxdepth 1 -name "*.msg" | wc -l | tr -d " ")" = 2 ] || exit 1
-    ' _ "$ROOT" "$state" "$fault" || fail "$fault retirement failure lost cancellation or unrelated delivery"
-  done
-  pass "failed retirement preserves unrelated delivery and escalation and remains retryable"
-}
-
-test_retirement_failure_remains_retryable
 test_pr_link_detection
 test_contract_unmet_only_for_pr_delivery_modes
 test_false_done_is_withheld_and_steered
-test_a_superseded_done_is_no_longer_steered
 test_direct_pr_false_done_is_withheld
 test_real_done_is_presented_unchanged
 test_a_real_done_releases_a_held_task
@@ -1135,7 +999,7 @@ test_identical_history_is_not_the_newest_occurrence
 test_witnesses_preserve_payload_tabs
 test_live_hold_reads_are_bounded_and_skip_absent_witnesses
 test_trailing_blanks_preserve_occurrence_witnesses
-test_completion_resets_budget_without_erasing_history
+test_acknowledged_reminder_history_survives_delivery
 test_a_historical_delivered_done_does_not_release_a_live_hold
 test_backstop_skips_a_held_done_but_recovers_a_budget_exhausted_one
 test_a_done_the_backstop_jumped_past_is_not_swallowed

@@ -480,13 +480,10 @@ report_child() { # <id>
 }
 
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 held_done=0 recorded_pr captured_endpoint='' captured_ident='' captured_size
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
-  if [ -d "$STATE/$id.inbox/.retired-bindings" ]; then
-    _fm_done_guard_inbox "$STATE" fm_task_inbox_retry_retirements "$id" || return 1
-  fi
   status="$STATE/$id.status"
   turn="$STATE/$id.turn-ended"
   last=$(last_status_line "$status")
@@ -501,14 +498,6 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
-  if [ -n "$last" ]; then
-    captured_size=$(_fm_status_file_size "$status") || return 0
-    captured_size=${captured_size//[[:space:]]/}
-    captured_ident=$(_fm_open_decisions_file_ident "$status") || return 0
-    status_snapshot_latest_event "$status" "$captured_size" "$captured_ident" || return 0
-    last=$FM_STATUS_SNAPSHOT_EVENT_LINE
-    captured_endpoint=$FM_STATUS_SNAPSHOT_EVENT_ENDPOINT
-  fi
   # A child that states its own terminal outcome is the ledger path's to deliver,
   # so this path stands down. The test is the shared predicate its ledger sibling
   # asks, for the same reason: a `done:` with no pull-request link on a
@@ -527,24 +516,8 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     *) return 0 ;;
   esac
   pr=$(pr_for_task "$meta" "$status")
-  # The one named exception to "a withheld done is published nowhere"
-  # (bin/fm-classify-lib.sh's guard header states it): this verdict comes from the
-  # authoritative current-state reader rather than from the worker's sentence, and
-  # a run that reached green CI on a recorded pull request carries the very proof
-  # the contract asks for, so it outranks that sentence. The same verdict with no
-  # recorded pull request carries no such proof and stays withheld - the recorded
-  # pull request is what separates them, not the state word.
-  # RECORDED means this task's own metadata field, which bin/fm-pr-check.sh writes
-  # when the work is raised and bin/fm-pr-merge.sh rewrites when it lands.
-  # Deliberately NOT pr_for_task's whole-log scan, which accepts any pull URL the
-  # worker's prose happened to cite and would publish someone else's pull request
-  # to the captain as this task's completion.
-  held_done=0
-  if [ "$state" = 'done' ] && status_done_contract_unmet "$status" "$last"; then
-    recorded_pr=$(clean_field "$(meta_field "$meta" pr)")
-    [ -n "$recorded_pr" ] || return 0
-    pr=$recorded_pr
-    held_done=1
+  if [ "$state" = done ] && status_done_contract_unmet "$status" "$last"; then
+    return 0
   fi
   incarnation=$(meta_incarnation "$meta")
   fingerprint=$(sha256_text "$incarnation|$id|$state|$pr|$(clean_field "$last")")
@@ -554,9 +527,6 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     outcome_key="inactive-outcome-main-$id-$state"
   fi
   ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct "upstream" "$pr" "$(sha256_text "$last")" || return 1
-  # This outcome answers the prose line, so the guard stops steering the worker
-  # about it while that line stays the newest one.
-  [ "$held_done" -eq 0 ] || status_done_guard_supersede "$status" "$last" "$captured_endpoint" "$captured_ident" || return 1
   [ -n "$RECORD_PENDING" ] || return 0
   if [ -n "$self" ]; then
     if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then

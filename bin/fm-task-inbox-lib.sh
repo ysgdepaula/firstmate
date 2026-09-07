@@ -35,7 +35,6 @@
 #   schema=fm-task-inbox.v1
 #   at=<utc timestamp>
 #   delivery=fire-and-forget   present only when the re-ring ladder must ignore it
-#   binding=<opaque token>    optional key for retiring only matching instructions
 #   --
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
@@ -144,19 +143,15 @@ fm_task_inbox_lock_acquire() {  # <lock-path>
 
 # Write one record into the next sequence slot: temp-write, then atomic
 # rename. Prints the record path. Caller must hold .seq.lock.
-_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode] [binding]
-  local dir=$1 text=$2 delivery_mode=${3:-} binding=${4:-} seq tmp rec status=0
+_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
+  local dir=$1 text=$2 delivery_mode=${3:-} seq tmp rec status=0
   seq=$(fm_task_inbox_next_seq "$dir")
   rec="$dir/$seq.msg"
-  if [ -n "$binding" ] && [ -d "$dir/.retired-bindings/binding-$binding" ]; then
-    rec="$dir/handled/$seq.msg"
-  fi
   tmp=$(mktemp "$dir/.staging.XXXXXX") || return 1
   {
     printf 'schema=%s\n' "$FM_TASK_INBOX_SCHEMA"
     printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     [ "$delivery_mode" != fire-and-forget ] || printf 'delivery=fire-and-forget\n'
-    [ -z "$binding" ] || printf 'binding=%s\n' "$binding"
     printf -- '--\n'
     printf '%s' "$text"
   } > "$tmp" && mv "$tmp" "$rec" || status=1
@@ -166,14 +161,13 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode] [bi
 
 # Durably enqueue one steer: temp-write, then atomic rename into the next
 # sequence slot. Prints the record path. Fails without a partial record.
-fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode] [binding]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} binding=${5:-} dir lock rec status=0
-  case "$binding" in *[!a-zA-Z0-9._:-]*) return 1 ;; esac
+fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock rec status=0
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
-  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$binding") || status=1
+  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
@@ -190,9 +184,8 @@ fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode] [binding
 # secondmate request embeds a per-request correlation token in its body. The
 # local plane keeps plain fm_task_inbox_write: its outcome is synchronous, so
 # a repeated identical local steer is a deliberate new instruction.
-fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode] [binding]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} binding=${5:-} dir lock want have f rec='' status=0
-  case "$binding" in *[!a-zA-Z0-9._:-]*) return 1 ;; esac
+fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock want have f rec='' status=0
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
@@ -209,7 +202,6 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
             *) continue ;;
           esac
         fi
-        [ "$(fm_task_inbox_binding "$f")" = "$binding" ] || continue
         if [ "$delivery_mode" = fire-and-forget ]; then
           fm_task_inbox_is_fire_and_forget "$f" || continue
         elif fm_task_inbox_is_fire_and_forget "$f"; then
@@ -238,63 +230,11 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
     status=1
   fi
   if [ "$status" -eq 0 ] && [ -z "$rec" ]; then
-    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$binding") || status=1
+    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
   fi
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
-}
-
-fm_task_inbox_binding() {
-  local line rec=$1
-  [ -f "$rec" ] || rec="${rec%/*}/handled/${rec##*/}"
-  [ -f "$rec" ] && [ ! -L "$rec" ] || return 1
-  while IFS= read -r line; do
-    case "$line" in
-      --) return 0 ;;
-      binding=*) printf '%s' "${line#binding=}"; return 0 ;;
-    esac
-  done < "$rec"
-}
-
-fm_task_inbox_retire_binding() {
-  local state=$1 task=$2 binding=$3 dir lock rec status=0
-  case "$binding" in ''|*[!a-zA-Z0-9._:-]*) return 1 ;; esac
-  dir=$(fm_task_inbox_dir "$state" "$task")
-  mkdir -p "$dir/handled" "$dir/.retired-bindings/binding-$binding" || return 1
-  lock="$dir/.seq.lock"
-  fm_task_inbox_lock_acquire "$lock" || return 1
-  for rec in "$dir"/*.msg; do
-    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
-    [ "$(fm_task_inbox_binding "$rec")" = "$binding" ] || continue
-    if ! mkdir -p "$dir/handled" || ! mv "$rec" "$dir/handled/"; then
-      [ -f "$dir/handled/${rec##*/}" ] && [ ! -e "$rec" ] || status=1
-    fi
-  done
-  fm_lock_release "$lock"
-  return "$status"
-}
-
-fm_task_inbox_retry_retirements() {
-  local state=$1 task=$2 dir rec binding status=0
-  dir=$(fm_task_inbox_dir "$state" "$task")
-  [ -d "$dir/.retired-bindings" ] || return 0
-  for rec in "$dir"/*.msg; do
-    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
-    binding=$(fm_task_inbox_binding "$rec") || return 1
-    [ -n "$binding" ] || continue
-    case "$binding" in *[!a-zA-Z0-9._:-]*) continue ;; esac
-    [ -d "$dir/.retired-bindings/binding-$binding" ] || continue
-    fm_task_inbox_retire_binding "$state" "$task" "$binding" || status=1
-  done
-  return "$status"
-}
-
-fm_task_inbox_is_cancelled() {
-  local rec=$1 binding dir=${1%/*}
-  binding=$(fm_task_inbox_binding "$rec") || return 1
-  case "$binding" in ''|*[!a-zA-Z0-9._:-]*) return 1 ;; esac
-  [ -d "$dir/.retired-bindings/binding-$binding" ]
 }
 
 # The exact enqueued text back out of a record.
@@ -318,21 +258,12 @@ fm_task_inbox_body() {  # <record-path>
 # A non-printable path fails without output so terminal controls never reach
 # the pane's line discipline.
 fm_task_inbox_doorbell_line() {  # <record-path>
-  local dir=${1%/*} abs quoted base LC_ALL=C
-  [ "${dir##*/}" != handled ] || return 1
-  fm_task_inbox_is_cancelled "$1" && return 1
+  local dir=${1%/*} abs quoted LC_ALL=C
   abs=$(cd "$dir" 2>/dev/null && pwd) || abs=$dir
   case "$abs" in
     *[![:print:]]*) return 1 ;;
   esac
   quoted=$(printf '%s' "$abs" | sed "s/'/'\\\\''/g")
-  if [ -d "$dir/.retired-bindings" ]; then
-    base=${1##*/}
-    fm_task_inbox_seq_of "$base" >/dev/null || return 1
-    printf ": Firstmate instruction waiting: read and act only on '%s/%s', then mv that handled file to '%s/handled/'." \
-      "$quoted" "$base" "$quoted"
-    return 0
-  fi
   printf ": Firstmate instruction waiting: list '%s'/*.msg and, in numeric order, read and act on each, then mv each handled file to '%s'/handled/." \
     "$quoted" "$quoted"
 }
@@ -352,12 +283,7 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # verdicts would starve a harness whose idle screen the classifier cannot
 # positively identify (that classifier is advisory here by design).
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
-  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict dir task
-  dir=${rec%/*}; task=${dir##*/}; task=${task%.inbox}
-  [ "${dir##*/}" != handled ] || return 1
-  fm_task_inbox_retry_retirements "${dir%/*}" "$task" || true
-  fm_task_inbox_is_cancelled "$rec" && return 1
-  [ ! -f "$dir/handled/${rec##*/}" ] || return 1
+  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -400,7 +326,6 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
   dir=$(fm_task_inbox_dir "$1" "$2")
   for f in "$dir"/*.msg; do
     [ -e "$f" ] || continue
-    fm_task_inbox_is_cancelled "$f" && continue
     fm_task_inbox_is_fire_and_forget "$f" && continue
     n=$(fm_task_inbox_seq_of "${f##*/}") || continue
     if [ -z "$best" ] || [ "$n" -lt "$best_n" ]; then
@@ -422,7 +347,6 @@ fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
 fm_task_inbox_due_action() {  # <state-dir> <task-id>
   local dir oldest base now grace max ladder rec_base count last
   dir=$(fm_task_inbox_dir "$1" "$2")
-  fm_task_inbox_retry_retirements "$1" "$2" || true
   if ! oldest=$(fm_task_inbox_oldest_unhandled "$1" "$2"); then
     rm -f "$dir/.ring-state" "$dir/.escalated" 2>/dev/null || true
     printf 'quiet'

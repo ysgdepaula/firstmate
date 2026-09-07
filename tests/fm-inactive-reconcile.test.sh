@@ -254,61 +254,34 @@ test_direct_path_defers_only_to_a_real_terminal_line() {
   pass "the direct path's terminal deferral asks the shared done contract"
 }
 
-# The one named exception to "a line the guard withholds is published nowhere",
-# and its boundary. The authoritative current-state reader can answer `done` from
-# the run-step while the child's newest line is still the linkless handoff its own
-# brief asked for. When a pull request is recorded for that task, the verdict
-# carries the very proof the contract demands - green CI on a real pull request -
-# so it outranks the worker's sentence and is published with that link. The same
-# verdict with NO recorded pull request carries no such proof and stays withheld.
-test_run_step_done_publishes_a_held_line_only_with_a_recorded_pr() {
-  make_world runstep-pr; bind_secondmate local
-  write_child "$MATE" child 'done: implemented the parser'
-  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
-  grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" \
-    || fail "a run-step done backed by a recorded PR was not published: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
-  grep -Fq "pr=$PR_LINK" "$MAIN/state/mate.status" \
-    || fail "the published outcome did not carry the recorded pull request: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
-
-  # The boundary: same held line, same run-step verdict, no recorded pull request
-  # anywhere for the task, so there is no proof and nothing may be published.
-  make_world runstep-nopr; bind_secondmate local
-  write_child "$MATE" child 'done: implemented the parser'
-  fm_write_meta "$MATE/state/child.meta" \
-    "window=firstmate:fm-child" "worktree=$MATE/projects/child" "project=alpha" \
-    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' 'spawn_gen=nopr.1'
-  age "$MATE/state/child.meta"
-  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
-  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
-    || fail "a run-step done with no recorded PR published a line the guard withholds: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
-  [ "$(outcome_count "$MATE" reported)" = 0 ] \
-    || fail "a withheld done with no recorded PR minted a delivery receipt"
-
-  # The other arm, and the sharp one: the task records no pull request of its own,
-  # but its log CITES someone else's. A URL the worker merely mentioned is not a
-  # pull request recorded for this task, so it is no proof and must publish
-  # nothing - publishing it would hand the captain a completion carrying a pull
-  # request that belongs to another repository entirely.
-  make_world runstep-foreign; bind_secondmate local
-  write_child "$MATE" child 'done: implemented the parser'
-  fm_write_meta "$MATE/state/child.meta" \
-    "window=firstmate:fm-child" "worktree=$MATE/projects/child" "project=alpha" \
-    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' 'spawn_gen=foreign.1'
-  printf 'working: mirroring the approach in %s\ndone: implemented the parser\n' \
-    'https://github.com/other/repo/pull/9' > "$MATE/state/child.status"
-  age "$MATE/state/child.meta" "$MATE/state/child.status"
-  FM_FAKE_CREW_STATE='done' run_reconcile "$MATE"
-  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
-    || fail "a foreign pull URL cited in prose published a line the guard withholds: $(cat "$MAIN/state/mate.status" 2>/dev/null)"
-  ! grep -Fq 'other/repo/pull/9' "$MAIN/state/mate.status" 2>/dev/null \
-    || fail "a pull request belonging to another task was published to the captain"
-  [ "$(outcome_count "$MATE" reported)" = 0 ] \
-    || fail "a foreign pull URL minted a delivery receipt"
-  pass "a held done is published only when the task's OWN recorded pull request backs the verdict"
-}
-
 # A busy child cannot keep later ledger outcomes from being visited, and is
 # retried on the next poll after its lifecycle lock becomes available.
+test_inactive_completion_requires_the_workers_pr_link() {
+  local home mode
+  for mode in no-mistakes direct-PR; do
+    make_world "completion-contract-$mode"; bind_secondmate local; write_mate_meta
+    for home in "$MAIN" "$MATE"; do
+      write_child "$home" child 'done: local tests pass'
+      sed "s/^mode=.*/mode=$mode/" "$home/state/child.meta" > "$home/state/child.meta.tmp"
+      mv "$home/state/child.meta.tmp" "$home/state/child.meta"
+      age "$home/state/child.meta"
+      FM_FAKE_CREW_STATE='done' run_reconcile "$home" --startup
+      [ "$(outcome_count "$home" pending)" = 0 ] || fail "linkless done created a pending outcome"
+      [ "$(outcome_count "$home" reported)" = 0 ] || fail "linkless done was reported"
+      [ ! -s "$home/state/.wake-queue" ] || fail "linkless done queued a completion"
+      printf 'done: PR %s checks green\n' "$PR_LINK" >> "$home/state/child.status"
+      age "$home/state/child.status"
+      FM_FAKE_CREW_STATE='done' run_reconcile "$home" --startup
+      if [ "$home" = "$MAIN" ]; then
+        [ "$(outcome_count "$home" pending)" = 1 ] || fail "conforming done lost direct presentation"
+      else
+        [ "$(outcome_count "$home" reported)" = 1 ] || fail "conforming done lost parent delivery"
+      fi
+    done
+  done
+  pass "inactive completion requires the worker's PR link despite a recorded PR"
+}
+
 test_busy_child_does_not_starve_later_ledger_outcomes() {
   local holder i delivered=0
   make_world busy-ledger; bind_secondmate local
@@ -709,7 +682,7 @@ test_heartbeat_cap_does_not_delay_reconciliation() {
 
 # Only authoritative terminal states qualify. A captain-held item is excluded too.
 test_scan_marker_replaces_symlink_safely() {
-  make_world marker; write_child "$MAIN" child 'done: green'
+  make_world marker; write_child "$MAIN" child "done: PR $PR_LINK checks green"
   printf 'preserve me\n' > "$MAIN/state/marker-target"
   ln -s marker-target "$MAIN/state/.inactive-outcome-reconcile"
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
@@ -737,7 +710,7 @@ test_nonterminal_and_captain_held_states_do_not_report() {
 # exempt from wedge escalation and emits no false wake.
 test_watcher_hook_and_idle_secondmate_exemption() {
   local out pid i
-  make_world watcher; write_child "$MAIN" child 'done: green'; prime_seen "$MAIN/state" "$MAIN/state/child.status"
+  make_world watcher; write_child "$MAIN" child "done: PR $PR_LINK checks green"; prime_seen "$MAIN/state" "$MAIN/state/child.status"
   out="$WORLD/watch.out"
   PATH="$WORLD/fakebin:$PATH" FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" \
     FM_INACTIVE_RECONCILE_SECS=60 FM_INACTIVE_CREW_STATE_BIN="$WORLD/fakebin/fm-crew-state.sh" \
@@ -814,7 +787,7 @@ SH
   elapsed=$(( $(date +%s) - started ))
   [ "$elapsed" -le 3 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
 
-  write_child "$MAIN" b 'done: green'
+  write_child "$MAIN" b "done: PR $PR_LINK checks green"
   FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
   grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
     || fail "next bounded scan did not resume with the following child"
@@ -823,7 +796,7 @@ SH
 
 test_full_scan_budget_includes_wake_lock_wait() {
   local holder started elapsed i
-  make_world wake-lock; write_child "$MAIN" child 'done: green'
+  make_world wake-lock; write_child "$MAIN" child "done: PR $PR_LINK checks green"
   FM_HOME="$MAIN" FM_STATE_OVERRIDE="$MAIN/state" bash -c '
     . "$1/bin/fm-wake-lib.sh"
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
@@ -897,60 +870,17 @@ test_notice_recovery_does_not_duplicate_wake() {
 # Forge command shims fail loudly. A successful scan proves this path never uses
 # them while reconciling a local terminal outcome.
 test_reconciliation_never_calls_forge() {
-  make_world forge; write_child "$MAIN" child 'done: green'
+  make_world forge; write_child "$MAIN" child "done: PR $PR_LINK checks green"
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
   [ ! -s "$WORLD/forge.log" ] || fail "reconciliation invoked a forge command: $(cat "$WORLD/forge.log")"
   pass "reconciliation makes zero forge or PR API calls"
 }
 
-test_failed_reminder_retirement_blocks_publication_and_retries() {
-  local reminder fault
-  make_world retirement-failure; bind_secondmate local
-  write_child "$MATE" child 'done: implemented the parser'
-  FM_STATE_OVERRIDE="$MATE/state" bash -c '
-    . "$1/bin/fm-classify-lib.sh"
-    status_span_has_actionable "$2/child.status" 0 && exit 1
-    exit 0
-  ' _ "$ROOT" "$MATE/state" || fail "the reminder setup failed"
-  reminder="$MATE/state/child.inbox/001.msg"
-  [ -f "$reminder" ] || fail "no reminder was queued"
-  fault="$WORLD/retire-fault"
-  : > "$fault"
-  cat > "$WORLD/fakebin/mv" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  */child.inbox/*.msg)
-    if [ -f "$FM_RETIRE_FAULT" ]; then
-      : > "$FM_RETIRE_FAULT.attempted"
-      exit 1
-    fi ;;
-esac
-exec /bin/mv "$@"
-SH
-  chmod +x "$WORLD/fakebin/mv"
-  FM_RETIRE_FAULT="$fault" FM_FAKE_CREW_STATE=done run_reconcile "$MATE" || true
-  [ -f "$fault.attempted" ] || fail "the retirement fault was not exercised"
-  [ -f "$reminder" ] || fail "the fault did not prevent archival"
-  ! grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" 2>/dev/null \
-    || fail "completion was published despite failed reminder retirement"
-  [ ! -s "$MATE/state/.child.done-superseded" ] || fail "supersession preceded successful retirement"
-  printf 'working: follow-up after retirement failure\n' >> "$MATE/state/child.status"
-  age "$MATE/state/child.status"
-  rm "$fault"
-  FM_RETIRE_FAULT="$fault" FM_FAKE_CREW_STATE=done run_reconcile "$MATE" --startup
-  [ ! -e "$reminder" ] && [ -f "$MATE/state/child.inbox/handled/001.msg" ] \
-    || fail "a later status append stranded the retirement"
-  grep -q 'inactive-outcome-mate-child-done' "$MAIN/state/mate.status" \
-    || fail "completion did not recover once retirement succeeded"
-  pass "direct publication waits for reminder retirement and retries beyond later status appends"
-}
-
-test_failed_reminder_retirement_blocks_publication_and_retries
 test_main_direct_terminal_presentation_receipt
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_ledger_withholds_a_linkless_done
 test_direct_path_defers_only_to_a_real_terminal_line
-test_run_step_done_publishes_a_held_line_only_with_a_recorded_pr
+test_inactive_completion_requires_the_workers_pr_link
 test_busy_child_does_not_starve_later_ledger_outcomes
 test_secondmate_ledger_delivery_carries_report_and_failure
 test_terminal_line_during_state_read_yields_to_ledger_delivery
