@@ -15,6 +15,27 @@ RUNNER="$ROOT/bin/fm-test-run.sh"
 assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
 
+# Keep the runner's machine-wide run queue out of the suite. Its whole point is
+# that every suite run on a machine shares one lock, so without this a fixture
+# run would queue behind the operator's real suite runs - including the one
+# executing this file - and an inherited queue hold would suppress the queue the
+# cases below mean to exercise. Point it at this test process's own directory;
+# the cases that mean to exercise contention set their own.
+FM_TEST_QUEUE_DIR=$(fm_test_tmproot fm-test-run-queue-root) || fail "could not create a queue root"
+export FM_TEST_QUEUE_DIR
+unset FM_TEST_RUN_QUEUE_HELD
+
+# Install the runner under test into a fixture repo. bin/fm-wake-lib.sh travels
+# with it because that library owns the portable lock the run queue is built on,
+# and a fixture run that executes scripts takes that queue like any other run.
+install_fixture_runner() {
+  local repo=$1
+  mkdir -p "$repo/bin" || return 1
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh" || return 1
+  cp "$ROOT/bin/fm-wake-lib.sh" "$repo/bin/fm-wake-lib.sh" || return 1
+  chmod +x "$repo/bin/fm-test-run.sh"
+}
+
 test_list_all_exact_suite_coverage() {
   local listed expected missing extra f
   listed=$("$RUNNER" --list --all | LC_ALL=C sort)
@@ -91,8 +112,7 @@ test_changed_file_selection_is_conservative() {
 init_changed_fixture_repo() {
   local repo=$1 script
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
-  chmod +x "$repo/bin/fm-test-run.sh"
+  install_fixture_runner "$repo"
   for script in \
     fm-brief.test.sh \
     fm-ask-user-authority.test.sh \
@@ -342,7 +362,7 @@ test_changed_bin_reference_selects_per_script_not_per_family() {
 # Exercise begin/end markers from real fixture processes to prove the automatic
 # changed-suite default and its explicit serial override.
 test_changed_uses_bounded_automatic_concurrency() {
-  local tmp repo script serial_shape parallel_shape timeout_repo timeout_script expected_jobs rc
+  local tmp repo script serial_shape parallel_shape timeout_repo timeout_script rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-consent.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
@@ -372,26 +392,26 @@ SH
   serial_shape=$(grep -E '^FM_TEST_(BEGIN|END)' "$tmp/serial.out" | head -n 2 | awk '{print $1}' | paste -sd, -)
   [ "$serial_shape" = FM_TEST_BEGIN,FM_TEST_END ] \
     || fail "explicit --jobs 1 did not force serial execution: $serial_shape"
-  expected_jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-  case "$expected_jobs" in
-    ''|*[!0-9]*) expected_jobs=1 ;;
-  esac
-  [ "$expected_jobs" -le 4 ] || expected_jobs=4
-  [ "$expected_jobs" -ge 1 ] || expected_jobs=1
-  python3 - "$tmp/parallel.json" "$tmp/serial.json" "$expected_jobs" <<'PY' \
+  # The exact automatic worker count is pinned against injected processor counts
+  # in test_automatic_worker_count_is_half_the_processors. Here the artifact only
+  # has to record a resolved count inside the automatic bounds, whatever machine
+  # this runs on.
+  python3 - "$tmp/parallel.json" "$tmp/serial.json" <<'PY' \
     || fail "changed timing artifacts did not record their resolved worker counts"
 import json, sys
 automatic = json.load(open(sys.argv[1], encoding="utf-8"))
 serial = json.load(open(sys.argv[2], encoding="utf-8"))
-expected = int(sys.argv[3])
-assert automatic["selection"].split(";")[-1] == f"jobs={expected}"
+resolved = automatic["selection"].split(";")[-1]
+assert resolved.startswith("jobs="), resolved
+workers = int(resolved.split("=", 1)[1])
+assert 2 <= workers <= 4, resolved
 assert serial["selection"].split(";")[-1] == "jobs=1"
 PY
 
   timeout_repo="$tmp/timeout-repo"
   timeout_script=tests/fm-calm-pi-extension.test.sh
   mkdir -p "$timeout_repo/bin" "$timeout_repo/tests"
-  cp "$RUNNER" "$timeout_repo/bin/fm-test-run.sh"
+  install_fixture_runner "$timeout_repo"
   cat >"$timeout_repo/bin/fm-timeout-lib.sh" <<'SH'
 fm_run_timed() {
   [ "$1" -eq 900 ] || return 99
@@ -428,7 +448,7 @@ SH
 # contract, so verifying several subjects is one bounded concurrent run rather
 # than a serial chain of separate `bash tests/X.test.sh` invocations.
 test_script_list_uses_bounded_automatic_concurrency() {
-  local tmp repo script parallel_shape serial_shape mixed_shape expected_jobs
+  local tmp repo script parallel_shape serial_shape mixed_shape
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-script-list.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
@@ -467,19 +487,15 @@ SH
   [ "$mixed_shape" = FM_TEST_BEGIN,FM_TEST_BEGIN,FM_TEST_END,FM_TEST_END,FM_TEST_BEGIN,FM_TEST_END ] \
     || fail "an unproven script was not kept in the serial tail: $mixed_shape"
 
-  expected_jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-  case "$expected_jobs" in
-    ''|*[!0-9]*) expected_jobs=1 ;;
-  esac
-  [ "$expected_jobs" -le 4 ] || expected_jobs=4
-  [ "$expected_jobs" -ge 1 ] || expected_jobs=1
-  python3 - "$tmp/parallel.json" "$tmp/serial.json" "$expected_jobs" <<'PYJSON' \
+  python3 - "$tmp/parallel.json" "$tmp/serial.json" <<'PYJSON' \
     || fail "script-list timing artifacts did not record their resolved worker counts"
 import json, sys
 automatic = json.load(open(sys.argv[1], encoding="utf-8"))
 serial = json.load(open(sys.argv[2], encoding="utf-8"))
-expected = int(sys.argv[3])
-assert automatic["selection"].split(";")[-1] == f"jobs={expected}"
+resolved = automatic["selection"].split(";")[-1]
+assert resolved.startswith("jobs="), resolved
+workers = int(resolved.split("=", 1)[1])
+assert 2 <= workers <= 4, resolved
 assert serial["selection"].split(";")[-1] == "jobs=1"
 PYJSON
 
@@ -498,9 +514,8 @@ test_family_proofs_run_in_separate_concurrent_phases() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-family-phases.XXXXXX")
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  install_fixture_runner "$repo"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
-  chmod +x "$repo/bin/fm-test-run.sh"
   for script in \
     fm-calm-pi-extension.test.sh fm-vendor-auth-probe.test.sh \
     fm-pr-check-security.test.sh fm-teardown.test.sh; do
@@ -969,8 +984,7 @@ test_unmapped_new_test_never_inherits_family_concurrency() {
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unmapped.XXXXXX")
   repo="$tmp/repo"
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
-  chmod +x "$repo/bin/fm-test-run.sh"
+  install_fixture_runner "$repo"
   # Two members of the proven residual family, plus a test basename the family
   # map has never seen - the shape of any test added tomorrow.
   for script in fm-procevent.test.sh fm-quota-choose.test.sh fm-zz-unmapped-fixture.test.sh; do
@@ -1046,7 +1060,7 @@ test_per_script_timeout_bounds_a_hang() {
   runner="$repo/bin/fm-test-run.sh"
   hang=tests/fm-hang-fixture.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$runner"
+  install_fixture_runner "$repo"
   cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
   grandchild_pid="$tmp/grandchild.pid"
   cat >"$repo/$hang" <<'SH'
@@ -1109,7 +1123,7 @@ test_max_wall_ms_is_a_result_not_advice() {
   runner="$repo/bin/fm-test-run.sh"
   fast=tests/fm-budget-fixture.test.sh
   mkdir -p "$repo/bin" "$repo/tests"
-  cp "$RUNNER" "$runner"
+  install_fixture_runner "$repo"
   cat >"$repo/$fast" <<'SH'
 #!/usr/bin/env bash
 sleep 1
@@ -1173,7 +1187,7 @@ test_jobs_parallel_scheduler_and_failure_propagation() {
   c=tests/fm-lint.test.sh
   d=tests/fm-supervision-instructions.test.sh
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin"
-  cp "$RUNNER" "$runner"
+  install_fixture_runner "$repo"
   cat >"$fake_bin/stat" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = "-c" ] && [ "$2" = "%a" ]; then
@@ -1370,6 +1384,198 @@ assert len(doc["scripts"])==3
   pass "aggregate-json merges lane timing artifacts"
 }
 
+# Three proven-isolated fixture scripts under an injected processor count, so
+# the automatic worker count is observable without depending on the machine the
+# suite happens to run on.
+build_jobs_fixture_repo() {  # <repo> <processor-count>
+  local repo=$1 cpus=$2 script
+  mkdir -p "$repo/bin" "$repo/tests" "$repo/fakebin" || return 1
+  install_fixture_runner "$repo" || return 1
+  cat >"$repo/fakebin/getconf" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = _NPROCESSORS_ONLN ]; then
+  printf '%s\n' "$cpus"
+  exit 0
+fi
+exec /usr/bin/getconf "\$@"
+SH
+  cat >"$repo/fakebin/sysctl" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = -n ] && [ "\${2:-}" = hw.ncpu ]; then
+  printf '%s\n' "$cpus"
+  exit 0
+fi
+exec /usr/sbin/sysctl "\$@"
+SH
+  chmod +x "$repo/fakebin/getconf" "$repo/fakebin/sysctl"
+  for script in fm-lint fm-review-diff fm-crew-state; do
+    printf '#!/usr/bin/env bash\nprintf "ok - %%s\\n" "%s"\n' "$script" \
+      >"$repo/tests/$script.test.sh"
+    chmod +x "$repo/tests/$script.test.sh"
+  done
+}
+
+resolved_jobs_for_cpus() {  # <repo-parent> <processor-count>
+  local parent=$1 cpus=$2 repo
+  repo="$parent/cpus-$cpus"
+  build_jobs_fixture_repo "$repo" "$cpus" || return 1
+  (
+    cd "$repo" || exit 1
+    PATH="$repo/fakebin:$PATH" bin/fm-test-run.sh \
+      tests/fm-lint.test.sh tests/fm-review-diff.test.sh tests/fm-crew-state.test.sh \
+      --json "$repo/timing.json" >/dev/null 2>"$repo/err"
+  ) || return 1
+  python3 - "$repo/timing.json" <<'PYJOBS'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+resolved = doc["selection"].split(";")[-1]
+assert resolved.startswith("jobs="), resolved
+print(resolved.split("=", 1)[1])
+PYJOBS
+}
+
+test_automatic_worker_count_is_half_the_processors() {
+  local tmp jobs err
+  tmp=$(fm_test_tmproot fm-test-run-jobs) || fail "could not create a temp root"
+
+  # Half the processors, not all of them: this is the whole point of the
+  # default. Twelve processors must not put twelve suites' worth of workers on
+  # one machine.
+  jobs=$(resolved_jobs_for_cpus "$tmp" 6) || fail "six-processor fixture run failed"
+  [ "$jobs" = 3 ] || fail "six processors must resolve to 3 workers, got $jobs"
+
+  # Floor: two workers even where half is one, so a small machine still overlaps.
+  jobs=$(resolved_jobs_for_cpus "$tmp" 1) || fail "one-processor fixture run failed"
+  [ "$jobs" = 2 ] || fail "one processor must resolve to the floor of 2 workers, got $jobs"
+  jobs=$(resolved_jobs_for_cpus "$tmp" 2) || fail "two-processor fixture run failed"
+  [ "$jobs" = 2 ] || fail "two processors must resolve to 2 workers, got $jobs"
+
+  # Ceiling: half of twelve is six, and no recorded family proof covers six, so
+  # the automatic path stops at the proven ceiling instead.
+  jobs=$(resolved_jobs_for_cpus "$tmp" 12) || fail "twelve-processor fixture run failed"
+  [ "$jobs" = 4 ] || fail "twelve processors must stop at the proven ceiling of 4, got $jobs"
+  [ "$("$RUNNER" --concurrent-safe-family-jobs-max pure-contract-unit)" = 4 ] \
+    || fail "the automatic ceiling must stay equal to the recorded family proof ceiling"
+
+  # FM_TEST_JOBS is a ceiling: it lowers the resolved count and says so.
+  build_jobs_fixture_repo "$tmp/env" 12 || fail "could not build the env fixture repo"
+  (
+    cd "$tmp/env" || exit 1
+    PATH="$tmp/env/fakebin:$PATH" FM_TEST_JOBS=2 bin/fm-test-run.sh \
+      tests/fm-lint.test.sh tests/fm-review-diff.test.sh tests/fm-crew-state.test.sh \
+      --json "$tmp/env/lowered.json" >/dev/null 2>"$tmp/env/lowered.err"
+  ) || fail "FM_TEST_JOBS fixture run failed: $(cat "$tmp/env/lowered.err")"
+  grep -Fq 'FM_TEST_JOBS=2 lowers this run from 4 workers' "$tmp/env/lowered.err" \
+    || fail "lowering the worker count must be reported: $(cat "$tmp/env/lowered.err")"
+  jobs=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["selection"].split(";")[-1])' "$tmp/env/lowered.json")
+  [ "$jobs" = "jobs=2" ] || fail "FM_TEST_JOBS must lower the resolved count, got $jobs"
+
+  # And only a ceiling: it never raises the resolved count.
+  (
+    cd "$tmp/env" || exit 1
+    PATH="$tmp/env/fakebin:$PATH" FM_TEST_JOBS=8 bin/fm-test-run.sh \
+      tests/fm-lint.test.sh tests/fm-review-diff.test.sh tests/fm-crew-state.test.sh \
+      --json "$tmp/env/raised.json" >/dev/null 2>&1
+  ) || fail "FM_TEST_JOBS raise-attempt fixture run failed"
+  jobs=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["selection"].split(";")[-1])' "$tmp/env/raised.json")
+  [ "$jobs" = "jobs=4" ] || fail "FM_TEST_JOBS must never raise the resolved count, got $jobs"
+
+  # An unusable value is refused rather than silently ignored.
+  err=$(cd "$tmp/env" && FM_TEST_JOBS=nope bin/fm-test-run.sh tests/fm-lint.test.sh 2>&1 >/dev/null) \
+    && fail "an invalid FM_TEST_JOBS must refuse the run"
+  case "$err" in
+    *"FM_TEST_JOBS must be a positive integer"*) ;;
+    *) fail "an invalid FM_TEST_JOBS must say so: $err" ;;
+  esac
+
+  pass "automatic worker count is half the processors, floored at 2 and capped at the proven ceiling"
+}
+
+test_one_suite_run_at_a_time_on_this_machine() {
+  local tmp repo queue witness first_pid waited second_rc order
+  tmp=$(fm_test_tmproot fm-test-run-queue) || fail "could not create a temp root"
+  repo="$tmp/repo"
+  queue="$tmp/queue"
+  witness="$tmp/witness"
+  mkdir -p "$repo/tests" "$queue" || fail "could not build the queue fixture"
+  install_fixture_runner "$repo" || fail "could not install the fixture runner"
+  # Each fixture script brackets its own run in a shared witness file, so
+  # overlap is observable without depending on wall-clock timing.
+  cat >"$repo/tests/fm-lint.test.sh" <<SH
+#!/usr/bin/env bash
+printf 'enter first\n' >>"$witness"
+sleep 3
+printf 'exit first\n' >>"$witness"
+printf 'ok - first\n'
+SH
+  cat >"$repo/tests/fm-crew-state.test.sh" <<SH
+#!/usr/bin/env bash
+printf 'enter second\n' >>"$witness"
+printf 'exit second\n' >>"$witness"
+printf 'ok - second\n'
+SH
+  chmod +x "$repo/tests/fm-lint.test.sh" "$repo/tests/fm-crew-state.test.sh"
+
+  : >"$witness"
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" bin/fm-test-run.sh tests/fm-lint.test.sh >/dev/null 2>&1) &
+  first_pid=$!
+  waited=0
+  while [ "$waited" -lt 100 ]; do
+    grep -Fq 'enter first' "$witness" 2>/dev/null && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  grep -Fq 'enter first' "$witness" || { kill "$first_pid" 2>/dev/null; fail "the first suite run never started"; }
+
+  second_rc=0
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" bin/fm-test-run.sh tests/fm-crew-state.test.sh) \
+    >"$tmp/second.out" 2>"$tmp/second.err" || second_rc=$?
+  wait "$first_pid" || fail "the first suite run failed"
+  [ "$second_rc" -eq 0 ] || fail "the queued run failed: $(cat "$tmp/second.err")"
+  grep -Fq "another suite run is already using this machine" "$tmp/second.err" \
+    || fail "a queued run must say what it is waiting for: $(cat "$tmp/second.err")"
+  order=$(paste -sd, - <"$witness")
+  [ "$order" = "enter first,exit first,enter second,exit second" ] \
+    || fail "two suite runs on one machine must not overlap: $order"
+
+  # --no-queue is what lets a caller run beside the holder on purpose.
+  : >"$witness"
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" bin/fm-test-run.sh tests/fm-lint.test.sh >/dev/null 2>&1) &
+  first_pid=$!
+  waited=0
+  while [ "$waited" -lt 100 ]; do
+    grep -Fq 'enter first' "$witness" 2>/dev/null && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" bin/fm-test-run.sh --no-queue tests/fm-crew-state.test.sh) \
+    >/dev/null 2>"$tmp/nq.err" || { kill "$first_pid" 2>/dev/null; fail "--no-queue run failed: $(cat "$tmp/nq.err")"; }
+  order=$(paste -sd, - <"$witness")
+  wait "$first_pid" || fail "the holding suite run failed"
+  [ "$order" = "enter first,enter second,exit second" ] \
+    || fail "--no-queue must run beside the holder: $order"
+
+  # A separate queue is what an operator uses to opt a whole machine's worth of
+  # runs out; it never waits on this one.
+  : >"$witness"
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" bin/fm-test-run.sh tests/fm-lint.test.sh >/dev/null 2>&1) &
+  first_pid=$!
+  waited=0
+  while [ "$waited" -lt 100 ]; do
+    grep -Fq 'enter first' "$witness" 2>/dev/null && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$tmp/other-queue" bin/fm-test-run.sh tests/fm-crew-state.test.sh) \
+    >/dev/null 2>"$tmp/other.err" || { kill "$first_pid" 2>/dev/null; fail "other-home run failed: $(cat "$tmp/other.err")"; }
+  order=$(paste -sd, - <"$witness")
+  wait "$first_pid" || fail "the holding suite run failed"
+  [ "$order" = "enter first,enter second,exit second" ] \
+    || fail "a separate queue must not wait on this one: $order"
+
+  pass "one suite run at a time on this machine, with --no-queue and a separate queue as the ways out"
+}
+
 test_list_all_exact_suite_coverage
 test_family_selection
 test_single_script_selection
@@ -1378,6 +1584,8 @@ test_changed_runner_surfaces_select_their_family
 test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_uses_bounded_automatic_concurrency
+test_automatic_worker_count_is_half_the_processors
+test_one_suite_run_at_a_time_on_this_machine
 test_script_list_uses_bounded_automatic_concurrency
 test_family_proofs_run_in_separate_concurrent_phases
 test_empty_selection_emits_summary

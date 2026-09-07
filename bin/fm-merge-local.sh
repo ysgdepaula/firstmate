@@ -9,6 +9,10 @@
 # auto-approves), and only as a clean fast-forward - it refuses a diverged branch
 # and tells you to have the crewmate rebase. See AGENTS.md prime directives,
 # project management, and task lifecycle.
+#
+# The fast-forward check and the merge itself run under the machine-wide
+# publication lock (bin/fm-push-lock.sh), so a concurrent push or merge from
+# another worker cannot move the default branch between the two.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -23,6 +27,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "local-only landing (fm-merge-local)"
+# shellcheck source=bin/fm-push-lock.sh
+. "$SCRIPT_DIR/fm-push-lock.sh"
 ID=${1:?usage: fm-merge-local.sh <task-id>}
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
@@ -60,6 +66,11 @@ if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   echo "error: $PROJ has a dirty working tree; refusing to merge into it" >&2
   exit 1
 fi
+
+# One publication at a time on this machine: the ancestry check below and the
+# fast-forward it authorizes must not straddle another worker's push or merge.
+fm_push_lock_acquire "local merge of $BRANCH in $PROJ" || exit $?
+trap 'fm_push_lock_release' EXIT
 
 # Clean fast-forward only: DEFAULT must be an ancestor of BRANCH.
 if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then

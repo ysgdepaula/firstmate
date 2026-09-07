@@ -84,6 +84,11 @@ The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Tes
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
 
+Push through `bin/fm-push-lock.sh -- git push ...`.
+It is a machine-wide lock, so it serializes your push against every other firstmate home and worker on the same machine; publication is seconds of work, and interleaving it is how a validation attestation ends up describing a head that is no longer what shipped.
+`bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh` take that lock themselves, and a `direct-PR` brief hands the worker the exact command.
+A push made from inside another tool's own pipeline is outside this lock.
+
 Check and test the toolbelt before pushing:
 
 ```sh
@@ -94,6 +99,8 @@ bin/fm-test-run.sh tests/<a>.test.sh tests/<b>.test.sh   # several subjects at o
 bin/fm-test-run.sh --family pure-contract-unit   # ordinary family-scoped local path (serial, timed)
 bin/fm-test-run.sh --changed   # normal changed-file-informed path with automatic bounded concurrency
 bin/fm-test-run.sh --changed --jobs 1   # explicit serial override
+FM_TEST_JOBS=2 bin/fm-test-run.sh --changed   # operator ceiling: keep the machine usable while the suite runs
+bin/fm-test-run.sh --changed --no-queue   # run beside another suite run on this machine instead of waiting for it
 bin/fm-test-run.sh --changed --max-wall-ms 300000   # same automatic path with a post-run five-minute result check
 bin/fm-test-run.sh --proven-isolated --jobs 4   # explicit local parallel of the individually proven set
 bin/fm-test-run.sh --lane portable-serial   # portable serial remainder (watcher/AFK/tmux/stateful)
@@ -113,6 +120,9 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 
 `bin/fm-test-run.sh` is the single owner of behavior-suite selection, portable CI lane composition, bounded concurrency admission, per-script timing markers, family totals, the coverage guard, and the optional JSON timing artifact.
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
+Two of its bounds exist to keep a development machine usable while work runs on it, and its header owns both: the automatic worker count is half the machine's processors rather than all of them, and one complete suite run executes at a time on a machine, so a second run waits instead of adding a second worker pool to the same machine.
+That queue is machine-wide rather than per-checkout because the runs that overloaded a laptop were validation-gate runs in throwaway worktrees, which share no checkout and declare no firstmate home.
+`FM_TEST_JOBS` lowers the worker count without touching a command line, and `--no-queue` opts one run out of that wait.
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.

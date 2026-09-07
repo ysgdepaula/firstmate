@@ -63,6 +63,11 @@
 # destination, normal-case deduplication, and at-least-once recovery.
 # A landed merge whose outcome cannot be written is reported loudly rather than
 # misreported as a failed merge.
+#
+# The forge merge call and the outcome read that follows it run under the
+# machine-wide publication lock (bin/fm-push-lock.sh), so this merge and a
+# concurrent push or merge from another worker cannot interleave. The lock is
+# taken after every refusal above it, so an invalid request never queues.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra forge merge args>]
 set -eu
 
@@ -81,6 +86,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "PR merge (fm-pr-merge)"
+# shellcheck source=bin/fm-push-lock.sh
+. "$SCRIPT_DIR/fm-push-lock.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -622,6 +629,13 @@ gitlab_confirm_merged() {
   fi
   [ "$state" = merged ]
 }
+
+# One publication at a time on this machine. Taken here, after every argument
+# and role refusal above, so only a request that is actually going to reach the
+# forge ever waits, and held across the merge call and its outcome read so a
+# concurrent push cannot move the head between them.
+fm_push_lock_acquire "merge $URL" || exit $?
+trap 'fm_push_lock_release' EXIT
 
 # Record before either forge call. This arms the merge poll without claiming a
 # landed outcome, so even a provider read failure after a real merge cannot

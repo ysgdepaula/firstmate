@@ -121,6 +121,15 @@ trap fm_test_cleanup EXIT
 trap 'fm_test_cleanup; exit 130' INT
 trap 'fm_test_cleanup; exit 143' TERM
 
+# Keep the machine-wide publication lock (bin/fm-push-lock.sh) out of the
+# suite. Its whole point is that every firstmate home on a machine shares one
+# lock, so a test that drives fm-pr-merge or fm-merge-local would otherwise
+# contend with the operator's real pushes and with concurrent test workers.
+# Point it at this test process's own directory instead; a test that means to
+# exercise contention creates its own two callers under one directory.
+FM_PUSH_LOCK_DIR=$(fm_test_tmproot fm-push-lock) || return 1
+export FM_PUSH_LOCK_DIR
+
 # fm_test_reap_orphans: best-effort sweep for fixture roots left behind by a
 # prior run that was killed hard enough to skip the traps above (e.g. a
 # SIGKILL timeout). Only removes directories carrying the .fm-test-fixture
