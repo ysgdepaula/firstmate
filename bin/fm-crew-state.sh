@@ -406,9 +406,9 @@ nm_active_steps_rows() {
 # Rows of the `steps[N]{step,status,findings,duration_ms}:` table in the
 # captured run output ($RUN_OUT) - the full per-step ledger, present on
 # terminal runs too, unlike active_steps[] which the pipeline emits only while
-# a step is actually running or fixing. Column order is deliberately not
-# assumed: the header's own indentation bounds the block, and callers below
-# read the table as text.
+# a step is actually running or fixing. The header's own indentation bounds
+# the block; the failure classifier expects step and status as the first two
+# columns in the emitted table.
 nm_steps_rows() {
   printf '%s\n' "$RUN_OUT" | awk '
     /^[[:space:]]*steps\[[0-9]+\]\{/ { hdr = index($0, "steps"); inblock = 1; next }

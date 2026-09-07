@@ -3447,8 +3447,8 @@ spawn_commit_backlog_transition() {
 
 # The deferred-signal exit path's preservation report. A claim about preserved
 # state is only trustworthy if that state is read back after the commit: the
-# commit's own exit status has been observed to agree with a row that did not
-# actually move (fm-yi4j evidence, 2026-09-05). This re-reads the paired record
+# commit's successful exit status alone does not prove the row moved
+# (tests/fm-backlog-atomicity.test.sh). This re-reads the paired record
 # and the backlog row under the same per-task lock as the commit, repairs a row
 # the commit believed it moved, and sets SPAWN_PRESERVED_CLAIM to exactly what
 # was verified or attempted - never intent phrased as outcome.
