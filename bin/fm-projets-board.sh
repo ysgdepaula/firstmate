@@ -1,0 +1,492 @@
+#!/usr/bin/env bash
+# fm-projets-board.sh - compose, render, and arm the /projets Lavish page.
+#
+# The page is the captain's per-PROJECT view of the fleet: a rail of projects on
+# the left, one project at a time on the right, seven blocks per project (what is
+# under way, what is missing from the captain, what is missing from others, the
+# management pages, this month's costs, the last five captain-facing events, the
+# next meeting), and three badges on top (live workers, decisions to take, share
+# of the subscriptions spent). The shipped template
+# (.agents/skills/projets/assets/page-template.html) plus one injected
+# fm-projets-board.v1 JSON payload make the page; this script owns every
+# mechanic so the invoking agent's per-run work stays "compose, polish, build".
+#
+# Usage:
+#   fm-projets-board.sh compose [--snapshot <fm-bearings.v1.json>] [--config <projets.json>]
+#                               [--quota <quota-axi.json> | --no-quota] [--costs <couts.json>]
+#                               [--now <iso8601>]
+#   fm-projets-board.sh render <payload.json>
+#   fm-projets-board.sh build <payload.json>
+#   fm-projets-board.sh path
+#
+# compose    Print a mechanically composed fm-projets-board.v1 payload on stdout.
+#            The ONLY fleet-state reader is bin/fm-bearings-snapshot.sh (run with
+#            its bounds lifted so every project sees all of its work); this script
+#            never parses state/ or data/ itself. Grouping BY PROJECT is the
+#            novelty: each row's task id and repo are matched against the private
+#            correspondence table config/projets.json (schema fm-projets-config.v1,
+#            owned by docs/configuration.md "Projects page"), id prefix first,
+#            longest prefix wins, then repo. Without a table every repo becomes
+#            its own project and the page says the table is missing. Rows that
+#            match nothing land in `unassigned`, which the page shows as a brain
+#            gap rather than hiding. Costs come from the optional measured file
+#            data/projets-couts.json (schema fm-projets-couts.v1) plus quota-axi's
+#            subscription windows; anything unmeasured stays null and the page
+#            prints "a mesurer" instead of a number. The next meeting is only what
+#            the table records; calendar sync is out of scope and the page says
+#            "agenda non connecte" when nothing is recorded. Every captain-facing
+#            string is passed through the internal-vocabulary filter below before
+#            it reaches the payload, and the composer translates each task state
+#            into plain French. The rail order is decided here: projects sort by
+#            how many decisions wait on the captain, most first, then by name.
+# render     Validate the payload and inject it into a fresh copy of the shipped
+#            template at the stable page path. No Lavish call, no registration:
+#            this is what tests and screenshot captures use. Prints `board: <path>`.
+# build      render, then establish or resume the Lavish session on the page,
+#            then arm it as a process-event source (arm-if-absent). Output:
+#              board: <path>
+#              <lavish-axi session output>
+#              served: <path>
+#              armed: <source-id>            (first registration)
+#              already-armed: <source-id>    (registration already present)
+#            Serve-first is the same ordering rule as bin/fm-bearings-board.sh: a
+#            registered poll can never race a session that does not exist.
+#            DELIBERATELY NO keyed-answer binding (bin/fm-captain-hold.sh bind):
+#            the captain decided that a page button SENDS the answer to firstmate,
+#            who asks the question again in chat before acting, and that nothing
+#            acts directly from the page. The template therefore queues plain
+#            Lavish prompts whose context data carries `projet`, `decision`, and
+#            `choix` (never the `question`/`answer` pair the keyed intake reads),
+#            so even a bound source could not close a task from a click.
+# path       Print the stable page path for this home.
+#
+# Validation is fail-closed: the payload must be valid JSON with
+# schema=fm-projets-board.v1 and every renderer-consumed field must satisfy the
+# types and invariants below, including the captain-vocabulary filter on every
+# captain-facing string. Anything else refuses before the existing page is
+# touched.
+#
+# fm-projets-board.v1 (all strings are captain-facing French unless noted):
+#   schema, home, generated (iso8601), updated_label ("11/09 00h30")
+#   badges: {workers:int, decisions:int, subscriptions:string|null}
+#   projects[]: {id:slug, name, headline:string|null,
+#     doing[]: {id, result, status, next:string|null, url:https|null},
+#     missing_from_you[]: {key:slug, question, options[]: {value:slug, label}, url:https|null},
+#     missing_from_others[]: {who, what, tag:string|null},
+#     pages[]: {label, url:https|null, state:string|null},
+#     costs: {period, tokens_api:string|null, subscription_share:string|null, source},
+#     journal[] (max 5): {when:string|null, what, url:https|null},
+#     meeting: null | {title, date:YYYY-MM-DD, with:string|null, bring[], decide[]},
+#     gaps[]: string}
+#   unassigned[]: {id, what}
+#   table_missing: bool
+#
+# Captain vocabulary: no string may carry an internal term (crewmate, brief,
+# gate, teardown, worktree, watcher, heartbeat, wake, harness, backend, stale,
+# checkout, spawn, hook, pane, needs-decision, ask-user, fail-closed,
+# fail-open); the composer drops such details and the validator refuses them.
+# "worker" is the captain's own word for a live helper and stays allowed.
+#
+# The page path is stable - $FM_HOME/.lavish/projets.html - so a rebuild keeps
+# the same Lavish session URL and the same canonical process-event source id.
+# Injection escapes every `<` in the compact JSON as the \u003c string escape,
+# so a payload string containing "</script>" can never end the data block early.
+#
+# FM_PROJETS_BOARD_TEMPLATE overrides the shipped template path (tests only).
+# FM_PROJETS_QUOTA_TIMEOUT bounds the quota-axi call in seconds (default 15).
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-$FM_ROOT}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-timeout-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+TEMPLATE="${FM_PROJETS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/projets/assets/page-template.html}"
+PLACEHOLDER='__FM_PROJETS_BOARD_DATA__'
+BOARD_SCHEMA=fm-projets-board.v1
+CONFIG_SCHEMA=fm-projets-config.v1
+COSTS_SCHEMA=fm-projets-couts.v1
+QUOTA_TIMEOUT=${FM_PROJETS_QUOTA_TIMEOUT:-15}
+case "$QUOTA_TIMEOUT" in ''|*[!0-9]*|0) QUOTA_TIMEOUT=15 ;; esac
+
+usage() {
+  awk '
+    NR == 1 { next }
+    /^#/ { sub(/^# ?/, ""); print; next }
+    { exit }
+  ' "$0"
+}
+
+fail() {
+  printf 'fm-projets-board: %s\n' "$*" >&2
+  exit 1
+}
+
+board_path() { printf '%s/.lavish/projets.html\n' "$FM_HOME"; }
+
+# One owner for the vocabulary rule: the composer filters with it, the
+# validator refuses with it. Word-bounded, case-insensitive.
+INTERNAL_RE='(?i)(^|[^a-z0-9_-])(crewmate|crewmates|brief|briefs|gate|gates|teardown|worktree|worktrees|watcher|heartbeat|wake|wakes|harness|backend|backends|stale|checkout|spawn|spawned|hook|hooks|pane|panes|needs-decision|ask-user|fail-closed|fail-open)([^a-z0-9_-]|$)'
+
+# --- compose ----------------------------------------------------------------
+snapshot_default() {
+  FM_BEARINGS_IN_FLIGHT=500 FM_BEARINGS_DECISIONS=500 FM_BEARINGS_LANDED=500 \
+  FM_BEARINGS_LANDED_PER_HOME=500 FM_BEARINGS_GATES=500 FM_BEARINGS_RECORDED_PRS=500 \
+    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued
+}
+
+quota_default() {  # prints quota-axi JSON or nothing
+  command -v quota-axi >/dev/null 2>&1 || return 0
+  fm_run_timed "$QUOTA_TIMEOUT" quota-axi --json 2>/dev/null || true
+}
+
+command_compose() {
+  local snapshot="" config="" quota="" no_quota=0 costs="" now=""
+  local snap_json cfg_json quota_json costs_json
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --snapshot) shift; snapshot=${1:?--snapshot needs a file} ;;
+      --config) shift; config=${1:?--config needs a file} ;;
+      --quota) shift; quota=${1:?--quota needs a file} ;;
+      --no-quota) no_quota=1 ;;
+      --costs) shift; costs=${1:?--costs needs a file} ;;
+      --now) shift; now=${1:?--now needs an iso8601 timestamp} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ -n "$now" ] || now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  if [ -n "$snapshot" ]; then
+    [ -f "$snapshot" ] || fail "snapshot does not exist: $snapshot"
+    snap_json=$(cat "$snapshot")
+  else
+    snap_json=$(snapshot_default) || fail "cannot read the fleet snapshot"
+  fi
+  printf '%s' "$snap_json" | jq -e '.schema == "fm-bearings.v1"' >/dev/null 2>&1 \
+    || fail "the snapshot is not an fm-bearings.v1 document"
+
+  [ -n "$config" ] || config="$CONFIG/projets.json"
+  if [ -f "$config" ]; then
+    cfg_json=$(jq -c . "$config" 2>/dev/null) || fail "the project table is not valid JSON: $config"
+    printf '%s' "$cfg_json" | jq -e --arg s "$CONFIG_SCHEMA" '
+      .schema == $s and (.projects | type == "array")
+      and ([.projects[] | type == "object"
+            and (.id | type == "string" and test("^[a-z0-9][a-z0-9._-]{0,63}$"))
+            and (.name | type == "string" and length > 0)
+            and ((has("prefixes") | not) or (.prefixes | type == "array" and all(.[]; type == "string" and length > 0)))
+            and ((has("repos") | not) or (.repos | type == "array" and all(.[]; type == "string" and length > 0)))
+           ] | all)
+      and ([.projects[].id] | unique | length) == (.projects | length)
+    ' >/dev/null 2>&1 || fail "the project table does not satisfy $CONFIG_SCHEMA: $config"
+  else
+    cfg_json='null'
+  fi
+
+  if [ "$no_quota" = 1 ]; then
+    quota_json='null'
+  elif [ -n "$quota" ]; then
+    [ -f "$quota" ] || fail "quota file does not exist: $quota"
+    quota_json=$(jq -c . "$quota" 2>/dev/null) || fail "the quota file is not valid JSON: $quota"
+  else
+    quota_json=$(quota_default)
+    [ -n "$quota_json" ] && printf '%s' "$quota_json" | jq -e . >/dev/null 2>&1 || quota_json='null'
+  fi
+
+  [ -n "$costs" ] || costs="$DATA/projets-couts.json"
+  if [ -f "$costs" ]; then
+    costs_json=$(jq -c . "$costs" 2>/dev/null) || fail "the costs file is not valid JSON: $costs"
+    printf '%s' "$costs_json" | jq -e --arg s "$COSTS_SCHEMA" '.schema == $s and (.projects | type == "object")' >/dev/null 2>&1 \
+      || fail "the costs file does not satisfy $COSTS_SCHEMA: $costs"
+  else
+    costs_json='null'
+  fi
+
+  printf '%s' "$snap_json" | jq \
+    --arg now "$now" \
+    --arg internal_re "$INTERNAL_RE" \
+    --argjson cfg "$cfg_json" \
+    --argjson quota "$quota_json" \
+    --argjson costs "$costs_json" '
+  def clean: tostring | gsub("\\s+"; " ") | gsub("^ | $"; "");
+  def trunc($n): clean | if length > $n then .[:($n - 1)] + "…" else . end;
+  def safe: test($internal_re) | not;
+  def fr_day: if . == null then null else
+    (capture("^(?<y>[0-9]{4})-(?<m>[0-9]{2})-(?<d>[0-9]{2})")? | if . == null then null else "\(.d)/\(.m)" end) end;
+  def state_label:
+    {working: "en cours", parked: "attend une réponse", paused: "en pause, attente extérieure",
+     blocked: "bloqué", done: "livré", failed: "en échec", unknown: "état inconnu", dead: "arrêté"}[.]
+    // "état inconnu";
+  def month_label:
+    (["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"]) as $m
+    | ($now | capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})")?) as $c
+    | if $c == null then "ce mois" else $m[($c.mo | tonumber) - 1] end;
+  def updated_label:
+    ($now | capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2})")?)
+    | if . == null then $now else "\(.d)/\(.mo) \(.h)h\(.mi)" end;
+  def id_words($prefixes):
+    . as $id
+    | ([ $prefixes[] | . as $pre | select($id | startswith($pre)) ] | sort_by(-length) | .[0]) as $p
+    | (if $p == null then $id else ($id | ltrimstr($p)) end)
+    | gsub("[-_]+"; " ") | clean;
+  # A title that opens with the project name or its id prefix ("Torre : ...",
+  # "chef: ...") repeats the card heading, so the card drops that label.
+  def strip_label($name; $prefixes):
+    . as $s
+    | ([ $name, ($prefixes[] | rtrimstr("-") | rtrimstr("_")) ] | map(select(length > 0))
+       | map(ascii_downcase) | unique) as $labels
+    | (reduce $labels[] as $l ($s;
+         if (. | ascii_downcase | test("^" + ($l | gsub("[^a-z0-9]"; ".")) + " ?: ")) then
+           (. | sub("^[^:]*: "; "")) else . end))
+    | clean;
+
+  ($cfg.projects // []) as $projects
+  | ($projects | length > 0) as $has_table
+  | ($now[:10]) as $today
+  | def prefix_match($id):
+      ([ $projects[] | . as $p | ($p.prefixes // [])[] | . as $pre | select($id | startswith($pre)) | {id: $p.id, n: ($pre | length)} ]
+       | sort_by(-.n) | .[0].id);
+  def repo_match($repo):
+      if $repo == null then null
+      else ([ $projects[] | select(((.repos // []) | index($repo)) != null) | .id ] | .[0]) end;
+  def project_of($id; $repo):
+      if $has_table then (prefix_match($id) // repo_match($repo)) else $repo end;
+  def project_cfg($pid): ([ $projects[] | select(.id == $pid) ] | .[0]) // {};
+  def prefixes_of($pid): (project_cfg($pid).prefixes // []);
+
+  ([ .recorded_prs[]? | {key: .id, value: .url} ] | from_entries) as $pr_by_id
+  | ([ .in_flight[] | . + {project: project_of(.id; .repo)} ]) as $doing_rows
+  | ([ .decisions_open[] | . + {project: project_of(.id; (.repo // null))} ]) as $decision_rows
+  | ([ .landed[] | . + {project: project_of(.id; (.repo // null))} ]) as $landed_rows
+  | ([ .gates[]? | select(.reason | test("^(until |held [0-9]+d)")) | . + {project: project_of(.id; null)} ]) as $deferred_rows
+  | (if $has_table then [ $projects[] | {id, name} ]
+     else ([ ($doing_rows + $decision_rows + $landed_rows)[] | .project | select(. != null) ] | unique | map({id: ., name: .})) end) as $project_list
+  | ($quota.providers // [] | [ .[]
+       | select(type == "object")
+       | (.provider // "?") as $p
+       | ((.quotaSemantics.effectiveAvailability // []) | map(select(.scope == "all_models")) | .[0].effectivePercentRemaining) as $left
+       | select($left != null and ($left | type) == "number")
+       | "\($p | (.[:1] | ascii_upcase) + .[1:]) \(100 - ($left | floor)) %" ]
+     | if length == 0 then null else join(" · ") end) as $subscriptions
+  | ($costs.projects // {}) as $cost_map
+  | [ $project_list[] | . as $proj
+      | (prefixes_of($proj.id)) as $pfx
+      | (project_cfg($proj.id)) as $pc
+      | ([ $doing_rows[] | select(.project == $proj.id)
+           | . as $r
+           | (($r.doing // "") | clean) as $detail
+           | ($r.state | state_label) as $label
+           | ($pr_by_id[$r.id] // null) as $url
+           # The words of the worker explain a pause, a block, or a failure; every
+           # detail of every other state is machinery and stays off the page.
+           | (($r.state == "paused" or $r.state == "blocked" or $r.state == "failed")
+              and ($detail | length) > 0 and ($detail | safe)) as $keep_detail
+           | {id: $r.id,
+              result: (($r.title // null) as $t
+                       | if $t != null and ($t | clean | length) > 0 and ($t | safe)
+                         then ($t | strip_label($proj.name; $pfx) | trunc(110))
+                         else ($r.id | id_words($pfx)) end),
+              status: (if $keep_detail then ($label + " · " + ($detail | trunc(90))) else $label end),
+              next: (if $r.state == "done" and $url != null then "fusion à confirmer"
+                     elif $r.state == "parked" then "ta réponse débloque la suite"
+                     elif $r.state == "blocked" then "firstmate doit débloquer"
+                     else null end),
+              url: (if $url != null and ($url | test("^https://")) then $url else null end)} ]) as $doing
+      | ([ $decision_rows[] | select(.project == $proj.id)
+           | . as $d
+           | (($pc.decisions // {})[$d.id] // {}) as $dc
+           | (($dc.question // $d.title // $d.summary // $d.id) | clean) as $q
+           | {key: $d.id,
+              question: (if ($q | safe) then ($q | strip_label($proj.name; $pfx) | trunc(160)) else ($d.id | id_words($pfx)) end),
+              options: (if (($dc.options // []) | length) > 0 then [ $dc.options[] | {value, label} ]
+                        else [{value: "fait", label: "c\u2019est fait"}, {value: "on-en-parle", label: "on en parle"}, {value: "plus-tard", label: "plus tard"}] end),
+              url: null,
+              configured: ((($dc.options // []) | length) > 0)} ]) as $missing_you
+      | ([ ($pc.missing_from_others // [])[] | {who: (.who // "?"), what: (.what // "?"), tag: (.tag // null)} ]) as $missing_others
+      | ([ ($pc.pages // [])[] | {label: (.label // "?"), url: (if (.url // null) != null and (.url | test("^https://")) then .url else null end), state: (.state // null)} ]) as $pages
+      | ([ $landed_rows[] | select(.project == $proj.id)
+           | {when: (.date | fr_day),
+              what: ((.what // .id) | clean | if safe then (strip_label($proj.name; $pfx) | trunc(110)) else "livraison" end),
+              url: (if (.artifact // "" | test("^https://")) then .artifact else null end), sort: (.date // "")} ]
+         # newest day first; inside one day keep the newest-first snapshot order
+         | to_entries | sort_by([.value.sort, -.key]) | reverse | map(.value | del(.sort)) | .[:5]) as $journal
+      | ($cost_map[$proj.id] // null) as $cost
+      | ({period: month_label,
+          tokens_api: (if $cost != null and ($cost.tokens_api_eur // null) != null then "\($cost.tokens_api_eur | floor) EUR au prix API" else null end),
+          subscription_share: (if $cost != null and ($cost.subscription_share_pct // null) != null then "\($cost.subscription_share_pct) % de tes abonnements" else null end),
+          source: (if $cost != null then "mesure de nuit (journaux de sessions, prix API publics)" else "quota-axi et journaux de sessions : mesure de nuit à brancher" end)}) as $costs_block
+      | (($pc.meeting // null) as $m
+         | if $m == null or ($m.date // null) == null then null
+           else {title: ($m.title // "réunion"), date: $m.date, with: ($m.with // null),
+                 bring: ($m.bring // []), decide: ($m.decide // [])} end) as $meeting
+      | ([ $deferred_rows[] | select(.project == $proj.id) ] | length) as $deferred_n
+      | ([ (if ($pages | length) == 0 then "aucune page de gestion enregistrée" else empty end),
+           (if ($missing_others | length) == 0 then "aucune attente des autres enregistrée" else empty end),
+           (if $meeting == null then "aucune réunion enregistrée, agenda non connecté" else empty end),
+           (if $cost == null then "coûts à mesurer" else empty end),
+           (([ $missing_you[] | select(.configured | not) ] | length) as $n
+            | if $n > 0 then "\($n) décision\(if $n > 1 then "s" else "" end) sans choix fermés, boutons génériques" else empty end),
+           (if $deferred_n > 0 then "\($deferred_n) décision\(if $deferred_n > 1 then "s" else "" end) mise\(if $deferred_n > 1 then "s" else "" end) de côté, datée\(if $deferred_n > 1 then "s" else "" end) ou ancienne\(if $deferred_n > 1 then "s" else "" end)" else empty end) ]) as $gaps
+      | {id: $proj.id, name: $proj.name,
+         headline: (($pc.headline // null) | if . == null then null else clean end),
+         doing: $doing,
+         missing_from_you: ($missing_you | map(del(.configured))),
+         missing_from_others: $missing_others,
+         pages: $pages, costs: $costs_block, journal: $journal, meeting: $meeting, gaps: $gaps}
+    ] as $composed
+  | ($composed | sort_by([-(.missing_from_you | length), .name])) as $sorted
+  | ([ ($doing_rows + $decision_rows + $landed_rows)[] | select(.project == null)
+       | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
+     | unique_by(.id)) as $unassigned
+  | {schema: "fm-projets-board.v1",
+     home: .home, generated: $now, updated_label: updated_label,
+     badges: {workers: ([ $doing_rows[] | select(.state == "working") ] | length),
+              decisions: (([ $sorted[] | (.missing_from_you | length) + (.missing_from_others | length) ] | add) // 0),
+              subscriptions: $subscriptions},
+     projects: $sorted,
+     unassigned: $unassigned,
+     table_missing: ($has_table | not)}
+  ' || fail "composition failed"
+}
+
+# --- validate / render / build ----------------------------------------------
+validate_payload() {  # <data.json>
+  jq -e --arg schema "$BOARD_SCHEMA" --arg internal_re "$INTERNAL_RE" '
+    def nonempty_string: type == "string" and length > 0;
+    def captain_string: nonempty_string and (test($internal_re) | not);
+    def optional_captain($name): (has($name) | not) or (.[$name] == null) or (.[$name] | captain_string);
+    def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
+    def https_or_null: . == null or (type == "string"
+      and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
+    def doing_item: type == "object" and (.id | nonempty_string) and (.result | captain_string)
+      and (.status | captain_string) and (has("next") and (.next == null or (.next | captain_string)))
+      and (has("url") and (.url | https_or_null));
+    def option_item: type == "object" and (.value | slug(128)) and (.label | captain_string);
+    def you_item: type == "object" and (.key | slug(128)) and (.question | captain_string)
+      and (.options | type == "array" and length > 0 and all(.[]; option_item))
+      and (has("url") and (.url | https_or_null));
+    def other_item: type == "object" and (.who | captain_string) and (.what | captain_string)
+      and optional_captain("tag");
+    def page_item: type == "object" and (.label | captain_string) and (has("url") and (.url | https_or_null))
+      and optional_captain("state");
+    def journal_item: type == "object" and optional_captain("when") and (.what | captain_string)
+      and (has("url") and (.url | https_or_null));
+    def meeting_item: . == null or (type == "object" and (.title | captain_string)
+      and (.date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+      and optional_captain("with")
+      and (.bring | type == "array" and all(.[]; captain_string))
+      and (.decide | type == "array" and all(.[]; captain_string)));
+    def costs_item: type == "object" and (.period | captain_string) and optional_captain("tokens_api")
+      and optional_captain("subscription_share") and (.source | captain_string);
+    def project_item: type == "object" and (.id | slug(64)) and (.name | captain_string)
+      and optional_captain("headline")
+      and (.doing | type == "array" and all(.[]; doing_item))
+      and (.missing_from_you | type == "array" and all(.[]; you_item))
+      and (.missing_from_others | type == "array" and all(.[]; other_item))
+      and (.pages | type == "array" and all(.[]; page_item))
+      and (.costs | costs_item)
+      and (.journal | type == "array" and length <= 5 and all(.[]; journal_item))
+      and (has("meeting") and (.meeting | meeting_item))
+      and (.gaps | type == "array" and all(.[]; captain_string));
+    def count: type == "number" and . >= 0 and floor == .;
+    type == "object"
+    and (.schema == $schema)
+    and (.home | nonempty_string)
+    and (.generated | nonempty_string)
+    and (.updated_label | captain_string)
+    and (.badges | type == "object" and (.workers | count) and (.decisions | count)
+         and (has("subscriptions") and (.subscriptions == null or (.subscriptions | captain_string))))
+    and (.projects | type == "array" and all(.[]; project_item))
+    and ([.projects[].id] | unique | length) == (.projects | length)
+    and (.unassigned | type == "array" and all(.[]; type == "object" and (.id | nonempty_string) and (.what | captain_string)))
+    and (.table_missing | type == "boolean")
+  ' "$1" >/dev/null
+}
+
+explain_refusal() {  # <data.json> - best-effort pointer at the first offending string
+  jq -r --arg internal_re "$INTERNAL_RE" '
+    [ paths(type == "string") as $p | {path: ($p | map(tostring) | join(".")), v: getpath($p)}
+      | select(.v | test($internal_re)) ] | .[0]
+    | if . == null then empty else "internal vocabulary at \(.path): \(.v)" end
+  ' "$1" 2>/dev/null || true
+}
+
+render_page() {  # <data.json> -> prints board: <path>
+  local data=$1 board json tmp extracted why
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ -f "$data" ] || fail "page data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "page data is not valid JSON: $data"
+  if ! validate_payload "$data"; then
+    why=$(explain_refusal "$data")
+    fail "page data does not satisfy $BOARD_SCHEMA: $data${why:+ ($why)}"
+  fi
+  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "page template is missing: $TEMPLATE"
+  [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
+    || fail "page template does not carry exactly one data slot: $TEMPLATE"
+
+  json=$(jq -c . "$data") || fail "cannot compact the page data"
+  json=${json//</\\u003c}
+
+  board=$(board_path)
+  (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
+  tmp=$(umask 077; mktemp "${board%/*}/.projets.XXXXXX") || fail "cannot stage the page"
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot inject the page data"
+  fi
+  if grep -qxF "$PLACEHOLDER" "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the page data slot survived injection"
+  fi
+  extracted=$(sed -n '/<script id="projets-data" type="application\/json">/,/<\/script>/p' "$tmp" \
+    | sed '1d;$d')
+  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
+    rm -f -- "$tmp"
+    fail "the built page does not carry a readable $BOARD_SCHEMA payload"
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
+    rm -f -- "$tmp"
+    fail "cannot publish the page"
+  fi
+  printf 'board: %s\n' "$board"
+}
+
+command_render() {
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  render_page "$1"
+}
+
+command_build() {
+  local board sid
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  render_page "$1"
+  board=$(board_path)
+
+  command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
+  lavish-axi "$board" || fail "cannot establish the page Lavish session"
+  printf 'served: %s\n' "$board"
+
+  sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
+    || fail "cannot derive the page source id"
+  if "$SCRIPT_DIR/fm-procevent.sh" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$sid"; then
+    printf 'already-armed: %s\n' "$sid"
+  else
+    "$SCRIPT_DIR/fm-procevent-lavish.sh" arm "$board" >/dev/null \
+      || fail "cannot arm the page as a process-event source"
+    printf 'armed: %s\n' "$sid"
+  fi
+}
+
+case "${1-}" in
+  compose) shift; command_compose "$@" ;;
+  render) shift; command_render "$@" ;;
+  build) shift; command_build "$@" ;;
+  path) board_path ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

@@ -530,6 +530,51 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Projects page (config/projets.json, data/projets-couts.json)
+
+`config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page.
+[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the page's "sans projet" entry.
+Without the table every repo becomes its own project and the page says the table is missing.
+This section is the single owner of both schemas; the script header owns the page payload and the mechanics.
+
+```json
+{
+  "schema": "fm-projets-config.v1",
+  "projects": [
+    {
+      "id": "<slug, unique>",
+      "name": "<captain-facing name>",
+      "prefixes": ["<task-id prefix such as torre->", "..."],
+      "repos": ["<registry repo name>", "..."],
+      "headline": "<optional one-line context shown under the name>",
+      "missing_from_others": [{"who": "<person>", "what": "<what is expected>", "tag": "<optional date or state>"}],
+      "pages": [{"label": "<page name>", "url": "<optional https link>", "state": "<optional state such as à jour 10/09>"}],
+      "meeting": {"title": "<title>", "date": "YYYY-MM-DD", "with": "<optional attendees>", "bring": ["..."], "decide": ["..."]},
+      "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}}
+    }
+  ]
+}
+```
+
+`id`, `name`, and at least one of `prefixes` or `repos` are what routing needs; every other field only fills a page block.
+A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
+The meeting is only what the captain gave in chat; calendar synchronisation is not part of this table.
+Every string is captain-facing French and must pass the script's internal-vocabulary filter, or `render` refuses the page.
+
+`data/projets-couts.json` is the optional gitignored output of a cost measurement job, read by the same `compose`:
+
+```json
+{
+  "schema": "fm-projets-couts.v1",
+  "period": "YYYY-MM",
+  "projects": {"<project id>": {"tokens_api_eur": 123.4, "subscription_share_pct": 14.5}}
+}
+```
+
+A project absent from that file shows "à mesurer" for both figures; the page never invents a cost.
+The subscriptions badge on top of the page comes from `quota-axi --json` at compose time, one consumed share per provider that reports an all-models window, and reads "à mesurer" when quota-axi is absent or silent.
+Neither file is inherited by secondmate homes.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
