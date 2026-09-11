@@ -100,6 +100,8 @@
 # Compatibility: JSON is the primary machine-readable surface.
 # events[] preserves recorded PRs, merge notifications, terminal receipts and
 # answered captain holds with their available event clock, never observation time.
+# The event reader includes data/<id>/events.jsonl even after metadata removal;
+# fm-task-events-lib.sh owns that durable format.
 # bin/fm-fleet-events.jq owns their projection for this home and home summaries.
 # Human views must render this output instead of parsing state files again.
 set -u
@@ -693,6 +695,12 @@ prefetch_task_current_states() {
 event_evidence_json() {
   local file version provider host path number epoch id
   {
+    for file in "$DATA"/*/events.jsonl; do
+      [ -f "$file" ] && [ ! -L "$file" ] || continue
+      id=${file%/events.jsonl}
+      id=${id##*/}
+      jq -c --arg id "$id" 'select(.schema == "fm-task-events.v1") | . + {id:$id,recorded:true}' "$file" || return 1
+    done
     for file in "$STATE"/*.pr-poll-merge-notified; do
       [ -f "$file" ] && [ ! -L "$file" ] || continue
       id=$(basename "$file" .pr-poll-merge-notified)

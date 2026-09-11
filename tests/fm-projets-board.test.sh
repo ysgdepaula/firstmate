@@ -475,7 +475,7 @@ EOF
     node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/projets.html" > "$home/rendered.json"
     jq -e '.error == "" and (.notice | contains("partiel"))
       and (.cards[] | select(.id == "torre") | .deadline == "Prochaine échéance : Pilote, 14/09" and .team == "Eli et Yan"
-        and (.blocs[3].text | contains("lien refusé")) and (.blocs[6].text | contains("synchronisation dans les deux sens")))
+        and (.blocs[3].text | contains("lien refusé")) and (.blocs[6].text | contains("La prochaine reunion est lue depuis ton agenda")))
       and (.cards[] | select(.id == "solos") | (.blocs[0].empty | contains("État partiel")) and (.blocs[1].empty | contains("État partiel")))' "$home/rendered.json" >/dev/null || fail "review rendering lost details"
   fi
   out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --config "$home/table.json" --no-quota --now 2026-09-13T12:00:00Z) || fail "stale calendar composition failed"
@@ -503,6 +503,24 @@ test_allowed_management_networks_and_refusals() {
   done
   pass "allowed private networks navigate and rejected links stay explicit"
 }
+
+test_meetings_use_calendar_time() {
+  local home out
+  home=$(make_home calendar-time)
+  write_snapshot "$home/snapshot.json"
+  run_board "$home" init >/dev/null
+  jq '.timezone="Europe/Paris" | .projects[0].meeting={title:"Matin",date:"2026-09-11",time:"09:00"}' "$home/config/projets.json" > "$home/config/new.json"
+  mv "$home/config/new.json" "$home/config/projets.json"
+  cat > "$home/data/projets-agenda.json" <<'EOF'
+{"schema":"fm-projets-agenda.v1","read_at":"2026-09-11T11:00:00Z","meetings":[{"project":"torre","title":"Matin","date":"2026-09-11","time":"09:00","source":"agenda"},{"project":"torre","title":"Apres-midi","date":"2026-09-11","time":"16:00","source":"agenda"}]}
+EOF
+  out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota --now 2026-09-11T12:00:00Z) || fail "calendar compose failed"
+  printf '%s' "$out" | jq -e '.projects[] | select(.id=="torre") | .agenda_available and [.meetings[].time]==["16:00"] and .meeting.source=="agenda"' >/dev/null || fail "past chat or agenda meeting retained"
+  out=$(FM_PROJETS_TIMEZONE=America/New_York run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota --now 2026-09-11T12:00:00Z) || fail "timezone override failed"
+  printf '%s' "$out" | jq -e '.projects[] | select(.id=="torre") | .meeting.time=="09:00" and .meeting.source=="agenda et chat"' >/dev/null || fail "calendar timezone ignored"
+  pass "calendar and chat meetings exclude elapsed times in the configured timezone"
+}
+test_meetings_use_calendar_time
 
 test_path_is_stable_and_home_scoped
 test_compose_groups_rows_by_project_prefix_then_repo

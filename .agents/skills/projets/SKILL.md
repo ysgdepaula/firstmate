@@ -64,7 +64,7 @@ Freeform comments and annotations on the page are the captain's words about the 
 
 ## Calendar limits
 
-The page reads both the agenda and dates given in chat, shows their sources and disagreement, and discloses missing or day-old agenda readings.
+The page reads both the agenda and dates given in chat, excludes elapsed meetings in the configured calendar timezone, shows their sources and disagreement, and distinguishes a successful empty read from missing or day-old agenda readings.
 La synchronisation dans les deux sens est un chantier suivant.
 No page button writes to the agenda or acts on the project; the chat confirmation remains mandatory.
 

@@ -35,3 +35,24 @@ jq -e '.projects.torre.tokens_api_eur == null and .projects.solos.tokens_api_usd
 "$ROOT/bin/fm-projets-couts.sh" --period 2026-08 --eur-rate 0.9 >/dev/null
 jq -e '.period == "2026-08" and .projects.torre.tokens_api_usd > 499' "$FM_HOME/data/projets-couts.json" >/dev/null || fail "month change reused old cache"
 pass "monthly costs deduplicate requests, price cache tiers, attribute projects and refresh incrementally"
+
+mkdir -p "$FM_PROJETS_CLAUDE_ROOT/-Users-test-agent-platform/one/subagents"
+python3 - "$FM_PROJETS_CLAUDE_ROOT" <<'PYLOG'
+import json, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+parent=root/"-Users-test-agent-platform/one.jsonl"
+a=json.loads(parent.read_text().splitlines()[1])
+b={"type":"assistant","requestId":"child","timestamp":"2026-09-11T10:00:00Z","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000000}}}
+child=root/"-Users-test-agent-platform/one/subagents/agent-one.jsonl"
+child.write_text("\n".join(map(json.dumps,[{"type":"user","message":{"content":"state/solos-incorrect.status"}},a,b]))+"\n")
+PYLOG
+"$ROOT/bin/fm-projets-couts.sh" --period 2026-09 >/dev/null
+jq -e '.projects.torre.tokens_api_usd == 13 and .projects.solos.tokens_api_usd == 0.3 and .projects.torre.subscription_share_pct == 93.55' "$FM_HOME/data/projets-couts.json" >/dev/null || fail "nested usage attribution or global deduplication failed"
+for content in 'malformed' '{"type":"user","message":{"content":"state/torre-test.status"}}' '{"type":"assistant","requestId":"empty","timestamp":"2026-09-11T10:00:00Z","message":{"model":"claude-sonnet-4-6","usage":{}}}'; do
+  mkdir -p "$TMP_ROOT/unusable/project"
+  printf '%s\n' "$content" > "$TMP_ROOT/unusable/project/log.jsonl"
+  FM_PROJETS_CLAUDE_ROOT="$TMP_ROOT/unusable" "$ROOT/bin/fm-projets-couts.sh" --period 2026-09 >/dev/null
+  jq -e '.projects | all(.[]; .tokens_api_usd == null and .subscription_share_pct == null and .sources.measured == [] and any(.sources.missing[]; contains("aucune requête exploitable")))' "$FM_HOME/data/projets-couts.json" >/dev/null || fail "unusable logs reported measured zero"
+done
+pass "nested requests inherit parent attribution and unusable logs remain unmeasured"

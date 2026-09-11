@@ -74,12 +74,15 @@ def parse_file(path, period):
                 if stamp.astimezone(dt.timezone.utc).strftime("%Y-%m") != period:
                     continue
                 usage = message.get("usage")
-                if not isinstance(usage, dict):
+                if not isinstance(usage, dict) or not any(k in usage for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")):
                     raise ValueError()
                 rid = row.get("requestId") or message.get("id") or row.get("uuid")
-                if not rid:
+                quantities(usage)
+                if not isinstance(rid, str) or not rid:
                     missing.add("Claude : requête sans identifiant")
                     continue
+                if not isinstance(message.get("model", ""), str):
+                    raise ValueError()
                 requests.append({"id": rid, "model": message.get("model", ""), "usage": usage})
             except (ValueError, TypeError, AttributeError):
                 missing.add("Claude : lignes illisibles ou usage incomplet")
@@ -131,12 +134,14 @@ def main():
     projects = table["projects"]
     cache_path = data / "projets-couts-cache.json"
     cache = read_json(cache_path, {})
-    previous = cache.get("files", {}) if cache.get("period") == args.period and cache.get("schema") == "fm-projets-couts-cache.v1" else {}
+    previous = cache.get("files", {}) if cache.get("period") == args.period and cache.get("schema") == "fm-projets-couts-cache.v1" and cache.get("parser_version") == 2 else {}
     files, requests, missing = {}, {}, {"Codex : journaux non lus"}
     if args.eur_rate is None:
         missing.add("EUR : taux de conversion non fourni")
     readable = 0
-    for path in sorted(root.glob("*/*.jsonl")):
+    parents = {}
+    paths = sorted(root.glob("*/*.jsonl")) + sorted(root.glob("*/*/subagents/agent-*.jsonl"))
+    for path in paths:
         try:
             stat = path.stat()
             signature = [stat.st_mtime_ns, stat.st_size]
@@ -147,7 +152,12 @@ def main():
             files[str(path)] = {"signature": signature, "parsed": parsed}
             readable += 1
             missing.update(parsed["missing"])
-            pid = project_of(parsed["task"], path.parent.name, projects)
+            if path.parent.name == "subagents":
+                parent = path.parent.parent.parent / (path.parent.parent.name + ".jsonl")
+                pid = parents.get(str(parent))
+            else:
+                pid = project_of(parsed["task"], path.parent.name, projects)
+                parents[str(path)] = pid
             for request in parsed["requests"]:
                 key = request["id"]
                 if key not in requests:
@@ -165,7 +175,7 @@ def main():
             missing.add("Claude : journal illisible")
     if not readable:
         missing.add("Claude : aucun journal disponible")
-    totals = {p["id"]: {"usd": 0, "tokens": 0, "priced": 0, "unknown": False} for p in projects}
+    totals = {p["id"]: {"usd": 0, "tokens": 0, "priced": 0, "unknown": False, "valid": 0} for p in projects}
     all_tokens = 0
     for request in requests.values():
         try:
@@ -178,6 +188,7 @@ def main():
         total = totals.get(request["project"])
         if total is not None:
             total["tokens"] += tokens
+            total["valid"] += 1
         else:
             missing.add("Claude : usage sans projet inclus dans le total")
         model = re.sub(r"-[0-9]{8}$", "", request["model"])
@@ -195,14 +206,14 @@ def main():
             total["priced"] += 1
     output = {}
     for pid, total in totals.items():
-        usd = round(total["usd"], 6) if readable and (total["priced"] or not total["unknown"]) else None
+        usd = round(total["usd"], 6) if total["valid"] and (total["priced"] or not total["unknown"]) else None
         output[pid] = {
             "tokens_api_usd": usd,
             "tokens_api_eur": round(usd * args.eur_rate, 6) if usd is not None and args.eur_rate is not None else None,
-            "subscription_share_pct": round(total["tokens"] / all_tokens * 100, 2) if all_tokens else None,
-            "sources": {"measured": ["Claude : jetons du mois, valeur API publique et part des jetons"] if readable else [], "missing": sorted(missing)},
+            "subscription_share_pct": round(total["tokens"] / all_tokens * 100, 2) if all_tokens and total["valid"] else None,
+            "sources": {"measured": ["Claude : jetons du mois, valeur API publique et part des jetons"] if total["valid"] else [], "missing": sorted(missing | (set() if total["valid"] else {"Claude : aucune requête exploitable pour ce projet"}))},
         }
-    write_json(cache_path, {"schema": "fm-projets-couts-cache.v1", "period": args.period, "files": files})
+    write_json(cache_path, {"schema": "fm-projets-couts-cache.v1", "parser_version": 2, "period": args.period, "files": files})
     write_json(data / "projets-couts.json", {"schema": "fm-projets-couts.v1", "period": args.period, "price_date": PRICE_DATE, "price_source": PRICE_SOURCE, "eur_per_usd": args.eur_rate, "projects": output})
     print("costs: " + str(data / "projets-couts.json"))
 

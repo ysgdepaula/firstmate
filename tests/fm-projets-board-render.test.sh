@@ -62,7 +62,7 @@ test_an_empty_project_renders_all_seven_blocks_with_empty_states() {
     and (.cards[0].blocs[3].empty | test("Aucune page de gestion"))
     and (.cards[0].blocs[4].cells == ["à mesurer", "à mesurer"])
     and (.cards[0].blocs[5].empty | test("Aucun événement"))
-    and (.cards[0].blocs[6].empty | test("Agenda non connecté"))
+    and (.cards[0].blocs[6].empty | test("Agenda non lu"))
     and (.badges | map(.value)) == ["0", "0", "à mesurer"]
     and (.badges[2].soft == true)
     and (.rail == [{"id": "solos", "name": "Solos", "count": 0, "on": true}])
@@ -120,12 +120,12 @@ test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
     and (.queued[0].prompt | test("Torre") and test("Hébergement") and test("chez Torre"))
     and .queued[0].data == {"projet": "torre", "decision": "torre-hebergement", "choix": "chez-torre"}
     and (.queued[0].data | has("question") | not) and (.queued[0].data | has("answer") | not)
-    and .cards[0].blocs[1].decisions[0].sent == true
+    and .cards[0].blocs[1].decisions[0].sent == true and .cards[0].blocs[1].decisions[0].refused == false
     and (.cards[0].blocs[1].decisions[0].choices == ["chez-toi", "chez-torre"])
   ' >/dev/null || fail "a choice button did not queue a plain prompt for firstmate: $out"
   for mode in absent queue-only reject; do
     out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' click=torre/torre-hebergement/chez-torre "lavish=$mode")
-    printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0] | .sent == false and (.message | contains("non transmis")) and (.message | contains("envoyé") | not)' >/dev/null || fail "unavailable delivery was confirmed: $out"
+    printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0] | .sent == false and .refused == true and (.message | contains("non transmis")) and (.message | contains("envoyé") | not)' >/dev/null || fail "unavailable delivery was confirmed: $out"
   done
   pass "a choice button queues a prompt for firstmate and never a keyed answer that could close a task"
 }
@@ -187,6 +187,16 @@ test_unreadable_data_refuses_instead_of_showing_an_empty_fleet() {
     || fail "a wrong-schema page did not refuse plainly: $out"
   pass "unreadable page data refuses plainly instead of showing an empty fleet"
 }
+
+test_fresh_empty_calendar() {
+  local home out projects
+  home=$(make_home empty-calendar)
+  projects=$(empty_project torre Torre | jq '[. + {agenda_available:true,meetings:[]}]')
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":0,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '.cards[0].blocs[6].text | contains("Aucune reunion a venir dans ton agenda pour ce projet") and (contains("Agenda non lu") | not)' >/dev/null || fail "empty calendar misreported as unavailable"
+  pass "a fresh empty calendar is distinguished from an unread calendar"
+}
+test_fresh_empty_calendar
 
 test_an_empty_project_renders_all_seven_blocks_with_empty_states
 test_the_rail_keeps_payload_order_and_shows_one_project_at_a_time

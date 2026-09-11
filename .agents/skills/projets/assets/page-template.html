@@ -109,7 +109,8 @@ td.dim { color: var(--muted); }
 .you li.sent { border-style: dashed; }
 .you li.sent .btn { border-color: var(--line); color: var(--muted); }
 .you .ok { flex-basis: 100%; color: var(--muted); font-size: 13px; display: none; }
-.you li.sent .ok { display: block; }
+.you li.refused { border-style: dotted; }
+.you li.sent .ok, .you li.refused .ok { display: block; }
 
 .gaps { margin-top: 22px; border-top: var(--hair) dashed var(--line); padding-top: 14px; }
 .gaps h3 { font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 400; margin-bottom: 8px; }
@@ -338,6 +339,7 @@ __FM_PROJETS_BOARD_DATA__
           var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
           if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
           if (!window.lavish || typeof window.lavish.queuePrompt !== "function" || typeof window.lavish.sendQueuedPrompts !== "function") {
+            li.className = "refused";
             ok.textContent = "non transmis : ouvre cette page dans Lavish";
             return;
           }
@@ -346,7 +348,7 @@ __FM_PROJETS_BOARD_DATA__
             ok.textContent = "envoyé à firstmate : " + o.label + ". Firstmate te reposera la question en chat avant d'agir.";
           }
           function failed() {
-            li.className = "";
+            li.className = "refused";
             ok.textContent = "non transmis : l’envoi a échoué, réessaie dans Lavish";
           }
           try {
@@ -426,8 +428,8 @@ __FM_PROJETS_BOARD_DATA__
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
     return m ? m[3] + "/" + m[2] : iso;
   }
-  function renderMeeting(body, m) {
-    if (!m) { body.appendChild(el("p", "empty", "Agenda non connecté : aucune date donnée en chat pour ce projet.")); return; }
+  function renderMeeting(body, m, available) {
+    if (!m) { body.appendChild(el("p", "empty", available ? "Aucune reunion a venir dans ton agenda pour ce projet" : "Agenda non lu : fichier absent ou vieux de plus d’un jour")); return; }
     var ul = el("ul", "tl");
     var li = el("li", "");
     li.appendChild(el("b", "", m.title + ", " + frDate(m.date)));
@@ -471,9 +473,9 @@ __FM_PROJETS_BOARD_DATA__
     var b4 = bloc(4, "Pages de gestion", !narrow); renderPages(b4.body, p.pages); c.appendChild(b4.node);
     var b5 = bloc(5, "Coûts du mois (" + ((p.costs && p.costs.period) || "ce mois") + ")", !narrow); renderCosts(b5.body, p.costs); c.appendChild(b5.node);
     var b6 = bloc(6, "Journal, les 5 derniers événements", !narrow); renderJournal(b6.body, p.journal); c.appendChild(b6.node);
-    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m); });
+    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m, p.agenda_available); });
     if (p.meeting_warning) b7.body.appendChild(el("p", "", p.meeting_warning));
-    b7.body.appendChild(el("p", "src", "La synchronisation dans les deux sens est un chantier suivant.")); c.appendChild(b7.node);
+    b7.body.appendChild(el("p", "src", "La prochaine reunion est lue depuis ton agenda ; ce qui n'y est pas n'y entre pas encore.")); c.appendChild(b7.node);
 
     if (p.gaps && p.gaps.length) {
       var g = el("div", "gaps");

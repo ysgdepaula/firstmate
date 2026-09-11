@@ -95,6 +95,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   projets-couts.json  optional measured per-project costs read by the /projets page; absent means the page says the costs are still to be measured (docs/configuration.md "Projects page")
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <id>/events.jsonl  durable dated task events; survives teardown; bin/fm-task-events-lib.sh owns the format
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth

@@ -310,7 +310,7 @@ family_for_basename() {
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|\
-    fm-projets-board-render.test.sh|fm-projets-events.test.sh|\
+    fm-projets-board-render.test.sh|fm-projets-board-chrome.test.sh|fm-projets-events.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -1306,7 +1306,10 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-projets-couts.test.sh
       ;;
     bin/fm-projets-board.sh|bin/fm-projets-data.jq|.agents/skills/projets/assets/*)
-      printf '%s\n' __script__:fm-projets-board.test.sh __script__:fm-projets-board-render.test.sh
+      printf '%s\n' __script__:fm-projets-board.test.sh __script__:fm-projets-board-render.test.sh __script__:fm-projets-board-chrome.test.sh
+      ;;
+    bin/fm-task-events-lib.sh)
+      printf '%s\n' __script__:fm-projets-events.test.sh
       ;;
     bin/fm-fleet-events.jq)
       printf '%s\n' snapshot-bearings

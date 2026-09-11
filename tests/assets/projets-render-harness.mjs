@@ -132,6 +132,7 @@ const cards = main.children.filter((c) => c.className.split(/\s+/).includes("car
         key: li.attributes["data-decision"],
         choices: li.all().filter((c) => c.attributes["data-choice"]).map((c) => c.attributes["data-choice"]),
         message: li.byClass("ok")[0]?.textContent ?? "",
+        refused: li.className.split(/\s+/).includes("refused"),
         sent: li.className.split(/\s+/).includes("sent"),
       })),
       items: body.byClass("tl").flatMap((ul) => ul.children.map((li) => li.textContent)),

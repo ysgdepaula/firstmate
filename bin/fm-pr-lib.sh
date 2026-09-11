@@ -309,6 +309,10 @@ fm_pr_metadata_identity_parse() {
         fi
         seen_pr=1
         ;;
+      pr_recorded_at=*)
+        value=${line#pr_recorded_at=}
+        [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || post_pr_invalid=1
+        ;;
       pr_head=*)
         if [ "$seen_pr" -eq 1 ]; then
           value=${line#pr_head=}

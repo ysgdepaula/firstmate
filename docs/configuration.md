@@ -586,11 +586,13 @@ Every string is captain-facing French and must pass the script's internal-vocabu
 A project absent from that file shows "à mesurer" for both figures; the page never invents a cost.
 The subscriptions badge on top of the page comes from `quota-axi --json` at compose time, one consumed share per provider that reports an all-models window, and reads "à mesurer" when quota-axi is absent or silent.
 The producer reads Claude JSONL assistant usage for the selected UTC month, deduplicates request ids, and attributes sessions by the first user text naming a task status path, then by project prefix or repository folder suffix.
+Nested `<project>/<session>/subagents/agent-*.jsonl` logs inherit their parent session’s attribution and share the global request-id deduplication.
+A project with no valid request in the selected month has null amounts and share, no measured-source claim, and a named missing-source note, including when logs are malformed or contain only user messages.
 The subscription share is the project’s fraction of all Claude tokens read, including unattributed usage in the denominator; it is not a cash charge.
 The dated public model prices, cache creation tiers and read rates live in the Python helper; unknown models stay explicit in `sources.missing`.
 `--eur-rate` supplies EUR per USD; without it USD remains measured and EUR is unavailable because the private CRIA report and its conversion rate are not bundled.
 The output also records `price_date`, `price_source` and `eur_per_usd` for provenance.
-`data/projets-couts-cache.json` uses schema `fm-projets-couts-cache.v1`, a `period` and a `files` map keyed by absolute JSONL path, with `[mtime_ns, size]` signatures and parsed task, requests and missing-source notes; it is disposable and invalidated on month changes.
+`data/projets-couts-cache.json` uses schema `fm-projets-couts-cache.v1`, a `period`, a `parser_version` and a `files` map keyed by absolute JSONL path, with `[mtime_ns, size]` signatures and parsed task, requests and missing-source notes; it is disposable and invalidated on month or parser-version changes.
 Only a costs file whose `period` matches composition is displayed; otherwise the page names both periods and leaves current costs unavailable.
 
 `data/projets-agenda.json` is a session-produced calendar reading through Wispr, with this schema:
@@ -606,7 +608,10 @@ Only a costs file whose `period` matches composition is displayed; otherwise the
 `time` and `with` are optional; `read_at` is an ISO timestamp with a timezone and marks a successful read, including an empty calendar.
 A missing, invalid or older-than-one-day reading is unavailable; it never silently replaces a chat date.
 The page shows the next agenda meeting and upcoming chat meeting, combines equal title/date/time/attendees while preserving chat preparation, and keeps different readings with a disagreement notice.
-Dates and optional times use the captain’s calendar timezone; composition compares dates against `--now`.
+The project table’s optional top-level `timezone` is an IANA name, defaulting to `Europe/Paris`; `FM_PROJETS_TIMEZONE` overrides it.
+Dates and optional `HH:MM` times use that timezone; composition converts `--now` to it and excludes elapsed meetings before selecting the next one, for both calendar and chat.
+A date without a time remains eligible throughout that local day.
+A fresh empty reading says there are no upcoming meetings; an unavailable reading says the agenda has not been read.
 Bidirectional calendar synchronization is a following task, disclosed in block 7.
 These files are not inherited by secondmate homes.
 

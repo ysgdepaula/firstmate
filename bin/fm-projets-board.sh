@@ -81,7 +81,7 @@
 #     costs: {period, tokens_api:string|null, subscription_share:string|null, source},
 #     journal[] (max 5): {when:string|null, what, url:allowed|null, url_refused?:string},
 #     meeting: null | {title, date:YYYY-MM-DD, time:string|null, source, with:string|null, bring[], decide[]},
-#     meetings[]: same meeting shape, meeting_warning:string|null, partial:bool,
+#     meetings[]: same meeting shape, meeting_warning:string|null, agenda_available:bool, partial:bool,
 #     gaps[]: string}
 #   unassigned[]: {id, what}
 #   table_missing: bool, warnings[]: captain-facing collection limitations
@@ -140,11 +140,12 @@ board_path() { printf '%s/.lavish/projets.html\n' "$FM_HOME"; }
 # validator refuses with it. Word-bounded, case-insensitive.
 INTERNAL_RE='(?i)(^|[^a-z0-9_-])(crewmate|crewmates|brief|briefs|gate|gates|teardown|worktree|worktrees|watcher|heartbeat|wake|wakes|harness|backend|backends|stale|checkout|spawn|spawned|hook|hooks|pane|panes|needs-decision|ask-user|fail-closed|fail-open)([^a-z0-9_-]|$)'
 
+# FM_PROJETS_TIMEZONE overrides the table timezone (default Europe/Paris).
 # --- compose ----------------------------------------------------------------
 snapshot_default() {
   FM_BEARINGS_IN_FLIGHT=500 FM_BEARINGS_DECISIONS=500 FM_BEARINGS_LANDED=500 \
   FM_BEARINGS_LANDED_PER_HOME=500 FM_BEARINGS_GATES=500 FM_BEARINGS_RECORDED_PRS=500 \
-    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued --all-decisions --all-secondmates --all-recorded-prs
+    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued --all-secondmates --all-recorded-prs
 }
 
 quota_default() {  # prints quota-axi JSON or nothing
@@ -154,7 +155,7 @@ quota_default() {  # prints quota-axi JSON or nothing
 
 command_compose() {
   local snapshot="" config="" quota="" no_quota=0 costs="" now="" agenda=""
-  local agenda_json
+  local agenda_json calendar_now calendar_timezone
   local snap_json cfg_json quota_json costs_json
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -198,6 +199,17 @@ command_compose() {
     cfg_json='null'
   fi
 
+  calendar_timezone=${FM_PROJETS_TIMEZONE:-$(printf '%s' "$cfg_json" | jq -r '.timezone // "Europe/Paris"')}
+  calendar_now=$(python3 - "$now" "$calendar_timezone" <<'PYTIME'
+import datetime, sys
+from zoneinfo import ZoneInfo
+now = datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+if now.tzinfo is None:
+    raise ValueError("--now requires a timezone")
+print(now.astimezone(ZoneInfo(sys.argv[2])).strftime("%Y-%m-%dT%H:%M:%S"))
+PYTIME
+  ) || fail "invalid calendar timezone or current timestamp"
+
   if [ "$no_quota" = 1 ]; then
     quota_json='null'
   elif [ -n "$quota" ]; then
@@ -226,7 +238,7 @@ command_compose() {
 
   printf '%s' "$snap_json" | jq -L "$SCRIPT_DIR" \
     --argjson agenda "$agenda_json" \
-    --arg now "$now" \
+    --arg now "$now" --arg calendar_now "$calendar_now" \
     --arg internal_re "$INTERNAL_RE" \
     --argjson cfg "$cfg_json" \
     --argjson quota "$quota_json" \
@@ -269,7 +281,7 @@ command_compose() {
 
   ($cfg.projects // []) as $projects
   | ($projects | length > 0) as $has_table
-  | ($now[:10]) as $today
+  | ($calendar_now[:10]) as $today
   | def prefix_match($id):
       ([ $projects[] | . as $p | ($p.prefixes // [])[] | . as $pre | select($id | local_id | startswith($pre)) | {id: $p.id, n: ($pre | length)} ]
        | sort_by(-.n) | .[0].id);
@@ -348,15 +360,16 @@ command_compose() {
           source: (if $costs != null and $costs.period != $now[:7] then "mesure de \($costs.period), pas encore de mesure pour \($now[:7])"
                    elif $cost != null then (($cost.sources.measured // ["journaux de sessions, prix API publics"]) + ($cost.sources.missing // []) | join(" · "))
                    else "Claude : journaux non mesurés · Codex : journaux non lus" end)}) as $costs_block
-      | def meeting_row($source): {title:(.title // "réunion"),date,time:(.time // null),with:(.with // null),bring:(.bring // []),decide:(.decide // []),source:$source};
-        ([($pc.meeting // empty) | select(.date >= $today) | meeting_row("chat")]) as $chat
-      | ([if $agenda_fresh then $agenda.meetings[]? | select(.project == $proj.id and .source == "agenda" and .date >= $today) | meeting_row("agenda") else empty end]
+      | def upcoming: .date > $today or (.date == $today and ((.time // "") == "" or (.date + "T" + .time + ":00") >= $calendar_now));
+        def meeting_row($source): {title:(.title // "réunion"),date,time:(.time // null),with:(.with // null),bring:(.bring // []),decide:(.decide // []),source:$source};
+        ([($pc.meeting // empty) | select(upcoming) | meeting_row("chat")]) as $chat
+      | ([if $agenda_fresh then $agenda.meetings[]? | select(.project == $proj.id and .source == "agenda") | select(upcoming) | meeting_row("agenda") else empty end]
          | sort_by([.date,.time]) | .[:1]) as $calendar
       | (if ($chat | length) > 0 and ($calendar | length) > 0 and ($chat[0] | {date,time,title,with}) == ($calendar[0] | {date,time,title,with})
          then [$chat[0] + {source:"agenda et chat"}] else $chat + $calendar end | sort_by([.date,.time])) as $meetings
       | ($meetings[0] // null) as $meeting
-      | (if ($meetings | length) > 1 then "l’agenda et le chat ne disent pas la même chose"
-         elif ($agenda_fresh | not) then "agenda non connecté : fichier absent ou vieux de plus d’un jour" else null end) as $meeting_warning
+      | (if ($meetings | length) > 1 then "l\u2019agenda et le chat ne disent pas la même chose"
+         elif ($agenda_fresh | not) then "Agenda non lu : fichier absent ou vieux de plus d\u2019un jour" else null end) as $meeting_warning
       | ([ $deferred_rows[] | select(.project == $proj.id) ] | length) as $deferred_n
       | ([ (if ($pc.deadline // null) == null then "prochaine échéance non enregistrée" else empty end),
            (if ($pc.team // null) == null then "équipe non enregistrée" else empty end),
@@ -370,7 +383,7 @@ command_compose() {
       | {id: $proj.id, name: $proj.name,
          headline: (($pc.headline // null) | if . == null then null else clean end),
          team:($pc.team // null), deadline:($pc.deadline // null), partial:($warnings | length > 0),
-         meetings:$meetings, meeting_warning:$meeting_warning,
+         meetings:$meetings, agenda_available:$agenda_fresh, meeting_warning:$meeting_warning,
          doing: $doing,
          missing_from_you: ($missing_you | map(del(.configured))),
          missing_from_others: $missing_others,
@@ -426,6 +439,7 @@ validate_payload() {  # <data.json>
     def project_item: type == "object" and (.id | slug(64)) and (.name | captain_string)
       and optional_captain("headline") and optional_captain("team") and optional_captain("meeting_warning")
       and ((has("deadline") | not) or .deadline == null or (.deadline | type == "object" and (.label | captain_string) and (.date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))))
+      and ((has("agenda_available") | not) or (.agenda_available | type == "boolean"))
       and ((has("partial") | not) or (.partial | type == "boolean"))
       and ((has("meetings") | not) or (.meetings | type == "array" and all(.[]; . != null and meeting_item)))
       and (.doing | type == "array" and all(.[]; doing_item))
