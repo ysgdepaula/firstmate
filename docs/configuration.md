@@ -571,16 +571,18 @@ At most one project carries `brain: true`: it is the captain's brain card, seede
 That card swaps two blocks: "pas encore rattaché à un projet" lists every fleet row that matches no project (the page then has no separate "sans projet" entry), and "quick wins du cerveau" replaces the meeting block.
 Its `articles` become closed choices "validé / à revoir / plus tard" in "il manque de toi", and its `pages` are the brain's pages.
 Every project may carry `recommendations`, which become closed choices "on y va / pas maintenant / on en parle" tagged `recommandation` in "il manque de toi" because they wait on the captain, and `creations`, listed under the management pages.
-A recommendation or creation may be a plain string or an object; `what`, `why`, `label`, `kind` and `title` are captain-facing French.
+A recommendation, creation or article may be a plain string or an object; `what`, `why`, `label`, `kind` and `title` are captain-facing French.
+These lists contain pending recommendations and articles, and produced creations; every retained recommendation or article becomes a choice regardless of extra status fields.
+Empty or vocabulary-rejected primary text (`what`, `label`, `title`) excludes the entry; empty or rejected optional text (`why`, `kind`) becomes null while preserving the entry.
 Investigations running for a project (scout work) leave the "on est en train de" table for their own list under it, so results being built and knowledge being gathered stay apart.
 
-`id`, `name`, and at least one of `prefixes` or `repos` are what routing needs; every other field only fills a page block.
+`id` and `name` identify each card; optional `prefixes` and `repos` route fleet rows to it, while cards without either can still display configured content.
 A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
 The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
 Missing `team` or `deadline` becomes a visible knowledge gap.
 Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, the Tailscale range 100.64/10 and hosts ending in .ts.net.
 Refused links are preserved as `url: null` with `url_refused` in the page payload, and visibly labeled in management pages, work, decisions and journal entries.
-Every string is captain-facing French and must pass the script's internal-vocabulary filter, or `render` refuses the page.
+All display text must be captain-facing French; after composition's filtering, remaining display text must pass the script's internal-vocabulary validator or `render` refuses the page.
 
 `data/projets-couts.json` is the gitignored output of `bin/fm-projets-couts.sh`, read by the same `compose`:
 
@@ -651,7 +653,8 @@ This section is the single owner of the table schema; the script headers own the
 ```
 
 The reserved port is 4390 by default, beside Lavish on 4387; change it in the table before installing.
-`bin/fm-projets-serve.sh install` writes a launchd user agent (label `co.firstmate.projets-serve.<home-hash>`) as a plist under the home's private `config/`, links it from `~/Library/LaunchAgents/`, loads it and starts it, so the server comes back at login and after a crash (`KeepAlive`); `stop`, `start`, `status` (launchd state plus one real request to the index), `url` and `uninstall` complete the set, and nothing is written into the shared repository.
+Use `bin/fm-projets-serve.sh install` for persistence at user login and restart after a crash; its header owns the private plist, LaunchAgents link, and installation, start, stop, status, URL and uninstall commands.
+The server reads this table at startup; restart the installed service with `bin/fm-projets-serve.sh start` after changing the host, port, demos or folders.
 The tailnet only covers the captain's own machines: the front door is never a client-facing surface, the index and the page say so, and client pages go through a paid subdomain in a separate piece of work.
 The table and the plist are not inherited by secondmate homes.
 

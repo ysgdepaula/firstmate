@@ -32,8 +32,8 @@
 #            owned by docs/configuration.md "Projects page"), id prefix first,
 #            longest prefix wins, then repo. Without a table every repo becomes
 #            its own project and the page says the table is missing. Rows that
-#            match nothing land in `unassigned`, which the page shows as a brain
-#            gap rather than hiding. Costs come from the optional measured file
+#            match nothing land in the brain card's `unlinked`, or `unassigned`
+#            when no brain card is configured. Costs come from the optional measured file
 #            data/projets-couts.json (schema fm-projets-couts.v1) plus quota-axi's
 #            subscription windows; anything unmeasured stays null and the page
 #            prints "a mesurer" instead of a number. Calendar readings come from
