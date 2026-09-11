@@ -173,8 +173,8 @@ __FM_PROJETS_BOARD_DATA__
     if (text !== undefined && text !== null) n.textContent = text;
     return n;
   }
-  function link(text, url, cls) {
-    if (!url) return el("span", cls || "", text);
+  function link(text, url, cls, refused) {
+    if (!url) return el("span", cls || "", text + (refused ? " · lien refusé, hors réseau autorisé" : ""));
     var a = el("a", cls || "", text);
     a.href = url; a.target = "_blank"; a.rel = "noopener";
     return a;
@@ -236,6 +236,11 @@ __FM_PROJETS_BOARD_DATA__
   }
 
   /* --- rail : ordre du payload (le composeur trie : le plus de « il manque de toi » en haut) --- */
+  if (data.warnings && data.warnings.length) {
+    notice.hidden = false;
+    notice.textContent += (notice.textContent ? " · " : "") + data.warnings.join(" · ");
+  }
+
   var projects = data.projects.slice();
   var unassigned = Array.isArray(data.unassigned) ? data.unassigned : [];
   if (unassigned.length) {
@@ -275,8 +280,8 @@ __FM_PROJETS_BOARD_DATA__
     return { node: d, body: body };
   }
 
-  function renderDoing(body, rows) {
-    if (!rows.length) { body.appendChild(el("p", "empty", "Rien en cours sur ce projet.")); return; }
+  function renderDoing(body, rows, partial) {
+    if (!rows.length) { body.appendChild(el("p", "empty", partial ? "État partiel : activité non confirmée." : "Rien en cours sur ce projet.")); return; }
     var wrap = el("div", "scrollx");
     var t = el("table", "doing");
     var thead = el("tr", "");
@@ -287,7 +292,7 @@ __FM_PROJETS_BOARD_DATA__
       var tr = el("tr", "");
       tr.setAttribute("data-doing", r.id);
       var td1 = el("td", "");
-      td1.appendChild(link(r.result, r.url));
+      td1.appendChild(link(r.result, r.url, "", r.url_refused));
       tr.appendChild(td1);
       tr.appendChild(el("td", "", r.status));
       tr.appendChild(el("td", r.next ? "" : "dim", r.next || "rien de ton côté"));
@@ -311,13 +316,13 @@ __FM_PROJETS_BOARD_DATA__
 
   function renderYou(body, project) {
     var rows = project.missing_from_you;
-    if (!rows.length) { body.appendChild(el("p", "empty", "Rien ne manque de toi sur ce projet.")); return; }
+    if (!rows.length) { body.appendChild(el("p", "empty", project.partial ? "État partiel : décisions non confirmées." : "Rien ne manque de toi sur ce projet.")); return; }
     var ul = el("ul", "you");
     rows.forEach(function (r) {
       var li = el("li", "");
       li.setAttribute("data-decision", r.key);
       var q = el("span", "q");
-      q.appendChild(link(r.question, r.url));
+      q.appendChild(link(r.question, r.url, "", r.url_refused));
       li.appendChild(q);
       var btns = el("div", "btns");
       var ok = el("span", "ok");
@@ -332,14 +337,28 @@ __FM_PROJETS_BOARD_DATA__
              fermer une decision, firstmate repose la question en chat. */
           var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
           if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
-          if (typeof window !== "undefined" && window.lavish && window.lavish.queuePrompt) {
+          if (!window.lavish || typeof window.lavish.queuePrompt !== "function" || typeof window.lavish.sendQueuedPrompts !== "function") {
+            ok.textContent = "non transmis : ouvre cette page dans Lavish";
+            return;
+          }
+          function sent() {
+            li.className = "sent";
+            ok.textContent = "envoyé à firstmate : " + o.label + ". Firstmate te reposera la question en chat avant d'agir.";
+          }
+          function failed() {
+            li.className = "";
+            ok.textContent = "non transmis : l’envoi a échoué, réessaie dans Lavish";
+          }
+          try {
             window.lavish.queuePrompt(text, {
               tag: "choice", text: project.name + " : " + r.question + " -> " + o.label, element: li,
               data: { projet: project.id, decision: r.key, choix: o.value }
             });
-          }
-          li.className = "sent";
-          ok.textContent = "en file : " + o.label + ". Firstmate te reposera la question en chat avant d'agir.";
+            var result = window.lavish.sendQueuedPrompts();
+            if (result && typeof result.then === "function") result.then(function (value) { if (value === false) failed(); else sent(); }, failed);
+            else if (result === false) failed(); else sent();
+          } catch (e) { failed(); }
+
         });
         btns.appendChild(b);
       });
@@ -368,7 +387,7 @@ __FM_PROJETS_BOARD_DATA__
     var ul = el("ul", "tl");
     rows.forEach(function (r) {
       var li = el("li", "");
-      li.appendChild(link(r.label, r.url));
+      li.appendChild(link(r.label, r.url, "", r.url_refused));
       if (r.state) li.appendChild(tag(r.state, /à jour|publié/.test(r.state)));
       ul.appendChild(li);
     });
@@ -397,7 +416,7 @@ __FM_PROJETS_BOARD_DATA__
     rows.forEach(function (r) {
       var li = el("li", "");
       if (r.when) li.appendChild(el("span", "", r.when + " · "));
-      li.appendChild(link(r.what, r.url));
+      li.appendChild(link(r.what, r.url, "", r.url_refused));
       ul.appendChild(li);
     });
     body.appendChild(ul);
@@ -412,6 +431,8 @@ __FM_PROJETS_BOARD_DATA__
     var ul = el("ul", "tl");
     var li = el("li", "");
     li.appendChild(el("b", "", m.title + ", " + frDate(m.date)));
+    if (m.time) li.appendChild(el("span", "", " à " + m.time));
+    if (m.source) li.appendChild(el("span", "", " · " + m.source));
     if (m.with) li.appendChild(el("span", "", " avec " + m.with));
     ul.appendChild(li);
     if (m.bring && m.bring.length) ul.appendChild(el("li", "", "À emporter : " + m.bring.join(", ")));
@@ -431,6 +452,8 @@ __FM_PROJETS_BOARD_DATA__
     c.setAttribute("data-project", p.id);
     var head = el("div", "head");
     head.appendChild(el("h2", "", p.name));
+    if (p.deadline) head.appendChild(el("div", "deadline", "Prochaine échéance : " + p.deadline.label + ", " + frDate(p.deadline.date)));
+    if (p.team) head.appendChild(el("div", "team", p.team));
     if (p.headline) head.appendChild(el("div", "headline", p.headline));
     c.appendChild(head);
 
@@ -442,13 +465,15 @@ __FM_PROJETS_BOARD_DATA__
     }
 
     var narrow = typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 720;
-    var b1 = bloc(1, "On est en train de", !narrow); renderDoing(b1.body, p.doing); c.appendChild(b1.node);
+    var b1 = bloc(1, "On est en train de", !narrow); renderDoing(b1.body, p.doing, p.partial); c.appendChild(b1.node);
     var b2 = bloc(2, "Il manque de toi", true); renderYou(b2.body, p); c.appendChild(b2.node);
     var b3 = bloc(3, "Il manque des autres", !narrow); renderOthers(b3.body, p.missing_from_others); c.appendChild(b3.node);
     var b4 = bloc(4, "Pages de gestion", !narrow); renderPages(b4.body, p.pages); c.appendChild(b4.node);
     var b5 = bloc(5, "Coûts du mois (" + ((p.costs && p.costs.period) || "ce mois") + ")", !narrow); renderCosts(b5.body, p.costs); c.appendChild(b5.node);
     var b6 = bloc(6, "Journal, les 5 derniers événements", !narrow); renderJournal(b6.body, p.journal); c.appendChild(b6.node);
-    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); renderMeeting(b7.body, p.meeting); c.appendChild(b7.node);
+    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m); });
+    if (p.meeting_warning) b7.body.appendChild(el("p", "", p.meeting_warning));
+    b7.body.appendChild(el("p", "src", "La synchronisation dans les deux sens est un chantier suivant.")); c.appendChild(b7.node);
 
     if (p.gaps && p.gaps.length) {
       var g = el("div", "gaps");

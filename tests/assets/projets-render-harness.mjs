@@ -74,9 +74,13 @@ globalThis.document = {
   },
 };
 const queued = [];
+const calls = [];
 globalThis.window = {
   innerWidth: Number(opts.width || 1400),
-  lavish: { queuePrompt: (prompt, ctx) => queued.push({ prompt, data: ctx && ctx.data, tag: ctx && ctx.tag }) },
+  lavish: opts.lavish === "absent" ? undefined : {
+    queuePrompt: (prompt, ctx) => { calls.push("queuePrompt"); queued.push({ prompt, data: ctx && ctx.data, tag: ctx && ctx.tag }); },
+    sendQueuedPrompts: opts.lavish === "queue-only" ? undefined : () => { calls.push("sendQueuedPrompts"); if (opts.lavish === "reject") return Promise.reject(new Error("offline")); },
+  },
 };
 globalThis.TextEncoder = TextEncoder;
 
@@ -106,14 +110,19 @@ if (opts.click) {
   if (btn) btn.click();
 }
 
+await Promise.resolve();
 const cards = main.children.filter((c) => c.className.split(/\s+/).includes("card")).map((card) => ({
   id: card.attributes["data-project"],
   name: card.byClass("head")[0]?.children.find((c) => c.tagName === "H2")?.textContent ?? "",
   headline: card.byClass("headline")[0]?.textContent ?? null,
   hidden: card.hidden,
+  deadline: card.byClass("deadline")[0]?.textContent ?? null,
+  team: card.byClass("team")[0]?.textContent ?? null,
   blocs: card.byClass("bloc").map((b) => {
     const body = b.byClass("body")[0] || new Node("div");
     return {
+      text: body.textContent,
+      links: body.all().filter((c) => c.tagName === "A").map((c) => c.href),
       num: Number(b.attributes["data-bloc"]),
       title: b.all().find((c) => c.tagName === "H3")?.textContent ?? "",
       open: b.open,
@@ -122,6 +131,7 @@ const cards = main.children.filter((c) => c.className.split(/\s+/).includes("car
       decisions: body.all().filter((c) => c.attributes["data-decision"]).map((li) => ({
         key: li.attributes["data-decision"],
         choices: li.all().filter((c) => c.attributes["data-choice"]).map((c) => c.attributes["data-choice"]),
+        message: li.byClass("ok")[0]?.textContent ?? "",
         sent: li.className.split(/\s+/).includes("sent"),
       })),
       items: body.byClass("tl").flatMap((ul) => ul.children.map((li) => li.textContent)),
@@ -142,5 +152,5 @@ process.stdout.write(JSON.stringify({
   error: errorText,
   meta: (byId.get("pj-meta") || new Node("div")).textContent,
   notice: notice && !notice.hidden ? notice.textContent : null,
-  badges, rail, cards, queued,
+  badges, rail, cards, queued, calls,
 }) + "\n");

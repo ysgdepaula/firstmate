@@ -113,7 +113,9 @@ test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
         options: [{value: "chez-toi", label: "chez toi"}, {value: "chez-torre", label: "chez Torre"}], url: null}]) ]')
   out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' click=torre/torre-hebergement/chez-torre)
   printf '%s' "$out" | jq -e '
-    (.queued | length) == 1
+    .calls == ["queuePrompt", "sendQueuedPrompts"]
+    and (.cards[0].blocs[1].decisions[0].message | contains("envoyé à firstmate"))
+    and (.queued | length) == 1
     and .queued[0].tag == "choice"
     and (.queued[0].prompt | test("Torre") and test("Hébergement") and test("chez Torre"))
     and .queued[0].data == {"projet": "torre", "decision": "torre-hebergement", "choix": "chez-torre"}
@@ -121,6 +123,10 @@ test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
     and .cards[0].blocs[1].decisions[0].sent == true
     and (.cards[0].blocs[1].decisions[0].choices == ["chez-toi", "chez-torre"])
   ' >/dev/null || fail "a choice button did not queue a plain prompt for firstmate: $out"
+  for mode in absent queue-only reject; do
+    out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' click=torre/torre-hebergement/chez-torre "lavish=$mode")
+    printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0] | .sent == false and (.message | contains("non transmis")) and (.message | contains("envoyé") | not)' >/dev/null || fail "unavailable delivery was confirmed: $out"
+  done
   pass "a choice button queues a prompt for firstmate and never a keyed answer that could close a task"
 }
 

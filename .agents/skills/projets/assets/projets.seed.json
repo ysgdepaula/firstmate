@@ -1,0 +1,64 @@
+{
+  "schema": "fm-projets-config.v1",
+  "projects": [
+    {
+      "id": "torre",
+      "name": "Torre",
+      "prefixes": [
+        "torre-"
+      ]
+    },
+    {
+      "id": "solos",
+      "name": "Solos",
+      "prefixes": [
+        "solos-"
+      ],
+      "repos": [
+        "Solos"
+      ]
+    },
+    {
+      "id": "club",
+      "name": "Club Julien Dumas",
+      "prefixes": [
+        "chef-"
+      ],
+      "repos": [
+        "chefsociety-frontend",
+        "chefsociety-backend",
+        "chefsociety-agent"
+      ]
+    },
+    {
+      "id": "cria",
+      "name": "CRIA",
+      "prefixes": [
+        "cria-"
+      ]
+    },
+    {
+      "id": "ydeep",
+      "name": "YDEEP",
+      "prefixes": [
+        "ydeep-",
+        "cerveau-"
+      ],
+      "repos": [
+        "x-deep-core"
+      ]
+    },
+    {
+      "id": "firstmate",
+      "name": "Firstmate",
+      "prefixes": [
+        "firstmate-",
+        "fm-",
+        "nm-"
+      ],
+      "repos": [
+        "firstmate"
+      ]
+    }
+  ]
+}

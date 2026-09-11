@@ -530,12 +530,16 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
-## Projects page (config/projets.json, data/projets-couts.json)
+## Projects page (config/projets.json, data/projets-couts.json, data/projets-agenda.json)
 
 `config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page.
 [`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the page's "sans projet" entry.
 Without the table every repo becomes its own project and the page says the table is missing.
-This section is the single owner of both schemas; the script header owns the page payload and the mechanics.
+Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP and Firstmate; an existing table is preserved unless `--force` is passed.
+All configured projects remain visible, including those without activity.
+The shared `agent-platform` repository is deliberately absent from the seed: project prefixes distinguish its work.
+Secondmate routing uses the local task id after the slash, preserving the owner independently; ambiguous repository matches remain unassigned.
+This section is the single owner of these configuration schemas; the script header owns the page payload and the mechanics.
 
 ```json
 {
@@ -546,9 +550,11 @@ This section is the single owner of both schemas; the script header owns the pag
       "name": "<captain-facing name>",
       "prefixes": ["<task-id prefix such as torre->", "..."],
       "repos": ["<registry repo name>", "..."],
+      "team": "<optional team description>",
+      "deadline": {"label": "<next milestone>", "date": "YYYY-MM-DD"},
       "headline": "<optional one-line context shown under the name>",
       "missing_from_others": [{"who": "<person>", "what": "<what is expected>", "tag": "<optional date or state>"}],
-      "pages": [{"label": "<page name>", "url": "<optional https link>", "state": "<optional state such as à jour 10/09>"}],
+      "pages": [{"label": "<page name>", "url": "<optional allowed URL>", "state": "<optional state such as à jour 10/09>"}],
       "meeting": {"title": "<title>", "date": "YYYY-MM-DD", "with": "<optional attendees>", "bring": ["..."], "decide": ["..."]},
       "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}}
     }
@@ -558,22 +564,51 @@ This section is the single owner of both schemas; the script header owns the pag
 
 `id`, `name`, and at least one of `prefixes` or `repos` are what routing needs; every other field only fills a page block.
 A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
-The meeting is only what the captain gave in chat; calendar synchronisation is not part of this table.
+The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
+Missing `team` or `deadline` becomes a visible knowledge gap.
+Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16 and hosts ending in .ts.net.
+Refused links are preserved as `url: null` with `url_refused` in the page payload, and visibly labeled in management pages, work, decisions and journal entries.
 Every string is captain-facing French and must pass the script's internal-vocabulary filter, or `render` refuses the page.
 
-`data/projets-couts.json` is the optional gitignored output of a cost measurement job, read by the same `compose`:
+`data/projets-couts.json` is the gitignored output of `bin/fm-projets-couts.sh`, read by the same `compose`:
 
 ```json
 {
   "schema": "fm-projets-couts.v1",
   "period": "YYYY-MM",
-  "projects": {"<project id>": {"tokens_api_eur": 123.4, "subscription_share_pct": 14.5}}
+  "projects": {"<project id>": {
+    "tokens_api_usd": 140.0, "tokens_api_eur": 123.4, "subscription_share_pct": 14.5,
+    "sources": {"measured": ["Claude : jetons du mois"], "missing": ["Codex : journaux non lus"]}
+  }}
 }
 ```
 
 A project absent from that file shows "à mesurer" for both figures; the page never invents a cost.
 The subscriptions badge on top of the page comes from `quota-axi --json` at compose time, one consumed share per provider that reports an all-models window, and reads "à mesurer" when quota-axi is absent or silent.
-Neither file is inherited by secondmate homes.
+The producer reads Claude JSONL assistant usage for the selected UTC month, deduplicates request ids, and attributes sessions by the first user text naming a task status path, then by project prefix or repository folder suffix.
+The subscription share is the project’s fraction of all Claude tokens read, including unattributed usage in the denominator; it is not a cash charge.
+The dated public model prices, cache creation tiers and read rates live in the Python helper; unknown models stay explicit in `sources.missing`.
+`--eur-rate` supplies EUR per USD; without it USD remains measured and EUR is unavailable because the private CRIA report and its conversion rate are not bundled.
+The output also records `price_date`, `price_source` and `eur_per_usd` for provenance.
+`data/projets-couts-cache.json` uses schema `fm-projets-couts-cache.v1`, a `period` and a `files` map keyed by absolute JSONL path, with `[mtime_ns, size]` signatures and parsed task, requests and missing-source notes; it is disposable and invalidated on month changes.
+Only a costs file whose `period` matches composition is displayed; otherwise the page names both periods and leaves current costs unavailable.
+
+`data/projets-agenda.json` is a session-produced calendar reading through Wispr, with this schema:
+
+```json
+{
+  "schema": "fm-projets-agenda.v1",
+  "read_at": "2026-09-11T08:00:00Z",
+  "meetings": [{"project": "torre", "title": "Pilote", "date": "2026-09-14", "time": "10:00", "with": "Eli", "source": "agenda"}]
+}
+```
+
+`time` and `with` are optional; `read_at` is an ISO timestamp with a timezone and marks a successful read, including an empty calendar.
+A missing, invalid or older-than-one-day reading is unavailable; it never silently replaces a chat date.
+The page shows the next agenda meeting and upcoming chat meeting, combines equal title/date/time/attendees while preserving chat preparation, and keeps different readings with a disagreement notice.
+Dates and optional times use the captain’s calendar timezone; composition compares dates against `--now`.
+Bidirectional calendar synchronization is a following task, disclosed in block 7.
+These files are not inherited by secondmate homes.
 
 ## Relay (.env)
 

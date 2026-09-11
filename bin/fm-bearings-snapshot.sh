@@ -57,6 +57,8 @@
 # waste capacity, and --all-landed switches back to the complete global newest-first
 # order.
 #
+# events[] projects the canonical event journal: id, repo, owner, kind (pr,
+# merge, decision, landed), what, url and at (ISO 8601, a day, or null when unknown).
 # Flags:
 #   (default)        compact projection with bounded remote-ledger collection, TOON
 #   --json           the same projected model as JSON (machine/debug; parity form)
@@ -130,6 +132,7 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,title
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,title,owner,repo}, landed{id,what,artifact,owner,repo,date},
+  events{id,repo,owner,kind,what,url,at},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
@@ -460,6 +463,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
      + [ $secondmate_views[] as $m
          | $m.active_children[]?
          | {id:($m.id + "/" + .id),
+            owner:$m.id,local_id:.id,
             kind:(.kind // "secondmate"),
             state:(.state // "working"),
             repo:(.repo // null),
@@ -476,6 +480,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
               | select(.source == "backlog" and .verb == "captain-hold")
               | select(($all_decisions == 1) or live_captain_call)
               | {id:($m.id + "/" + .id),key,verb,
+                 repo:(.repo // null),local_id:.id,
                  summary:hold_summary((.summary // .id);
                                       (.reason // "captain decision pending")),owner:$m.id} ]
             + [ $m.queued[]?
@@ -486,6 +491,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                             | .id]
                          | index($id) | not)
                 | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",
+                   repo:(.repo // null),local_id:.id,
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),owner:$m.id} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
@@ -526,6 +532,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       home: $home,
       generated: $now,
       prs: $prs,
+      events: [ .events[]? | {id,repo,owner:(.owner // "(main)"),kind,what,url,at} ],
       in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       secondmate_reconcile: [ (.secondmate_current.records // [])[]

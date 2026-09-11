@@ -214,7 +214,7 @@ cpu_count() {
 family_for_basename() {
   case "$1" in
     fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
-    fm-bearings-board.test.sh|fm-projets-board.test.sh|\
+    fm-bearings-board.test.sh|fm-projets-board.test.sh|fm-projets-couts.test.sh|\
     fm-brief.test.sh|fm-vendor-auth-probe.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
@@ -310,7 +310,7 @@ family_for_basename() {
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|\
-    fm-projets-board-render.test.sh|\
+    fm-projets-board-render.test.sh|fm-projets-events.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -1301,6 +1301,15 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-procevent.test.sh
       printf '%s\n' __script__:fm-procevent-when.test.sh
       printf '%s\n' __script__:fm-remote-reply.test.sh
+      ;;
+    bin/fm-projets-couts.sh|bin/fm-projets-couts.py)
+      printf '%s\n' __script__:fm-projets-couts.test.sh
+      ;;
+    bin/fm-projets-board.sh|bin/fm-projets-data.jq|.agents/skills/projets/assets/*)
+      printf '%s\n' __script__:fm-projets-board.test.sh __script__:fm-projets-board-render.test.sh
+      ;;
+    bin/fm-fleet-events.jq)
+      printf '%s\n' snapshot-bearings
       ;;
     bin/fm-timeout-lib.sh)
       # The shared hard bound: session start's runtime bound, the fleet/bearings

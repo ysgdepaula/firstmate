@@ -199,7 +199,7 @@ test_compose_orders_the_rail_by_decisions_waiting_on_the_captain() {
   [ "$(printf '%s' "$out" | jq -r '[.projects[].id] | join(",")')" = "club,torre,ydeep,solos" ] \
     || fail "the rail is not ordered by decisions waiting on the captain, then name: $out"
   printf '%s' "$out" | jq -e '
-    .badges.workers == 3 and .badges.decisions == 5 and .badges.subscriptions == null
+    .badges.workers == 3 and .badges.decisions == 6 and .badges.subscriptions == null
   ' >/dev/null || fail "the badges do not count live workers and every decision: $out"
   pass "compose orders the rail by decisions waiting on the captain and counts the badges"
 }
@@ -435,6 +435,75 @@ test_render_refuses_a_template_without_exactly_one_slot() {
   pass "render refuses a template without exactly one data slot"
 }
 
+test_review_inputs_survive_composition_and_render() {
+  local home out initial
+  home=$(make_home review)
+  run_board "$home" init >/dev/null || fail "init failed"
+  initial=$(cat "$home/config/projets.json")
+  jq -e '[.projects[].name] == ["Torre","Solos","Club Julien Dumas","CRIA","YDEEP","Firstmate"]' "$home/config/projets.json" >/dev/null || fail "seed missing projects"
+  printf 'preserve me\n' > "$home/config/projets.json"
+  run_board "$home" init >/dev/null || fail "init did not preserve table"
+  [ "$(cat "$home/config/projets.json")" = "preserve me" ] || fail "init overwrote table"
+  run_board "$home" init --force >/dev/null || fail "forced init failed"
+  [ "$(cat "$home/config/projets.json")" = "$initial" ] || fail "forced init did not restore seed"
+  jq '.projects[0] += {team:"Eli et Yan",deadline:{label:"Pilote",date:"2026-09-14"},meeting:{title:"Pilote",date:"2026-09-14",with:"Eli"},pages:[{label:"Revue",url:"http://machine.ts.net:4387/session/1"},{label:"Refus",url:"http://public.example/page"}]}' "$home/config/projets.json" > "$home/table.json"
+  cat > "$home/snapshot.json" <<'EOF'
+{"schema":"fm-bearings.v1","home":"test","in_flight":[{"id":"mate/torre-backend","state":"working","title":"Torre : backend"}],"decisions_open":[{"id":"mate/torre-backend","title":"backend","url":"http://public.example/decision"},{"id":"sans-projet","title":"Choisir"}],"landed":[],"events":[{"id":"torre-un","kind":"pr","what":"PR ouverte","at":"2026-09-11T10:00:00Z","url":"http://public.example/pr"},{"id":"torre-deux","kind":"decision","what":"Choix reçu","at":"2026-09-11T12:00:00Z"},{"id":"torre-trois","kind":"landed","what":"Livraison une","at":"2026-09-10"},{"id":"torre-quatre","kind":"landed","what":"Livraison deux","at":"2026-09-10"}],"recorded_prs":[{"id":"mate/torre-backend","url":"http://public.example/work"}],"omitted":[{"surface":"secondmate unreadable"}],"secondmates":[{"id":"mate","state":"unknown"}]}
+EOF
+  cat > "$home/data/projets-agenda.json" <<'EOF'
+{"schema":"fm-projets-agenda.v1","read_at":"2026-09-11T08:00:00+02:00","meetings":[{"project":"torre","title":"Pilote","date":"2026-09-15","time":"10:00","with":"Eli","source":"agenda"}]}
+EOF
+  printf '%s\n' '{"schema":"fm-projets-couts.v1","period":"2026-08","projects":{"torre":{"tokens_api_eur":999}}}' > "$home/data/projets-couts.json"
+  out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --config "$home/table.json" --no-quota --now 2026-09-11T12:00:00Z) || fail "review composition failed"
+  printf '%s' "$out" > "$home/payload.json"
+  jq -e '
+    (.projects | length) == 6 and .badges.decisions == 2 and (.warnings | length) > 0
+    and (all(.projects[]; .partial))
+    and (.projects[] | select(.id == "torre") |
+      .team == "Eli et Yan" and .deadline.label == "Pilote"
+      and .doing[0].owner == "mate" and .doing[0].local_id == "torre-backend"
+      and .doing[0].result == "mate/torre-backend" and .doing[0].url == null and .doing[0].url_refused == "http://public.example/work"
+      and .missing_from_you[0].key == "mate__torre-backend" and .missing_from_you[0].url_refused == "http://public.example/decision"
+      and .pages[0].url == "http://machine.ts.net:4387/session/1" and .pages[1].url == null and .pages[1].url_refused == "http://public.example/page"
+      and .costs.tokens_api == null and (.costs.source | contains("mesure de 2026-08, pas encore de mesure pour 2026-09"))
+      and (.meetings | map(.source)) == ["chat","agenda"] and (.meeting_warning | contains("ne disent pas"))
+      and (.journal | map(.what)) == ["Choix reçu","PR ouverte","Livraison une","Livraison deux"]
+      and .journal[0].when == "11/09 12:00" and .journal[2].when == "10/09")
+  ' "$home/payload.json" >/dev/null || fail "review inputs not preserved: $out"
+  run_board "$home" render "$home/payload.json" >/dev/null || fail "composed review payload rejected"
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/projets.html" > "$home/rendered.json"
+    jq -e '.error == "" and (.notice | contains("partiel"))
+      and (.cards[] | select(.id == "torre") | .deadline == "Prochaine échéance : Pilote, 14/09" and .team == "Eli et Yan"
+        and (.blocs[3].text | contains("lien refusé")) and (.blocs[6].text | contains("synchronisation dans les deux sens")))
+      and (.cards[] | select(.id == "solos") | (.blocs[0].empty | contains("État partiel")) and (.blocs[1].empty | contains("État partiel")))' "$home/rendered.json" >/dev/null || fail "review rendering lost details"
+  fi
+  out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --config "$home/table.json" --no-quota --now 2026-09-13T12:00:00Z) || fail "stale calendar composition failed"
+  printf '%s' "$out" | jq -e '.projects[] | select(.id == "torre") | (.meetings | length) == 1 and (.meeting_warning | contains("vieux de plus"))' >/dev/null || fail "stale calendar remained visible"
+  pass "seed, owned decisions, current periods, calendar divergence, event order and partial state survive render"
+}
+
+test_allowed_management_networks_and_refusals() {
+  local home url out
+  home=$(make_home links)
+  write_snapshot "$home/snapshot.json"
+  for url in https://public.example/a http://localhost:4387/a http://127.1.2.3/a 'http://[::1]/a' http://10.0.0.1/a http://172.16.0.1/a http://172.31.255.255/a http://192.168.1.1/a http://a.ts.net/a; do
+    jq -n --arg url "$url" '{schema:"fm-projets-config.v1",projects:[{id:"torre",name:"Torre",prefixes:["torre-"],pages:[{label:"Revue",url:$url}]}]}' > "$home/config/projets.json"
+    out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota) || fail "URL composition failed"
+    printf '%s' "$out" > "$home/payload.json"
+    jq -e --arg url "$url" '.projects[0].pages[0].url == $url' "$home/payload.json" >/dev/null || fail "allowed URL rejected: $url"
+    run_board "$home" render "$home/payload.json" >/dev/null || fail "allowed URL failed validation: $url"
+  done
+  for url in http://010.0.0.1/a http://0172.16.0.1/a http://public.example/a http://172.32.0.1/a http://192.169.1.1/a http://127.999.0.1/a http://a.ts.net.evil/a 'javascript:alert(1)' 'http://localhost@evil.test/a' 'http://localhost\@evil.test/a'; do
+    jq -n --arg url "$url" '{schema:"fm-projets-config.v1",projects:[{id:"torre",name:"Torre",prefixes:["torre-"],pages:[{label:"Revue",url:$url}]}]}' > "$home/config/projets.json"
+    out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota) || fail "refused URL composition failed"
+    printf '%s' "$out" > "$home/payload.json"
+    jq -e --arg url "$url" '.projects[0].pages[0] | .url == null and .url_refused == $url' "$home/payload.json" >/dev/null || fail "unsafe URL not disclosed: $url"
+    run_board "$home" render "$home/payload.json" >/dev/null || fail "refusal failed validation"
+  done
+  pass "allowed private networks navigate and rejected links stay explicit"
+}
+
 test_path_is_stable_and_home_scoped
 test_compose_groups_rows_by_project_prefix_then_repo
 test_compose_orders_the_rail_by_decisions_waiting_on_the_captain
@@ -447,3 +516,6 @@ test_render_round_trips_the_payload_and_neutralises_script_closers
 test_build_serves_then_arms_and_never_binds
 test_build_does_not_arm_when_session_start_fails
 test_render_refuses_a_template_without_exactly_one_slot
+
+test_review_inputs_survive_composition_and_render
+test_allowed_management_networks_and_refusals

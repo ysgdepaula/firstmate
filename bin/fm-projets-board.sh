@@ -12,13 +12,16 @@
 # mechanic so the invoking agent's per-run work stays "compose, polish, build".
 #
 # Usage:
+#   fm-projets-board.sh init [--force]
 #   fm-projets-board.sh compose [--snapshot <fm-bearings.v1.json>] [--config <projets.json>]
 #                               [--quota <quota-axi.json> | --no-quota] [--costs <couts.json>]
-#                               [--now <iso8601>]
+#                               [--agenda <agenda.json>] [--now <iso8601>]
 #   fm-projets-board.sh render <payload.json>
 #   fm-projets-board.sh build <payload.json>
 #   fm-projets-board.sh path
 #
+# init       Copy the shipped six-project seed to config/projets.json; preserve
+#            an existing table unless --force is supplied.
 # compose    Print a mechanically composed fm-projets-board.v1 payload on stdout.
 #            The ONLY fleet-state reader is bin/fm-bearings-snapshot.sh (run with
 #            its bounds lifted so every project sees all of its work); this script
@@ -32,9 +35,10 @@
 #            gap rather than hiding. Costs come from the optional measured file
 #            data/projets-couts.json (schema fm-projets-couts.v1) plus quota-axi's
 #            subscription windows; anything unmeasured stays null and the page
-#            prints "a mesurer" instead of a number. The next meeting is only what
-#            the table records; calendar sync is out of scope and the page says
-#            "agenda non connecte" when nothing is recorded. Every captain-facing
+#            prints "a mesurer" instead of a number. Calendar readings come from
+#            data/projets-agenda.json and merge with chat dates in the table.
+#            Readings older than a day are unavailable; differing dates stay visible.
+#            Bidirectional synchronization is a following task. Every captain-facing
 #            string is passed through the internal-vocabulary filter below before
 #            it reaches the payload, and the composer translates each task state
 #            into plain French. The rail order is decided here: projects sort by
@@ -69,17 +73,21 @@
 # fm-projets-board.v1 (all strings are captain-facing French unless noted):
 #   schema, home, generated (iso8601), updated_label ("11/09 00h30")
 #   badges: {workers:int, decisions:int, subscriptions:string|null}
-#   projects[]: {id:slug, name, headline:string|null,
-#     doing[]: {id, result, status, next:string|null, url:https|null},
-#     missing_from_you[]: {key:slug, question, options[]: {value:slug, label}, url:https|null},
+#   projects[]: {id:slug, name, headline:string|null, team:string|null, deadline:{label,date}|null,
+#     doing[]: {id, owner, local_id, result, status, next:string|null, url:allowed|null, url_refused?:string},
+#     missing_from_you[]: {key:slug, owner, local_id, question, options[]: {value:slug, label}, url:allowed|null, url_refused?:string},
 #     missing_from_others[]: {who, what, tag:string|null},
-#     pages[]: {label, url:https|null, state:string|null},
+#     pages[]: {label, url:allowed|null, url_refused?:string, state:string|null},
 #     costs: {period, tokens_api:string|null, subscription_share:string|null, source},
-#     journal[] (max 5): {when:string|null, what, url:https|null},
-#     meeting: null | {title, date:YYYY-MM-DD, with:string|null, bring[], decide[]},
+#     journal[] (max 5): {when:string|null, what, url:allowed|null, url_refused?:string},
+#     meeting: null | {title, date:YYYY-MM-DD, time:string|null, source, with:string|null, bring[], decide[]},
+#     meetings[]: same meeting shape, meeting_warning:string|null, partial:bool,
 #     gaps[]: string}
 #   unassigned[]: {id, what}
-#   table_missing: bool
+#   table_missing: bool, warnings[]: captain-facing collection limitations
+# Allowed links: HTTPS, or HTTP on loopback, RFC1918 IPv4, and .ts.net hosts.
+# Refused links retain url_refused and render an explicit refusal.
+# bin/fm-projets-data.jq owns this shared composition/validation policy.
 #
 # Captain vocabulary: no string may carry an internal term (crewmate, brief,
 # gate, teardown, worktree, watcher, heartbeat, wake, harness, backend, stale,
@@ -136,7 +144,7 @@ INTERNAL_RE='(?i)(^|[^a-z0-9_-])(crewmate|crewmates|brief|briefs|gate|gates|tear
 snapshot_default() {
   FM_BEARINGS_IN_FLIGHT=500 FM_BEARINGS_DECISIONS=500 FM_BEARINGS_LANDED=500 \
   FM_BEARINGS_LANDED_PER_HOME=500 FM_BEARINGS_GATES=500 FM_BEARINGS_RECORDED_PRS=500 \
-    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued
+    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued --all-decisions --all-secondmates --all-recorded-prs
 }
 
 quota_default() {  # prints quota-axi JSON or nothing
@@ -145,7 +153,8 @@ quota_default() {  # prints quota-axi JSON or nothing
 }
 
 command_compose() {
-  local snapshot="" config="" quota="" no_quota=0 costs="" now=""
+  local snapshot="" config="" quota="" no_quota=0 costs="" now="" agenda=""
+  local agenda_json
   local snap_json cfg_json quota_json costs_json
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -154,6 +163,7 @@ command_compose() {
       --quota) shift; quota=${1:?--quota needs a file} ;;
       --no-quota) no_quota=1 ;;
       --costs) shift; costs=${1:?--costs needs a file} ;;
+      --agenda) shift; agenda=${1:?--agenda needs a file} ;;
       --now) shift; now=${1:?--now needs an iso8601 timestamp} ;;
       *) usage >&2; exit 2 ;;
     esac
@@ -207,17 +217,28 @@ command_compose() {
     costs_json='null'
   fi
 
-  printf '%s' "$snap_json" | jq \
+  [ -n "$agenda" ] || agenda="$DATA/projets-agenda.json"
+  agenda_json=null
+  if [ -f "$agenda" ]; then
+    agenda_json=$(jq -c 'select(.schema == "fm-projets-agenda.v1" and (.meetings | type == "array"))' "$agenda" 2>/dev/null) || agenda_json=null
+    [ -n "$agenda_json" ] || agenda_json=null
+  fi
+
+  printf '%s' "$snap_json" | jq -L "$SCRIPT_DIR" \
+    --argjson agenda "$agenda_json" \
     --arg now "$now" \
     --arg internal_re "$INTERNAL_RE" \
     --argjson cfg "$cfg_json" \
     --argjson quota "$quota_json" \
     --argjson costs "$costs_json" '
+  include "fm-projets-data";
   def clean: tostring | gsub("\\s+"; " ") | gsub("^ | $"; "");
   def trunc($n): clean | if length > $n then .[:($n - 1)] + "…" else . end;
   def safe: test($internal_re) | not;
   def fr_day: if . == null then null else
-    (capture("^(?<y>[0-9]{4})-(?<m>[0-9]{2})-(?<d>[0-9]{2})")? | if . == null then null else "\(.d)/\(.m)" end) end;
+    ((capture("^(?<y>[0-9]{4})-(?<m>[0-9]{2})-(?<d>[0-9]{2})")? // null) | if . == null then null else "\(.d)/\(.m)" end) end;
+  def local_id: split("/") | last;
+  def identity: {owner:(.owner // (if (.id | contains("/")) then (.id | split("/") | .[0]) else "(main)" end)), local_id:(.id | local_id)};
   def state_label:
     {working: "en cours", parked: "attend une réponse", paused: "en pause, attente extérieure",
      blocked: "bloqué", done: "livré", failed: "en échec", unknown: "état inconnu", dead: "arrêté"}[.]
@@ -234,6 +255,7 @@ command_compose() {
     | ([ $prefixes[] | . as $pre | select($id | startswith($pre)) ] | sort_by(-length) | .[0]) as $p
     | (if $p == null then $id else ($id | ltrimstr($p)) end)
     | gsub("[-_]+"; " ") | clean;
+  def fallback($pfx): . as $id | (local_id | id_words($pfx)) | if safe and length > 0 then . else ($id | if safe and length > 0 then . else "travail en cours" end) end;
   # A title that opens with the project name or its id prefix ("Torre : ...",
   # "chef: ...") repeats the card heading, so the card drops that label.
   def strip_label($name; $prefixes):
@@ -249,23 +271,28 @@ command_compose() {
   | ($projects | length > 0) as $has_table
   | ($now[:10]) as $today
   | def prefix_match($id):
-      ([ $projects[] | . as $p | ($p.prefixes // [])[] | . as $pre | select($id | startswith($pre)) | {id: $p.id, n: ($pre | length)} ]
+      ([ $projects[] | . as $p | ($p.prefixes // [])[] | . as $pre | select($id | local_id | startswith($pre)) | {id: $p.id, n: ($pre | length)} ]
        | sort_by(-.n) | .[0].id);
   def repo_match($repo):
       if $repo == null then null
-      else ([ $projects[] | select(((.repos // []) | index($repo)) != null) | .id ] | .[0]) end;
+      else ([ $projects[] | select(((.repos // []) | index($repo)) != null) | .id ] | if length == 1 then .[0] else null end) end;
   def project_of($id; $repo):
       if $has_table then (prefix_match($id) // repo_match($repo)) else $repo end;
   def project_cfg($pid): ([ $projects[] | select(.id == $pid) ] | .[0]) // {};
   def prefixes_of($pid): (project_cfg($pid).prefixes // []);
 
-  ([ .recorded_prs[]? | {key: .id, value: .url} ] | from_entries) as $pr_by_id
+  ([.omitted[]? | select((.surface // "") | test("unreadable|unavailable|showing|capped|truncated|omitted|cached|no child metadata|unstructured")) | "Collecte partielle : certaines informations ne sont pas disponibles."]
+   + [.secondmates[]? | select((.state // "" | test("unknown|unavailable|unreadable")) or (.freshness // "" | test("unavailable|stale|unknown")) or (.provenance // "" | test("cache|fallback"))) | "État partiel : une équipe ne peut pas être lue à jour."] | unique) as $warnings
+  | (($agenda.read_at | project_epoch) as $read | ($now | project_epoch) as $clock
+     | $read != null and $clock != null and $clock - $read >= 0 and $clock - $read <= 86400) as $agenda_fresh
+  | ([ .recorded_prs[]? | {key: .id, value: .url} ] | from_entries) as $pr_by_id
   | ([ .in_flight[] | . + {project: project_of(.id; .repo)} ]) as $doing_rows
   | ([ .decisions_open[] | . + {project: project_of(.id; (.repo // null))} ]) as $decision_rows
   | ([ .landed[] | . + {project: project_of(.id; (.repo // null))} ]) as $landed_rows
+  | ([ (.events // [.landed[]? | {id,repo,owner,what,url:.artifact,at:.date,kind:"landed"}])[] | . + {project:project_of(.id; .repo)} ]) as $event_rows
   | ([ .gates[]? | select(.reason | test("^(until |held [0-9]+d)")) | . + {project: project_of(.id; null)} ]) as $deferred_rows
   | (if $has_table then [ $projects[] | {id, name} ]
-     else ([ ($doing_rows + $decision_rows + $landed_rows)[] | .project | select(. != null) ] | unique | map({id: ., name: .})) end) as $project_list
+     else ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | .project | select(. != null) ] | unique | map({id: ., name: .})) end) as $project_list
   | ($quota.providers // [] | [ .[]
        | select(type == "object")
        | (.provider // "?") as $p
@@ -273,7 +300,7 @@ command_compose() {
        | select($left != null and ($left | type) == "number")
        | "\($p | (.[:1] | ascii_upcase) + .[1:]) \(100 - ($left | floor)) %" ]
      | if length == 0 then null else join(" · ") end) as $subscriptions
-  | ($costs.projects // {}) as $cost_map
+  | (if $costs.period == $now[:7] then ($costs.projects // {}) else {} end) as $cost_map
   | [ $project_list[] | . as $proj
       | (prefixes_of($proj.id)) as $pfx
       | (project_cfg($proj.id)) as $pc
@@ -290,101 +317,117 @@ command_compose() {
               result: (($r.title // null) as $t
                        | if $t != null and ($t | clean | length) > 0 and ($t | safe)
                          then ($t | strip_label($proj.name; $pfx) | trunc(110))
-                         else ($r.id | id_words($pfx)) end),
+                         else ($r.id | fallback($pfx)) end | if safe and length > 0 then . else ($r.id | fallback($pfx)) end),
               status: (if $keep_detail then ($label + " · " + ($detail | trunc(90))) else $label end),
               next: (if $r.state == "done" and $url != null then "fusion à confirmer"
                      elif $r.state == "parked" then "ta réponse débloque la suite"
                      elif $r.state == "blocked" then "firstmate doit débloquer"
                      else null end),
-              url: (if $url != null and ($url | test("^https://")) then $url else null end)} ]) as $doing
+              url: null} + ($r | identity) + ($url | project_link) ]) as $doing
       | ([ $decision_rows[] | select(.project == $proj.id)
            | . as $d
-           | (($pc.decisions // {})[$d.id] // {}) as $dc
+           | (($pc.decisions // {})[$d.id] // ($pc.decisions // {})[($d.id | local_id)] // {}) as $dc
            | (($dc.question // $d.title // $d.summary // $d.id) | clean) as $q
-           | {key: $d.id,
-              question: (if ($q | safe) then ($q | strip_label($proj.name; $pfx) | trunc(160)) else ($d.id | id_words($pfx)) end),
+           | {key: ($d.id | gsub("/"; "__")),
+              question: (if ($q | safe) then ($q | strip_label($proj.name; $pfx) | trunc(160)) else ($d.id | fallback($pfx)) end | if safe and length > 0 then . else ($d.id | fallback($pfx)) end),
               options: (if (($dc.options // []) | length) > 0 then [ $dc.options[] | {value, label} ]
                         else [{value: "fait", label: "c\u2019est fait"}, {value: "on-en-parle", label: "on en parle"}, {value: "plus-tard", label: "plus tard"}] end),
               url: null,
-              configured: ((($dc.options // []) | length) > 0)} ]) as $missing_you
+              configured: ((($dc.options // []) | length) > 0)} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $missing_you
       | ([ ($pc.missing_from_others // [])[] | {who: (.who // "?"), what: (.what // "?"), tag: (.tag // null)} ]) as $missing_others
-      | ([ ($pc.pages // [])[] | {label: (.label // "?"), url: (if (.url // null) != null and (.url | test("^https://")) then .url else null end), state: (.state // null)} ]) as $pages
-      | ([ $landed_rows[] | select(.project == $proj.id)
-           | {when: (.date | fr_day),
-              what: ((.what // .id) | clean | if safe then (strip_label($proj.name; $pfx) | trunc(110)) else "livraison" end),
-              url: (if (.artifact // "" | test("^https://")) then .artifact else null end), sort: (.date // "")} ]
-         # newest day first; inside one day keep the newest-first snapshot order
-         | to_entries | sort_by([.value.sort, -.key]) | reverse | map(.value | del(.sort)) | .[:5]) as $journal
+      | ([ ($pc.pages // [])[] | {label:(.label // "?"),state:(.state // null)} + (.url | project_link) ]) as $pages
+      | ([ $event_rows[] | select(.project == $proj.id)
+           | {at:.at, kind:.kind, when:((.at | fr_day) as $day | if (.at // "" | contains("T")) then $day + " " + .at[11:16] else $day end),
+              what:((.what // .id) | clean | if safe then (strip_label($proj.name; $pfx) | trunc(110)) else "événement du projet" end),
+              sort: ((.at | project_epoch) // (try (.at + "T00:00:00Z" | fromdateiso8601) catch 0))} + (.url | project_link) ]
+         | to_entries | sort_by([-.value.sort, .key]) | map(.value | del(.sort)) | .[:5]) as $journal
       | ($cost_map[$proj.id] // null) as $cost
       | ({period: month_label,
-          tokens_api: (if $cost != null and ($cost.tokens_api_eur // null) != null then "\($cost.tokens_api_eur | floor) EUR au prix API" else null end),
+          tokens_api: (if $cost != null and ($cost.tokens_api_eur // null) != null then "\($cost.tokens_api_eur | floor) EUR au prix API" elif $cost != null and $cost.tokens_api_usd != null then "\($cost.tokens_api_usd) USD au prix API" else null end),
           subscription_share: (if $cost != null and ($cost.subscription_share_pct // null) != null then "\($cost.subscription_share_pct) % de tes abonnements" else null end),
-          source: (if $cost != null then "mesure de nuit (journaux de sessions, prix API publics)" else "quota-axi et journaux de sessions : mesure de nuit à brancher" end)}) as $costs_block
-      | (($pc.meeting // null) as $m
-         | if $m == null or ($m.date // null) == null then null
-           else {title: ($m.title // "réunion"), date: $m.date, with: ($m.with // null),
-                 bring: ($m.bring // []), decide: ($m.decide // [])} end) as $meeting
+          source: (if $costs != null and $costs.period != $now[:7] then "mesure de \($costs.period), pas encore de mesure pour \($now[:7])"
+                   elif $cost != null then (($cost.sources.measured // ["journaux de sessions, prix API publics"]) + ($cost.sources.missing // []) | join(" · "))
+                   else "Claude : journaux non mesurés · Codex : journaux non lus" end)}) as $costs_block
+      | def meeting_row($source): {title:(.title // "réunion"),date,time:(.time // null),with:(.with // null),bring:(.bring // []),decide:(.decide // []),source:$source};
+        ([($pc.meeting // empty) | select(.date >= $today) | meeting_row("chat")]) as $chat
+      | ([if $agenda_fresh then $agenda.meetings[]? | select(.project == $proj.id and .source == "agenda" and .date >= $today) | meeting_row("agenda") else empty end]
+         | sort_by([.date,.time]) | .[:1]) as $calendar
+      | (if ($chat | length) > 0 and ($calendar | length) > 0 and ($chat[0] | {date,time,title,with}) == ($calendar[0] | {date,time,title,with})
+         then [$chat[0] + {source:"agenda et chat"}] else $chat + $calendar end | sort_by([.date,.time])) as $meetings
+      | ($meetings[0] // null) as $meeting
+      | (if ($meetings | length) > 1 then "l’agenda et le chat ne disent pas la même chose"
+         elif ($agenda_fresh | not) then "agenda non connecté : fichier absent ou vieux de plus d’un jour" else null end) as $meeting_warning
       | ([ $deferred_rows[] | select(.project == $proj.id) ] | length) as $deferred_n
-      | ([ (if ($pages | length) == 0 then "aucune page de gestion enregistrée" else empty end),
+      | ([ (if ($pc.deadline // null) == null then "prochaine échéance non enregistrée" else empty end),
+           (if ($pc.team // null) == null then "équipe non enregistrée" else empty end),
+           (if ($pages | length) == 0 then "aucune page de gestion enregistrée" else empty end),
            (if ($missing_others | length) == 0 then "aucune attente des autres enregistrée" else empty end),
-           (if $meeting == null then "aucune réunion enregistrée, agenda non connecté" else empty end),
+           (if $meeting == null then (if $agenda_fresh then "aucune prochaine réunion enregistrée" else "aucune réunion enregistrée, agenda non connecté" end) else empty end),
            (if $cost == null then "coûts à mesurer" else empty end),
            (([ $missing_you[] | select(.configured | not) ] | length) as $n
             | if $n > 0 then "\($n) décision\(if $n > 1 then "s" else "" end) sans choix fermés, boutons génériques" else empty end),
            (if $deferred_n > 0 then "\($deferred_n) décision\(if $deferred_n > 1 then "s" else "" end) mise\(if $deferred_n > 1 then "s" else "" end) de côté, datée\(if $deferred_n > 1 then "s" else "" end) ou ancienne\(if $deferred_n > 1 then "s" else "" end)" else empty end) ]) as $gaps
       | {id: $proj.id, name: $proj.name,
          headline: (($pc.headline // null) | if . == null then null else clean end),
+         team:($pc.team // null), deadline:($pc.deadline // null), partial:($warnings | length > 0),
+         meetings:$meetings, meeting_warning:$meeting_warning,
          doing: $doing,
          missing_from_you: ($missing_you | map(del(.configured))),
          missing_from_others: $missing_others,
          pages: $pages, costs: $costs_block, journal: $journal, meeting: $meeting, gaps: $gaps}
     ] as $composed
   | ($composed | sort_by([-(.missing_from_you | length), .name])) as $sorted
-  | ([ ($doing_rows + $decision_rows + $landed_rows)[] | select(.project == null)
+  | ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | select(.project == null)
        | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
      | unique_by(.id)) as $unassigned
   | {schema: "fm-projets-board.v1",
      home: .home, generated: $now, updated_label: updated_label,
      badges: {workers: ([ $doing_rows[] | select(.state == "working") ] | length),
-              decisions: (([ $sorted[] | (.missing_from_you | length) + (.missing_from_others | length) ] | add) // 0),
+              decisions: (($decision_rows | length) + (([ $sorted[] | (.missing_from_others | length) ] | add) // 0)),
               subscriptions: $subscriptions},
      projects: $sorted,
      unassigned: $unassigned,
+     warnings:$warnings,
      table_missing: ($has_table | not)}
   ' || fail "composition failed"
 }
 
 # --- validate / render / build ----------------------------------------------
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" --arg internal_re "$INTERNAL_RE" '
+  jq -L "$SCRIPT_DIR" -e --arg schema "$BOARD_SCHEMA" --arg internal_re "$INTERNAL_RE" '
+    include "fm-projets-data";
     def nonempty_string: type == "string" and length > 0;
     def captain_string: nonempty_string and (test($internal_re) | not);
     def optional_captain($name): (has($name) | not) or (.[$name] == null) or (.[$name] | captain_string);
     def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
-    def https_or_null: . == null or (type == "string"
-      and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
+    def https_or_null: . == null or project_url;
+    def link_item: has("url") and (.url | https_or_null)
+      and ((has("url_refused") | not) or (.url == null and (.url_refused | nonempty_string)));
     def doing_item: type == "object" and (.id | nonempty_string) and (.result | captain_string)
       and (.status | captain_string) and (has("next") and (.next == null or (.next | captain_string)))
-      and (has("url") and (.url | https_or_null));
+      and link_item;
     def option_item: type == "object" and (.value | slug(128)) and (.label | captain_string);
     def you_item: type == "object" and (.key | slug(128)) and (.question | captain_string)
       and (.options | type == "array" and length > 0 and all(.[]; option_item))
-      and (has("url") and (.url | https_or_null));
+      and link_item;
     def other_item: type == "object" and (.who | captain_string) and (.what | captain_string)
       and optional_captain("tag");
-    def page_item: type == "object" and (.label | captain_string) and (has("url") and (.url | https_or_null))
+    def page_item: type == "object" and (.label | captain_string) and link_item
       and optional_captain("state");
     def journal_item: type == "object" and optional_captain("when") and (.what | captain_string)
-      and (has("url") and (.url | https_or_null));
+      and link_item;
     def meeting_item: . == null or (type == "object" and (.title | captain_string)
       and (.date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
-      and optional_captain("with")
+      and optional_captain("with") and optional_captain("time") and optional_captain("source")
       and (.bring | type == "array" and all(.[]; captain_string))
       and (.decide | type == "array" and all(.[]; captain_string)));
     def costs_item: type == "object" and (.period | captain_string) and optional_captain("tokens_api")
       and optional_captain("subscription_share") and (.source | captain_string);
     def project_item: type == "object" and (.id | slug(64)) and (.name | captain_string)
-      and optional_captain("headline")
+      and optional_captain("headline") and optional_captain("team") and optional_captain("meeting_warning")
+      and ((has("deadline") | not) or .deadline == null or (.deadline | type == "object" and (.label | captain_string) and (.date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))))
+      and ((has("partial") | not) or (.partial | type == "boolean"))
+      and ((has("meetings") | not) or (.meetings | type == "array" and all(.[]; . != null and meeting_item)))
       and (.doing | type == "array" and all(.[]; doing_item))
       and (.missing_from_you | type == "array" and all(.[]; you_item))
       and (.missing_from_others | type == "array" and all(.[]; other_item))
@@ -404,6 +447,7 @@ validate_payload() {  # <data.json>
     and (.projects | type == "array" and all(.[]; project_item))
     and ([.projects[].id] | unique | length) == (.projects | length)
     and (.unassigned | type == "array" and all(.[]; type == "object" and (.id | nonempty_string) and (.what | captain_string)))
+    and ((has("warnings") | not) or (.warnings | type == "array" and all(.[]; captain_string)))
     and (.table_missing | type == "boolean")
   ' "$1" >/dev/null
 }
@@ -482,7 +526,27 @@ command_build() {
   fi
 }
 
+command_init() {
+  local force=0 target="$CONFIG/projets.json" tmp
+  case "${1:-}" in --force) force=1; shift ;; -h|--help) usage; return ;; esac
+  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  if [ -e "$target" ] && [ "$force" = 0 ]; then
+    printf 'preserved: %s\n' "$target"
+    return
+  fi
+  (umask 077; mkdir -p "$CONFIG") || fail "cannot create project configuration"
+  tmp=$(umask 077; mktemp "$CONFIG/.projets.XXXXXX") || fail "cannot stage project table"
+  if ! cat "$SCRIPT_DIR/../.agents/skills/projets/assets/projets.seed.json" > "$tmp"; then
+    rm -f "$tmp"
+    fail "cannot read project seed"
+  fi
+  if [ "$force" = 1 ]; then mv -f "$tmp" "$target"
+  else ln "$tmp" "$target" 2>/dev/null || { rm -f "$tmp"; fail "project table already exists"; }; rm -f "$tmp"; fi
+  printf 'initialized: %s\n' "$target"
+}
+
 case "${1-}" in
+  init) shift; command_init "$@" ;;
   compose) shift; command_compose "$@" ;;
   render) shift; command_render "$@" ;;
   build) shift; command_build "$@" ;;

@@ -98,6 +98,9 @@
 #   secondmate_guidance: return-channel action note for renderers and bearings.
 #
 # Compatibility: JSON is the primary machine-readable surface.
+# events[] preserves recorded PRs, merge notifications, terminal receipts and
+# answered captain holds with their available event clock, never observation time.
+# bin/fm-fleet-events.jq owns their projection for this home and home summaries.
 # Human views must render this output instead of parsing state files again.
 set -u
 
@@ -687,6 +690,28 @@ prefetch_task_current_states() {
   fi
 }
 
+event_evidence_json() {
+  local file version provider host path number epoch id
+  {
+    for file in "$STATE"/*.pr-poll-merge-notified; do
+      [ -f "$file" ] && [ ! -L "$file" ] || continue
+      id=$(basename "$file" .pr-poll-merge-notified)
+      { IFS= read -r version; IFS= read -r provider; IFS= read -r host; IFS= read -r path; IFS= read -r number; } < "$file" || continue
+      [ "$version" = fm-pr-poll-merge-notified-v1 ] && [ "$provider" = github ] || continue
+      epoch=$(file_mtime_epoch "$file")
+      jq -nc --arg id "$id" --arg host "$host" --arg path "$path" --arg number "$number" --arg epoch "$epoch" '
+        select(($host | test("^[A-Za-z0-9.-]+$")) and ($path | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and ($number | test("^[0-9]+$")))
+        | {id:$id,kind:"merge",url:("https://" + $host + "/" + $path + "/pull/" + $number),at:(try ($epoch | tonumber | todateiso8601) catch null)}'
+    done
+    for file in "$STATE"/terminal-outcomes/*.reported "$STATE"/terminal-outcomes/*.presented; do
+      [ -f "$file" ] && [ ! -L "$file" ] || continue
+      jq -Rnc '[inputs | capture("^(?<key>[^=]+)=(?<value>.*)$")?] | from_entries
+        | select(.schema == "fm-terminal-outcome.v1" and .state == "done")
+        | {id:.task_id,kind:"landed",url:(.pr | if . == "" then null else . end),at:(try (.created_epoch | tonumber | todateiso8601) catch null)}' < "$file"
+    done
+  } | jq -s .
+}
+
 task_json_lines() {
   local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
   local remote_host remote_root current_file endpoint_file observation_line index=0
@@ -816,6 +841,7 @@ task_json_lines() {
       --arg remote_root "$remote_root" \
       --arg pr "$pr" \
       --arg pr_source "$pr_source" \
+      --arg pr_recorded_at "$(meta_value "$meta" pr_recorded_at)" \
       --arg agent_alive "$agent_alive" \
       --arg observed_at "$SNAPSHOT_NOW" \
       --arg last_event_raw "$last_event_raw" \
@@ -854,7 +880,7 @@ task_json_lines() {
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
-        pr:{url:($pr | if . == "" then null else . end),source:$pr_source},
+        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,recorded_at:($pr_recorded_at | if . == "" then null else . end)},
         hints:{
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,
@@ -911,7 +937,8 @@ main_inventory_json() {  # <backlog-json-file> <tasks-json-file>
 # This mode never reads parent events or terminal text and never aggregates
 # nested secondmates.
 secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
-  jq -n \
+  jq -L "$SCRIPT_DIR" -n \
+    --argjson event_evidence "$EVENT_EVIDENCE_JSON" \
     --arg generated "$SNAPSHOT_NOW" \
     --argjson generated_epoch "$SNAPSHOT_EPOCH" \
     --arg home "$FM_HOME" \
@@ -921,6 +948,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
     --slurpfile backlog "$1" \
     --slurpfile tasks "$2" '
+    include "fm-fleet-events";
     ($backlog[0]) as $backlog
     | ($tasks[0]) as $tasks
     | def trunc($n):
@@ -937,7 +965,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
                     | any($tasks[]; .id == $id and .current_state.state == "working") | not)))) ]) as $queued_all
     | ([ $queued_all[]
          | select(.captain_actionable == true)
-         | {id,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
+         | {id,repo,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
             reason:(.hold_reason | trunc(160)),
             hold_until:(.hold_until // null),
             hold_bucket:(.hold_bucket // null),
@@ -1038,6 +1066,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
         reason:$reason,
         invalidity:$invalidity,
         state:$state,
+        events:fleet_events($backlog; $tasks; $event_evidence),
         active_children:$active_all[:$child_n],
         decisions_open:$decisions_all[:$decisions_n],
         holds:$holds_all[:$queued_n],
@@ -1811,6 +1840,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
          freshness:{status:$summary_freshness,observed_at:$observed,age_seconds:$summary_age},
          active_children:$summary.active_children,
          decisions_open:$summary.decisions_open,holds:$summary.holds,queued:$summary.queued,
+         events:($summary.events // []),
          landed:$summary.landed,endpoints:$summary.endpoints,counts:$summary.counts,omitted:$summary.omitted,
          parent_event:{raw:$event_raw,note:$event_note,age_seconds:$event_age,open_activities:$activities,open_decisions:$decisions,activity_scan:$activity_scan,reconciliation:$reconciliation},
          terminal_evidence:$terminal,contradiction:$contradiction}' >> "$records_file" || return 1
@@ -1895,6 +1925,7 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
+EVENT_EVIDENCE_JSON=$(event_evidence_json) || exit 1
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
@@ -1927,7 +1958,8 @@ secondmate_current_json "$TASKS_JSON_FILE" "$SECONDMATE_CURRENT_JSON_FILE" \
 secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE_LANDED_JSON_FILE" \
   || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
 
-jq -n \
+jq -L "$SCRIPT_DIR" -n \
+  --argjson event_evidence "$EVENT_EVIDENCE_JSON" \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
@@ -1941,7 +1973,8 @@ jq -n \
   --slurpfile scout_reports "$SCOUT_REPORTS_JSON_FILE" \
   --slurpfile secondmate_current "$SECONDMATE_CURRENT_JSON_FILE" \
   --slurpfile secondmate_landed "$SECONDMATE_LANDED_JSON_FILE" \
-  '($backlog[0]) as $backlog
+  'include "fm-fleet-events";
+   ($backlog[0]) as $backlog
    | ($tasks[0]) as $tasks
    | ($main_inventory[0]) as $main_inventory
    | ($scout_reports[0]) as $scout_reports
@@ -1955,6 +1988,7 @@ jq -n \
      generated:$generated,
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
+     events:(fleet_events($backlog; $tasks; $event_evidence) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),
      main_inventory:$main_inventory,
