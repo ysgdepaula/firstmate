@@ -6,7 +6,7 @@
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
 # Registration also records a durable PR event via fm-task-events-lib.sh;
-# data/<id>/events.jsonl survives task cleanup and repeat registration is idempotent.
+# data/<id>/events.jsonl survives task cleanup and repeat registration by canonical PR URL is idempotent across worker relaunches.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -114,7 +114,6 @@ if [ "$(sed -n 's/^pr=//p' "$META" | tail -1)" = "$URL" ]; then
   PR_RECORDED_AT=$(sed -n 's/^pr_recorded_at=//p' "$META" | tail -1)
 fi
 [ -n "$PR_RECORDED_AT" ] || PR_RECORDED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-PR_GENERATION=$(sed -n 's/^spawn_gen=//p' "$META" | tail -1)
 PR_REPO=$(sed -n 's/^project=//p' "$META" | tail -1)
 PR_REPO=${PR_REPO%/}
 PR_REPO=${PR_REPO##*/}
@@ -141,7 +140,7 @@ fm_pr_metadata_identity_parse "$META" || exit 1
 [ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
   && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
   && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
-fm_task_event_append "$DATA" "$ID" "pr:$PR_GENERATION:$URL" "$PR_RECORDED_AT" pr "PR enregistrée" "$URL" "$PR_REPO" \
+fm_task_event_append "$DATA" "$ID" "pr:$URL" "$PR_RECORDED_AT" pr "PR enregistrée" "$URL" "$PR_REPO" \
   || { echo "error: could not preserve PR event" >&2; exit 1; }
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0

@@ -16,8 +16,10 @@ def fleet_events($backlog; $tasks; $evidence):
   | map(. as $fallback | select(any($recorded[]; .id == $fallback.id and .kind == $fallback.kind and (.url == $fallback.url or $fallback.kind == "decision")) | not))
   | . + $recorded
   | to_entries
-  | group_by([.value.id,.value.kind,.value.url,(if .value.recorded then .value.key else null end)])
-  | map(sort_by([(.value.at // ""),-.key]) | last)
+  | group_by([.value.id,.value.kind,.value.url,(if .value.recorded and (.value.kind != "pr" or .value.url == null) then .value.key else null end)])
+  | map(if .[0].value.kind == "pr" then
+          sort_by([(.value.at == null),(.value.at // ""),.key]) | first
+        else sort_by([(.value.at // ""),-.key]) | last end)
   | sort_by(.key) | map(.value | del(.recorded,.schema,.key));
 
 def fleet_event_projection($events; $per_task; $total):

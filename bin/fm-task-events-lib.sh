@@ -4,7 +4,8 @@
 # writes one fm-task-events.v1 JSON object per line in data/<id>/events.jsonl:
 # schema, key (idempotency identity), at (ISO UTC), kind (pr, merge, decision,
 # landed), what, url (string or null), repo (optional routing name or null).
-# A repeated key preserves its original event. Publication uses an atomic replace
+# A repeated key or PR URL preserves its original event across worker generations.
+# Publication uses an atomic replace
 # under events.jsonl.lock; callers must have loaded fm-wake-lib.sh lock helpers.
 # Task cleanup retains this file with the other durable data/<id>/ artifacts.
 fm_task_event_append() (
@@ -28,7 +29,9 @@ fm_task_event_append() (
   [ ! -L "$file" ] || return 1
   if [ -f "$file" ]; then
     jq -se 'all(.[]; .schema == "fm-task-events.v1")' "$file" >/dev/null || return 1
-    if jq -se --arg key "$key" 'any(.[]; .key == $key)' "$file" >/dev/null; then return 0; fi
+    if jq -se --arg key "$key" --arg kind "$kind" --arg url "$url" '
+      any(.[]; .key == $key or ($kind == "pr" and $url != "" and .kind == "pr" and .url == $url))
+    ' "$file" >/dev/null; then return 0; fi
   fi
   tmp=$(mktemp "$dir/.events.XXXXXX") || return 1
   if [ -f "$file" ]; then cat "$file" > "$tmp" || return 1; fi

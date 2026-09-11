@@ -26,9 +26,25 @@ chmod +x "$fakebin/tmux"
 export PATH="$fakebin:$PATH"
 url=https://github.com/acme/agent-platform/pull/43
 "$ROOT/bin/fm-pr-check.sh" torre-pr "$url" >/dev/null
+pr_at=$(sed -n 's/^pr_recorded_at=//p' "$FM_HOME/state/torre-pr.meta")
+python3 - "$FM_HOME/state/torre-pr.meta" <<'PYRELAUNCH'
+from pathlib import Path
+import sys
+meta = Path(sys.argv[1])
+meta.write_text(meta.read_text().replace("spawn_gen=one", "spawn_gen=two"))
+PYRELAUNCH
 "$ROOT/bin/fm-pr-check.sh" torre-pr "$url" >/dev/null
-at=$(sed -n 's/^pr_recorded_at=//p' "$FM_HOME/state/torre-pr.meta")
-jq -se --arg at "$at" 'length == 1 and .[0].kind == "pr" and .[0].at == $at and ($at | test("T[0-9:]+Z$"))' "$FM_HOME/data/torre-pr/events.jsonl" >/dev/null || fail "PR registration lost its clock or duplicated the event"
+jq -se 'length == 1' "$FM_HOME/data/torre-pr/events.jsonl" >/dev/null || fail "worker relaunch duplicated the PR"
+python3 - "$FM_HOME/data/torre-pr/events.jsonl" <<'PYLEGACY'
+from pathlib import Path
+import json, sys
+journal = Path(sys.argv[1])
+event = json.loads(journal.read_text())
+event["key"] = "pr:one:" + event["url"]
+journal.write_text(json.dumps(event) + "\n")
+PYLEGACY
+"$ROOT/bin/fm-pr-check.sh" torre-pr "$url" >/dev/null
+jq -se --arg at "$pr_at" 'length == 1 and .[0].kind == "pr" and .[0].at == $at and ($at | test("T[0-9:]+Z$"))' "$FM_HOME/data/torre-pr/events.jsonl" >/dev/null || fail "PR registration lost its clock or duplicated the event"
 "$ROOT/bin/fm-captain-hold.sh" hold torre-choix --title 'Hébergement' --reason 'Choisir' --repo agent-platform >/dev/null
 printf 'Chez Torre.\n' > "$TMP_ROOT/answer.txt"
 "$ROOT/bin/fm-captain-hold.sh" answer torre-choix --decision-file "$TMP_ROOT/answer.txt" >/dev/null
@@ -42,7 +58,20 @@ assert_contains "$(cat "$TMP_ROOT/answer-record.txt")" "Resolution at: $at" "ans
 fm_merge_outcome_report "$FM_HOME" "$FM_STATE_OVERRIDE" torre-pr "$url" self
 fm_merge_outcome_report "$FM_HOME" "$FM_STATE_OVERRIDE" torre-pr "$url" self
 jq -se 'length == 2 and any(.[]; .kind == "merge" and (.at | contains("T")))' "$FM_HOME/data/torre-pr/events.jsonl" >/dev/null || fail "merge event missing or duplicated"
+python3 - "$FM_HOME/data/torre-pr/events.jsonl" <<'PYDUPLICATES'
+from pathlib import Path
+import datetime as dt
+import json, sys
+journal = Path(sys.argv[1])
+events = [json.loads(line) for line in journal.read_text().splitlines()]
+original = next(event for event in events if event["kind"] == "pr")
+later = dict(original, key="pr:two:" + original["url"])
+later["at"] = (dt.datetime.fromisoformat(original["at"].replace("Z", "+00:00")) + dt.timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+journal.write_text("".join(json.dumps(event) + "\n" for event in [later, *events]))
+PYDUPLICATES
 "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary > "$TMP_ROOT/before.json"
+jq -e --arg at "$pr_at" '[.events[] | select(.id == "torre-pr" and .kind == "pr")] | length == 1 and .[0].at == $at' "$TMP_ROOT/before.json" >/dev/null || fail "legacy PR duplicates displaced the original registration"
+pass "PR registration survives relaunches and legacy duplicates retain their first clock"
 rm "$FM_HOME/state/torre-pr.meta" "$FM_HOME/state/torre-pr.pr-poll-merge-notified"
 "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary > "$TMP_ROOT/after.json"
 jq -e --slurpfile before "$TMP_ROOT/before.json" '.events == $before[0].events and any(.events[]; .kind == "pr" and (.at | contains("T"))) and any(.events[]; .kind == "decision" and (.at | contains("T")))' "$TMP_ROOT/after.json" >/dev/null || fail "cleanup changed durable journal events"
