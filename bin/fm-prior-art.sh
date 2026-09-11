@@ -216,16 +216,31 @@ close STDOUT or die "Cannot prepare the local search: $!\n";
 PL
 }
 
+umask 077
 if [ "${FM_PRIOR_ART_LOCK_OWNER:-}" != "$$" ]; then
+  [ ! -L "$CACHE" ] || die "cannot keep the local search private: $CACHE is a symbolic link"
   mkdir -p "$CACHE"
-  exec perl -MFcntl=:flock,F_SETFD -e '
-    open(my $lock, ">>", shift @ARGV) or die "Cannot prepare the local search: $!\n";
+  chmod 700 "$CACHE"
+  exec perl -MFcntl=:flock,:mode,F_SETFD -MFile::Find -e '
+    my $cache = shift @ARGV;
+    die "Cannot keep the local search private: $cache/lock is a symbolic link\n" if -l "$cache/lock";
+    open(my $lock, ">>", "$cache/lock") or die "Cannot prepare the local search: $!\n";
     flock($lock, LOCK_EX) or die "Cannot wait for the local search: $!\n";
+    find({no_chdir => 1, wanted => sub {
+      my $path = $File::Find::name;
+      my @s = lstat $path;
+      @s or die "Cannot keep the local search private: $path: $!\n";
+      die "Cannot keep the local search private: unsupported file $path\n"
+        unless S_ISDIR($s[2]) || S_ISREG($s[2]);
+      my $mode = S_ISDIR($s[2]) ? 0700 : 0600;
+      chmod($mode, $path) or die "Cannot keep the local search private: $path: $!\n"
+        if ($s[2] & 07777) != $mode;
+    }}, $cache);
     fcntl($lock, F_SETFD, 0) or die "Cannot keep the local search protected: $!\n";
     $ENV{FM_PRIOR_ART_LOCK_OWNER} = $$;
     exec "bash", @ARGV;
     die "Cannot start the local search: $!\n";
-  ' "$CACHE/lock" "${BASH_SOURCE[0]}" "${ARGS[@]}"
+  ' "$CACHE" "${BASH_SOURCE[0]}" "${ARGS[@]}"
 fi
 
 STAT_STYLE=bsd
@@ -245,11 +260,15 @@ HITS="$TMPDIR_RUN/hits"
 RANKED="$TMPDIR_RUN/ranked"
 TOP="$TMPDIR_RUN/top"
 
-find "$DATA" -type f -name '*.md' -print0 > "$TMPDIR_RUN/all" \
+find "$DATA" \( -type l -o \( -type f -name '*.md' \) \) -print0 > "$TMPDIR_RUN/all" \
   || die "not all records could be listed under $DATA; coverage is incomplete"
 perl -0ne '
   chomp;
   die "Not read, ambiguous source name: $_\n" if /[\t\r\n]/;
+  if (-l $_) {
+    die "Not read: $_: symbolic link; coverage is incomplete\n" if /\.md$/ || -d $_ || !-e $_;
+    next;
+  }
   die "Not read: $_: permission denied\n" unless -r $_;
   print "$_\n";
 ' "$TMPDIR_RUN/all" | sort > "$CORPUS"
@@ -453,56 +472,78 @@ describe() {  # <path> <best line number> <fallback year>
     }
     return ""
   }
-  # Stop once the passage is reached, but never before the header has had its
-  # chance: a passage in the first lines must still be datable by the header.
-  NR > BEST && NR > 15 { exit }
-  {
-    if (NR == BEST) quote = $0
-    sub(/\r$/, "", $0)
-    if (match($0, /^ ? ? ?(```+|~~~+)/)) {
-      fence = substr($0, 1, RLENGTH)
-      sub(/^ +/, "", fence)
-      rest = substr($0, RLENGTH + 1)
-      if (fencechar != "") {
-        if (substr(fence, 1, 1) == fencechar && length(fence) >= fencelen && rest ~ /^[ \t]*$/)
-          fencechar = ""
-        next
-      }
-      if (substr(fence, 1, 1) != "`" || rest !~ /`/) {
-        fencechar = substr(fence, 1, 1); fencelen = length(fence)
-        next
-      }
-    }
-    if (fencechar != "") next
-    isheading = match($0, /^ ? ? ?#+([ \t]+|$)/)
-    if (isheading) {
-      prefix = substr($0, 1, RLENGTH)
-      sub(/^ +/, "", prefix)
-      sub(/[ \t]+$/, "", prefix)
-      level = length(prefix)
-      if (level > 6) isheading = 0
-    }
-    if (isheading) {
-      headings++
-      if (level > 1 || headings > 1) insection = 1
-      if (NR <= BEST) {
-        heading = substr($0, RLENGTH + 1)
-        for (depth in dates) if (depth >= level) delete dates[depth]
-        dates[level] = finddate($0, 1)
-        hdate = ""
-        for (depth = 1; depth <= level; depth++)
-          if (dates[depth] != "") hdate = dates[depth]
-      }
-    }
-    # The document header dates the document wherever the passage happens to
-    # be, so this scan is NOT gated on the passage line: a passage in the first
-    # lines must still pick up a date written below it.
-    if (NR <= 15 && hdrdate == "" && !isheading && !insection) {
-      d = finddate($0, 0)
-      if (d != "") hdrdate = d
+  function section(level, title, first,   depth) {
+    headings++
+    if (level > 1 || headings > 1) insection = 1
+    if (first <= BEST) {
+      heading = title
+      for (depth in dates) if (depth >= level) delete dates[depth]
+      dates[level] = finddate(title, 1)
+      hdate = ""
+      for (depth = 1; depth <= level; depth++)
+        if (dates[depth] != "") hdate = dates[depth]
     }
   }
+  function endparagraph(astext) {
+    if (astext && !insection && hdrdate == "") hdrdate = paragraphdate
+    paragraph = ""; paragraphdate = ""; firstline = 0
+  }
+  function markdown(s, n,   prefix, rest, level, title) {
+    sub(/\r$/, "", s)
+    if (match(s, /^ ? ? ?(```+|~~~+)/)) {
+      prefix = substr(s, 1, RLENGTH)
+      sub(/^ +/, "", prefix)
+      rest = substr(s, RLENGTH + 1)
+      if (fencechar != "") {
+        if (substr(prefix, 1, 1) == fencechar && length(prefix) >= fencelen && rest ~ /^[ \t]*$/)
+          fencechar = ""
+        return
+      }
+      if (substr(prefix, 1, 1) != "`" || rest !~ /`/) {
+        endparagraph(1)
+        fencechar = substr(prefix, 1, 1); fencelen = length(prefix)
+        return
+      }
+    }
+    if (fencechar != "") return
+    if (match(s, /^ ? ? ?#+([ \t]+|$)/)) {
+      title = substr(s, RLENGTH + 1)
+      prefix = substr(s, 1, RLENGTH)
+      gsub(/[ \t]/, "", prefix)
+      level = length(prefix)
+      if (level <= 6) {
+        sub(/[ \t]+#+[ \t]*$/, "", title)
+        endparagraph(1)
+        section(level, title, n)
+        return
+      }
+    }
+    if (firstline && s ~ /^ ? ? ?(=+|-+)[ \t]*$/) {
+      prefix = s; sub(/^ +/, "", prefix)
+      section(substr(prefix, 1, 1) == "=" ? 1 : 2, paragraph, firstline)
+      endparagraph(0)
+      return
+    }
+    if (!firstline && (s ~ /^    / || s ~ /^\t/)) return
+    prefix = s; gsub(/[ \t]/, "", prefix)
+    if (s ~ /^[ \t]*$/ || s ~ /^ ? ? ?(>|[-+*]([ \t]+|$)|[0-9]+[.)][ \t]+)/ ||
+        prefix ~ /^---+$/ || prefix ~ /^\*\*\*+$/ || prefix ~ /^___+$/) {
+      endparagraph(1)
+      if (!insection && n <= 15 && hdrdate == "") hdrdate = finddate(s, 0)
+      return
+    }
+    if (!firstline) firstline = n
+    title = s; sub(/^ +/, "", title); sub(/[ \t]+$/, "", title)
+    paragraph = paragraph (paragraph == "" ? "" : " ") title
+    if (n <= 15 && paragraphdate == "") paragraphdate = finddate(s, 0)
+  }
+  NR > BEST && NR > 15 && !firstline { exit }
+  {
+    if (NR == BEST) quote = $0
+    markdown($0, NR)
+  }
   END {
+    endparagraph(1)
     gsub(/\t/, " ", heading); gsub(/\t/, " ", quote)
     sub(/^[ \t>*+-]+/, "", quote)
     print heading; print hdate; print hdrdate; print quote

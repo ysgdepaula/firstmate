@@ -288,6 +288,142 @@ MD
   pass "Markdown heading indentation preserves section boundaries and dates"
 }
 
+
+assert_private_cache() {
+  perl -MFile::Find -e '
+    find({no_chdir => 1, wanted => sub {
+      my @s = lstat $File::Find::name;
+      my $want = -d _ ? 0700 : 0600;
+      die sprintf("Wrong cache mode %04o: %s\n", $s[2] & 07777, $File::Find::name)
+        if ($s[2] & 07777) != $want;
+    }}, $ARGV[0]);
+  ' "$1" || fail "cache permissions must remain owner-only"
+}
+
+check_cache_permissions() {
+  local case_home="$HOME_DIR/cache-permissions" out source_before source_after
+  mkdir -p "$case_home/data" "$case_home/state"
+  chmod 755 "$case_home" "$case_home/state"
+  printf 'Confidential privateword.\n' > "$case_home/data/report.md"
+  chmod 600 "$case_home/data/report.md"
+  source_before=$(perl -e 'printf "%o", (stat $ARGV[0])[2] & 07777' "$case_home/data/report.md")
+  out=$(umask 022; case_run privateword) || fail "private record lookup failed: $out"
+  assert_contains "$out" "source: data/report.md" "a private record must remain searchable"
+  assert_private_cache "$case_home/state/prior-art"
+  perl -MFile::Find -e '
+    find({no_chdir => 1, wanted => sub {
+      chmod(-d $File::Find::name ? 0755 : 0644, $File::Find::name) or die $!;
+    }}, $ARGV[0]);
+  ' "$case_home/state/prior-art" || fail "could not prepare permissive legacy cache"
+  out=$(umask 022; case_run privateword) || fail "legacy cache reuse failed: $out"
+  assert_contains "$out" "index reused" "permission repair must not require re-reading the records"
+  assert_private_cache "$case_home/state/prior-art"
+  source_after=$(perl -e 'printf "%o", (stat $ARGV[0])[2] & 07777' "$case_home/data/report.md")
+  [ "$source_before" = "$source_after" ] || fail "cache protection must not change source permissions"
+  [ "$(cat "$case_home/data/report.md")" = 'Confidential privateword.' ] || fail "source text must remain untouched"
+  pass "cache creation and reuse enforce owner-only file and directory modes"
+}
+
+check_linked_records() {
+  local case_home="$HOME_DIR/linked-records" out rc kind
+  mkdir -p "$case_home/data" "$case_home/linked-directory"
+  printf 'publicword\n' > "$case_home/data/public.md"
+  printf 'linkedword\n' > "$case_home/target.md"
+  printf 'linkedword\n' > "$case_home/linked-directory/report.md"
+  for kind in file broken directory; do
+    case "$kind" in
+      file) ln -s "$case_home/target.md" "$case_home/data/report.md" ;;
+      broken) ln -s "$case_home/missing.md" "$case_home/data/report.md" ;;
+      directory) ln -s "$case_home/linked-directory" "$case_home/data/reports" ;;
+    esac
+    out=$(case_run linkedword)
+    rc=$?
+    [ "$rc" -ne 0 ] || fail "linked records must report incomplete coverage: $out"
+    assert_contains "$out" "symbolic link; coverage is incomplete" "the skipped link must be explained"
+    assert_contains "$out" "$case_home/data/" "the skipped source must be named"
+    assert_not_contains "$out" "FOUND NOWHERE" "a skipped link cannot establish absence"
+    assert_not_contains "$out" "NOTHING FOUND" "a skipped link cannot establish empty results"
+    if [ "$kind" = directory ]; then unlink "$case_home/data/reports"; else unlink "$case_home/data/report.md"; fi
+  done
+  cp "$case_home/target.md" "$case_home/data/report.md"
+  out=$(case_run linkedword) || fail "lookup after resolving the link failed: $out"
+  assert_contains "$out" "source: data/report.md" "a regular replacement must restore coverage"
+  [ "$(cat "$case_home/target.md")" = linkedword ] || fail "the target of a link must remain unchanged"
+  pass "linked records and directories cannot produce false absence"
+}
+
+check_setext_dates() {
+  local case_home="$HOME_DIR/setext-dates" out word
+  mkdir -p "$case_home/data"
+  cat > "$case_home/data/report.md" <<'MD'
+# Notes
+Date: 2025-07-10
+## Alpha 2026-08-01
+
+Betatitleword 2026-09-02
+---
+setextbodyword
+### Nested ATX
+setextnestedword
+
+Undated sibling
+---
+setextsiblingword
+
+New root
+===
+setextrootword
+MD
+  for word in setextbodyword Betatitleword setextnestedword; do
+    out=$(case_run "$word") || fail "Setext lookup failed: $out"
+    assert_contains "$out" "2026-09-02  (dated section)" "Setext headings must establish their own section date"
+  done
+  for word in setextsiblingword setextrootword; do
+    out=$(case_run "$word") || fail "Setext boundary lookup failed: $out"
+    assert_contains "$out" "2025-07-10  (stated in the document)" "Setext siblings and roots must end earlier dates"
+  done
+  perl -pe 's/\n/\r\n/g' > "$case_home/data/multiline.md" <<'MD'
+# Notes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Multilineheadingword
+  continued title
+  2026-10-03
+  ---
+multilinebodyword
+~~~text
+False 1999-01-01
+===
+~~~
+aftersetextfenceword
+
+---
+
+afterruleword
+MD
+  for word in Multilineheadingword multilinebodyword aftersetextfenceword afterruleword; do
+    out=$(case_run "$word") || fail "multiline Setext lookup failed: $out"
+    assert_contains "$out" "2026-10-03  (dated section)" "multiline indented CRLF Setext headings must share the heading parser"
+    assert_contains "$out" "under: Multilineheadingword continued title 2026-10-03" "fences and standalone rules must not replace the real heading"
+  done
+  out=$(case_run Multilineheadingword) || fail "Setext title quotation failed: $out"
+  assert_contains "$out" $'> Multilineheadingword\r' "a Setext heading quotation must retain its original text"
+  pass "ATX and Setext headings share section, fence, and date handling"
+}
+
 if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
   case "$FM_PRIOR_ART_TEST_CASE" in
     search-options) check_search_options ;;
@@ -298,6 +434,9 @@ if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
     malformed-matches) check_malformed_matches ;;
     crlf-dates) check_crlf_dates ;;
     indented-headings) check_indented_headings ;;
+    cache-permissions) check_cache_permissions ;;
+    linked-records) check_linked_records ;;
+    setext-dates) check_setext_dates ;;
     *) fail "unknown focused test case: $FM_PRIOR_ART_TEST_CASE" ;;
   esac
   exit 0
@@ -643,3 +782,7 @@ check_binary_records
 check_malformed_matches
 check_crlf_dates
 check_indented_headings
+
+check_cache_permissions
+check_linked_records
+check_setext_dates
