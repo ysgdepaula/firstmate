@@ -101,6 +101,7 @@
 # events[] preserves recorded PRs, merge notifications, terminal receipts and
 # answered captain holds with their available event clock, never observation time.
 # Completion fallback includes active Done rows and the configured markdown archive.
+# An unavailable archive is omitted with events_archive_unreadable; current reads continue.
 # Active children in home summaries carry their backlog title, bounded to 120 characters.
 # Events use temporary JSON files for transport, independently of argv limits.
 # Malformed or unreadable task journals are skipped atomically and named in omitted[].
@@ -1134,7 +1135,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           landed:($landed_all | length),
           endpoints:($tasks | length)
         },
-        omitted:($event_collection.omitted + $event_projection.omitted + [
+        omitted:($event_collection.omitted + ($event_backlog[0].omitted // []) + $event_projection.omitted + [
           (if ($active_all | length) > $child_n then {surface:"active_children",count:(($active_all | length) - $child_n)} else empty end),
           (if ($decisions_all | length) > $decisions_n then {surface:"decisions_open",count:(($decisions_all | length) - $decisions_n)} else empty end),
           (if ($queued_all | length) > $queued_n then {surface:"queued",count:(($queued_all | length) - $queued_n)} else empty end),
@@ -2000,9 +2001,12 @@ EVENT_BACKLOG_JSON_FILE="$JSON_TRANSPORT_DIR/event-backlog.json"
   else
     printf '{"records":[]}\n'
   fi
-) > "$JSON_TRANSPORT_DIR/archive.json" || { echo "fm-fleet-snapshot: archive read failed" >&2; exit 1; }
+) > "$JSON_TRANSPORT_DIR/archive.json" || {
+  printf '%s\n' '{"records":[],"omitted":[{"surface":"events_archive_unreadable","count":1,"reveal":"inspect the configured Done archive"}]}' > "$JSON_TRANSPORT_DIR/archive.json" || exit 1
+}
 jq --slurpfile archive "$JSON_TRANSPORT_DIR/archive.json" '
-  .records as $current
+  .omitted = ($archive[0].omitted // [])
+  | .records as $current
   | .records += [$archive[0].records[] | .id as $id | select(any($current[]; .id == $id) | not)]
 ' "$BACKLOG_JSON_FILE" > "$EVENT_BACKLOG_JSON_FILE" || exit 1
 
@@ -2054,7 +2058,7 @@ jq -L "$SCRIPT_DIR" -n \
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
      events:(fleet_events($event_backlog[0]; $tasks; $event_collection.events) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
-     omitted:$event_collection.omitted,
+     omitted:($event_collection.omitted + ($event_backlog[0].omitted // [])),
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),
      main_inventory:$main_inventory,

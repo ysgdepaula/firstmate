@@ -24,7 +24,7 @@
 #            an existing table unless --force is supplied.
 # compose    Print a mechanically composed fm-projets-board.v1 payload on stdout.
 #            The ONLY fleet-state reader is bin/fm-bearings-snapshot.sh (run with
-#            its bounds lifted so every project sees all of its work); this script
+#            --all-events and work bounds lifted so every project sees its history); this script
 #            never parses state/ or data/ itself. Grouping BY PROJECT is the
 #            novelty: each row's task id and repo are matched against the private
 #            correspondence table config/projets.json (schema fm-projets-config.v1,
@@ -145,7 +145,7 @@ INTERNAL_RE='(?i)(^|[^a-z0-9_-])(crewmate|crewmates|brief|briefs|gate|gates|tear
 snapshot_default() {
   FM_BEARINGS_IN_FLIGHT=500 FM_BEARINGS_DECISIONS=500 FM_BEARINGS_LANDED=500 \
   FM_BEARINGS_LANDED_PER_HOME=500 FM_BEARINGS_GATES=500 FM_BEARINGS_RECORDED_PRS=500 \
-    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-in-flight --all-landed --all-queued --all-secondmates --all-recorded-prs
+    "$SCRIPT_DIR/fm-bearings-snapshot.sh" --json --all-events --all-in-flight --all-landed --all-queued --all-secondmates --all-recorded-prs
 }
 
 quota_default() {  # prints quota-axi JSON or nothing

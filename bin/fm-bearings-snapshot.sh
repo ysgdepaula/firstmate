@@ -60,6 +60,9 @@
 #
 # events[] projects the canonical event journal: id, repo, owner, kind (pr,
 # merge, decision, landed), what, url and at (ISO 8601, a day, or null when unknown).
+# Defaults: FM_BEARINGS_EVENTS_PER_TASK=5 and FM_BEARINGS_EVENTS=20, with
+# 240-character excerpts and the shared 32768-byte projection budget.
+# --all-events lifts these view bounds; upstream home omissions remain disclosed.
 # Flags:
 #   (default)        compact projection with bounded remote-ledger collection, TOON
 #   --json           the same projected model as JSON (machine/debug; parity form)
@@ -69,6 +72,7 @@
 #   --all-decisions  include every open decision and captain hold in the bounded snapshot
 #   --all-secondmates include every aggregated secondmate record
 #   --all-landed     include every landed record from every home (default: bounded)
+#   --all-events     include the full available event journal and its texts
 #   --all-reports    include the full scout-report inventory (default: relevant only)
 #   --all-queued     include every queued gate present in the bounded snapshot
 #   --all-recorded-prs include every locally recorded PR
@@ -87,6 +91,8 @@ FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 # Bounds (overridable for tests / large fleets).
+FM_BEARINGS_EVENTS=${FM_BEARINGS_EVENTS:-20}
+FM_BEARINGS_EVENTS_PER_TASK=${FM_BEARINGS_EVENTS_PER_TASK:-5}
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
 FM_BEARINGS_LANDED_PER_HOME=${FM_BEARINGS_LANDED_PER_HOME:-$FM_BEARINGS_LANDED}
 FM_BEARINGS_IN_FLIGHT=${FM_BEARINGS_IN_FLIGHT:-20}
@@ -103,6 +109,8 @@ case "$FM_BEARINGS_PR_TIMEOUT" in ''|*[!0-9]*|0) FM_BEARINGS_PR_TIMEOUT=20 ;; es
 validate_bound() {  # <name> <value>
   case "$2" in ''|*[!0-9]*|0) echo "fm-bearings-snapshot: $1 must be a positive integer" >&2; exit 2 ;; esac
 }
+validate_bound FM_BEARINGS_EVENTS "$FM_BEARINGS_EVENTS"
+validate_bound FM_BEARINGS_EVENTS_PER_TASK "$FM_BEARINGS_EVENTS_PER_TASK"
 validate_bound FM_BEARINGS_LANDED "$FM_BEARINGS_LANDED"
 validate_bound FM_BEARINGS_LANDED_PER_HOME "$FM_BEARINGS_LANDED_PER_HOME"
 validate_bound FM_BEARINGS_IN_FLIGHT "$FM_BEARINGS_IN_FLIGHT"
@@ -122,7 +130,7 @@ usage: fm-bearings-snapshot.sh [--json] [--include-prs] [--fields <list>]
                                [--all-secondmates] [--all-landed]
                                [--all-reports] [--all-queued]
                                [--all-recorded-prs] [--all-unhealthy]
-                               [--all-pr-repos]
+                               [--all-pr-repos] [--all-events]
 
 Compact bearings projection over fm-fleet-snapshot.sh. TOON by default.
 Default collection performs bounded concurrent remote-ledger reads for registered
@@ -150,6 +158,8 @@ Opt-in surfaces: --fields bodies|paths|actions|endpoints, --all-in-flight,
   --all-decisions (all open decisions and captain holds in the bounded snapshot),
   --all-secondmates, --all-landed, --all-reports, --all-queued, --all-recorded-prs,
   --all-unhealthy, --all-pr-repos, --include-prs (adds candidate_prs).
+Events default to 5 per task and 20 overall (FM_BEARINGS_EVENTS_PER_TASK /
+FM_BEARINGS_EVENTS), with bounded text; --all-events reveals all available events.
 Raise FM_BEARINGS_PR_LIMIT to expand per-repository open-PR results.
 EOF
 }
@@ -161,6 +171,7 @@ ALL_QUEUED=0
 ALL_IN_FLIGHT=0
 ALL_DECISIONS=0
 ALL_SECONDMATES=0
+ALL_EVENTS=0
 ALL_LANDED=0
 ALL_RECORDED_PRS=0
 ALL_UNHEALTHY=0
@@ -175,6 +186,7 @@ while [ $# -gt 0 ]; do
     --all-in-flight) ALL_IN_FLIGHT=1 ;;
     --all-decisions) ALL_DECISIONS=1 ;;
     --all-secondmates) ALL_SECONDMATES=1 ;;
+    --all-events) ALL_EVENTS=1 ;;
     --all-landed) ALL_LANDED=1 ;;
     --all-recorded-prs) ALL_RECORDED_PRS=1 ;;
     --all-unhealthy) ALL_UNHEALTHY=1 ;;
@@ -304,12 +316,15 @@ case "$BEARINGS_TODAY" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
   *) BEARINGS_TODAY=$(date -u +%Y-%m-%d) ;;
 esac
-MODEL=$(printf '%s' "$SNAP" | jq \
+MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg today "$BEARINGS_TODAY" \
   --arg prs "$PR_STATUS" \
   --arg fields "$FIELDS" \
+  --argjson events_n "$FM_BEARINGS_EVENTS" \
+  --argjson events_per_task "$FM_BEARINGS_EVENTS_PER_TASK" \
+  --argjson all_events "$ALL_EVENTS" \
   --argjson landed_n "$FM_BEARINGS_LANDED" \
   --argjson landed_per_home_n "$FM_BEARINGS_LANDED_PER_HOME" \
   --argjson in_flight_n "$FM_BEARINGS_IN_FLIGHT" \
@@ -333,6 +348,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_rows_capped "$PR_ROWS_CAPPED" \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
   --argjson candidate_prs "$CANDIDATE_PRS" '
+  include "fm-fleet-events";
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
   def fit($n):
@@ -528,12 +544,16 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | {id, path} ]) as $reports_all
   | ([ .tasks[] | select(.kind != "secondmate" and .pr.url != null and .pr.source == "meta") | {id, url:.pr.url} ]) as $recorded_prs_all
   | . as $snap
+  | ([.events[]? | {id,repo,owner:(.owner // "(main)"),kind,what,url,at}]) as $events
+  | (if $all_events == 1 then {events:$events,omitted:[]}
+     else fleet_event_projection($events; $events_per_task; $events_n)
+       | .omitted |= map(. + {reveal:"--all-events"}) end) as $event_view
   | {
       schema: "fm-bearings.v1",
       home: $home,
       generated: $now,
       prs: $prs,
-      events: [ .events[]? | {id,repo,owner:(.owner // "(main)"),kind,what,url,at} ],
+      events: $event_view.events,
       in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       secondmate_reconcile: [ (.secondmate_current.records // [])[]
@@ -556,7 +576,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)
   | . + {omitted: (
-      [ ($snap.omitted[]? | . + {owner:"(main)"}),
+      [ $event_view.omitted[],
+        ($snap.omitted[]? | . + {owner:"(main)"}),
         ($snap.secondmate_current.records[]? as $m | $m.omitted[]? | select(.surface | startswith("events")) | . + {owner:$m.id}),
         (if $f_bodies then empty else {surface:"backlog item bodies", reveal:"--fields bodies"} end),
         (if $f_paths then empty else {surface:"task paths", reveal:"--fields paths"} end),

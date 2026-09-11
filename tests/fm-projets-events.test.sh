@@ -104,12 +104,78 @@ for task, indices in [("torre-a-history",range(50))] + [(f"torre-z-{i:02}",[i]) 
 bad=root/"torre-middle"
 bad.mkdir()
 (bad/"events.jsonl").write_text(json.dumps(row(0))+"\n{bad JSON\n")
+solo=root/"solos-last"
+solo.mkdir()
+(solo/"events.jsonl").write_text(json.dumps(dict(row(0),kind="landed",key="solo",what="Livraison Solos",repo="Solos",at="2026-01-01T00:00:00Z"))+"\n")
 PYEVENTS
 "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/large-events.json"
 jq -e '([.events[] | select(.id == "torre-a-history")] | length) == 50
   and ([.events[] | select(.id | startswith("torre-z-"))] | length) == 30
   and all(.events[]; .id != "torre-middle")
   and any(.omitted[]; .surface == "events_unreadable" and .id == "torre-middle")' "$TMP_ROOT/large-events.json" >/dev/null || fail "large or malformed journals broke complete collection"
+(
+  export FM_BEARINGS_NOW=2026-09-11T01:00:00Z
+  "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/compact-events.json"
+  "$ROOT/bin/fm-bearings-snapshot.sh" --json --all-events > "$TMP_ROOT/full-events.json"
+  "$ROOT/bin/fm-bearings-snapshot.sh" > "$TMP_ROOT/compact-events.toon"
+  "$ROOT/bin/fm-bearings-snapshot.sh" --all-events > "$TMP_ROOT/full-events.toon"
+)
+jq -e '(.events | length) == 20 and all(.events[]; (.what | length) <= 241)
+  and ([.events[] | select(.id == "torre-a-history")] | length) == 5
+  and any(.omitted[]; .surface == "events_truncated" and .reveal == "--all-events")
+  and any(.omitted[]; .surface == "events_text_truncated" and .reveal == "--all-events")' "$TMP_ROOT/compact-events.json" >/dev/null || fail "Bearings event bounds or disclosures are missing"
+jq -e --slurpfile compact "$TMP_ROOT/compact-events.json" '(.events | length) > 80
+  and any(.events[]; (.what | length) == 4096)
+  and del(.events,.omitted) == ($compact[0] | del(.events,.omitted))' "$TMP_ROOT/full-events.json" >/dev/null || fail "all-events changed existing Bearings fields or lost full text"
+python3 - "$TMP_ROOT" <<'PYPARITY'
+import json, re, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+def tokens(line):
+    values=[]
+    start=0
+    quoted=False
+    escaped=False
+    for index,char in enumerate(line):
+        if escaped:
+            escaped=False
+        elif quoted and char == "\\":
+            escaped=True
+        elif char == '"':
+            quoted=not quoted
+        elif char == ',' and not quoted:
+            values.append(line[start:index])
+            start=index+1
+    values.append(line[start:])
+    def scalar(value):
+        if value.startswith('"') or value in ('null','true','false') or re.fullmatch(r'-?\d+(?:\.\d+)?',value):
+            return json.loads(value)
+        return value
+    return [scalar(value) for value in values]
+for mode in ('compact','full'):
+    expected=json.loads((root/f'{mode}-events.json').read_text())
+    lines=(root/f'{mode}-events.toon').read_text().splitlines()
+    result={}
+    index=0
+    while index<len(lines):
+        line=lines[index]
+        match=re.fullmatch(r'([^[]+)\[(\d+)\]\{(.*)\}:',line)
+        if match:
+            key,count,fields=match.groups()
+            columns=tokens(fields)
+            result[key]=[dict(zip(columns,tokens(row[2:]))) for row in lines[index+1:index+1+int(count)]]
+            index+=int(count)+1
+        else:
+            key,value=line.split(': ',1)
+            result[key]=[] if value=='[]' else tokens(value)[0]
+            index+=1
+    expected.pop('omitted')
+    result.pop('omitted')
+    assert result==expected,mode
+PYPARITY
+"$ROOT/bin/fm-projets-board.sh" compose --no-quota > "$TMP_ROOT/full-events-page.json"
+jq -e '.projects[] | select(.id == "solos") | any(.journal[]; .what == "Livraison Solos")' "$TMP_ROOT/full-events-page.json" >/dev/null || fail "project composition did not request the full journal"
+pass "Bearings bounds history without changing existing JSON or TOON fields"
 "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null
 jq -e '(.events | length) == 20 and ([.events[] | select(.id == "torre-a-history")] | length) == 5
   and any(.omitted[]; .surface == "events_truncated" and .count > 0)
@@ -153,12 +219,14 @@ pass "large journal transport, bounded publication, partial disclosure and legac
   "$ROOT/bin/fm-captain-hold.sh" complete torre-etude --none >/dev/null
   "$ROOT/bin/fm-teardown.sh" torre-etude > "$TMP_ROOT/scout-teardown.txt"
   delivery_at=$(jq -r 'select(.kind == "landed") | .at' "$FM_HOME/data/torre-etude/events.jsonl")
-  jq -se 'length == 1 and .[0].kind == "landed" and (.[0].at | test("T[0-9:]+Z$"))' "$FM_HOME/data/torre-etude/events.jsonl" >/dev/null || fail "scout close did not preserve its delivery clock"
+  jq -se 'length == 1 and .[0].kind == "landed" and .[0].what == "Étude du projet" and (.[0].at | test("T[0-9:]+Z$"))' "$FM_HOME/data/torre-etude/events.jsonl" >/dev/null || fail "scout close did not preserve its delivery clock"
+  jq '.what = "Livraison terminée"' "$FM_HOME/data/torre-etude/events.jsonl" > "$TMP_ROOT/generic-event.json"
+  mv "$TMP_ROOT/generic-event.json" "$FM_HOME/data/torre-etude/events.jsonl"
   for i in {1..10}; do
     (cd "$FM_HOME" && tasks-axi add "fm-next-$i" "Livraison suivante $i" --kind scout --repo firstmate >/dev/null && tasks-axi "done" "fm-next-$i" >/dev/null)
   done
   "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/rotated-fleet.json"
-  jq -e --arg at "$delivery_at" 'all(.backlog.records[]; .id != "torre-etude") and ([.events[] | select(.id == "torre-etude")] | length == 1 and .[0].at == $at)' "$TMP_ROOT/rotated-fleet.json" >/dev/null || fail "retention removed or duplicated the scout delivery"
+  jq -e --arg at "$delivery_at" 'all(.backlog.records[]; .id != "torre-etude") and ([.events[] | select(.id == "torre-etude")] | length == 1 and .[0].at == $at and .[0].what == "Étude du projet")' "$TMP_ROOT/rotated-fleet.json" >/dev/null || fail "retention removed or duplicated the scout delivery"
   "$ROOT/bin/fm-projets-board.sh" init >/dev/null
   "$ROOT/bin/fm-projets-board.sh" compose --no-quota > "$TMP_ROOT/rotated-page.json"
   jq -e --arg at "$delivery_at" '.projects[] | select(.id == "torre") | (.journal | length) == 1 and .journal[0].at == $at' "$TMP_ROOT/rotated-page.json" >/dev/null || fail "rotated delivery disappeared from its project"
@@ -166,6 +234,21 @@ pass "large journal transport, bounded publication, partial disclosure and legac
   "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/archive-fleet.json"
   jq -e --arg day "${delivery_at%%T*}" '[.events[] | select(.id == "torre-etude")] | length == 1 and .[0].kind == "landed" and .[0].at == $day' "$TMP_ROOT/archive-fleet.json" >/dev/null || fail "legacy archived delivery was not recovered with its known date"
   pass "scout deliveries survive real Done rotation, with an archive fallback"
+
+  (cd "$FM_HOME" && tasks-axi add torre-choix-etude 'Étude : choix' --kind scout --repo agent-platform >/dev/null && tasks-axi start torre-choix-etude >/dev/null)
+  fm_write_meta "$FM_HOME/state/torre-choix-etude.meta" "window=firstmate:fm-torre-choix-etude" "endpoint_task_id=torre-choix-etude" "backend=tmux" "worktree=$FM_HOME/projects/absent" "project=agent-platform" "harness=claude" "kind=scout" "mode=" "spawn_gen=choice-one"
+  mkdir -p "$FM_HOME/data/torre-choix-etude"
+  printf 'Choix à confirmer.\n' > "$FM_HOME/data/torre-choix-etude/report.md"
+  "$ROOT/bin/fm-captain-hold.sh" hold torre-choix-etude --reason 'Confirmer le choix' >/dev/null
+  "$ROOT/bin/fm-captain-hold.sh" complete torre-choix-etude torre-choix-etude >/dev/null
+  "$ROOT/bin/fm-teardown.sh" torre-choix-etude > "$TMP_ROOT/held-scout-teardown.txt"
+  jq -se 'length == 1 and .[0].kind == "landed" and .[0].what == "Étude : choix"' "$FM_HOME/data/torre-choix-etude/events.jsonl" >/dev/null || fail "retained scout lost its titled delivery"
+  "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/held-delivery.json"
+  jq -e 'any(.backlog.records[]; .id == "torre-choix-etude" and .state == "queued" and .hold_kind == "captain")' "$TMP_ROOT/held-delivery.json" >/dev/null || fail "delivery closed the captain decision"
+  "$ROOT/bin/fm-captain-hold.sh" answer torre-choix-etude --decision-file "$TMP_ROOT/answer.txt" >/dev/null
+  "$ROOT/bin/fm-projets-board.sh" compose --no-quota > "$TMP_ROOT/distinct-deliveries.json"
+  jq -e '.projects[] | select(.id == "torre") | [.journal[] | select(.kind == "landed") | .what] | sort == ["Étude : choix","Étude du projet"]' "$TMP_ROOT/distinct-deliveries.json" >/dev/null || fail "delivered scouts became indistinguishable after answering"
+  pass "retained scout deliveries remain distinct without closing their captain decisions"
 
   (cd "$FM_HOME" && tasks-axi add torre-42 'Préparer la démonstration' --kind scout --repo agent-platform >/dev/null && tasks-axi start torre-42 >/dev/null)
   mkdir -p "$FM_HOME/projects/demo"
@@ -191,4 +274,14 @@ TMUXCHILD
   parent_run "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$TMP_ROOT/titled-bearings.json" --no-quota > "$TMP_ROOT/titled-page.json"
   jq -e '.projects[] | select(.id == "torre") | any(.doing[]; .result == "Préparer la démonstration")' "$TMP_ROOT/titled-page.json" >/dev/null || fail "project result lost the child title"
   pass "the real home-summary producer carries child titles through bearings to projects"
+  mv "$FM_DATA_OVERRIDE/done-archive.md" "$TMP_ROOT/saved-archive.md"
+  ln -s "$TMP_ROOT/missing-archive.md" "$FM_DATA_OVERRIDE/done-archive.md"
+  "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/broken-archive-fleet.json"
+  "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/broken-archive-bearings.json"
+  "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null
+  for result in "$TMP_ROOT/broken-archive-fleet.json" "$TMP_ROOT/broken-archive-bearings.json" "$FM_STATE_OVERRIDE/home-summary.json"; do
+    jq -e 'any(.omitted[]; .surface == "events_archive_unreadable") and any(.events[]; .id == "torre-choix-etude" and .kind == "landed")' "$result" >/dev/null || fail "unavailable archive blocked or silently degraded current reads"
+  done
+  jq -e 'any(.in_flight[]; .id == "torre-42")' "$TMP_ROOT/broken-archive-bearings.json" >/dev/null || fail "archive failure hid current work"
+  pass "broken archives disclose partial history without blocking current projections"
 )

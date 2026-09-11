@@ -1,6 +1,9 @@
 def fleet_events($backlog; $tasks; $evidence):
   def row($id): ([$backlog.records[]? | select(.id == $id)] | last) // {};
-  ([$evidence[] | select(.recorded == true) | . + {repo:(.repo // row(.id).repo)}]) as $recorded
+  ([$evidence[] | select(.recorded == true) | . + {repo:(.repo // row(.id).repo)}
+     | if .kind == "landed" and .what == "Livraison terminée" then
+         .what = ((row(.id).title // .what) | if length > 240 then .[:239] + "…" else . end)
+       else . end]) as $recorded
   | ([ $tasks[] | select(.kind != "secondmate" and .pr.url != null)
      | {id,repo:(row(.id).repo // .project),kind:"pr",what:("PR ouverte : " + (row(.id).title // .id)),url:.pr.url,at:(.pr.recorded_at // null)} ]
    + [ $backlog.records[]? | select(.structured)
