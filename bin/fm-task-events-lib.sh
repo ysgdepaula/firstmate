@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Durable task events shared by PR registration, merge publication and answers.
+# Durable task events shared by PR registration, merge publication, answers and deliveries.
 # fm_task_event_append <data-root> <task-id> <key> <at> <kind> <what> <url> [repo]
 # writes one fm-task-events.v1 JSON object per line in data/<id>/events.jsonl:
 # schema, key (idempotency identity), at (ISO UTC), kind (pr, merge, decision,

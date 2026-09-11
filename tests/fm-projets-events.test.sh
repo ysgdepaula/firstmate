@@ -193,7 +193,9 @@ printf '%s\n' '## In flight' '' '## Queued' '' '## Done' > "$parent/data/backlog
 printf -- '- mate - fixture (home: %s; scope: fixture work; projects: agent-platform; added 2026-09-11)\n' "$FM_HOME" > "$parent/data/secondmates.md"
 fm_write_secondmate_meta "$parent/state/mate.meta" "$FM_HOME" "fmtest:fm-mate" agent-platform claude
 parent_run() {
-  FM_HOME="$parent" FM_STATE_OVERRIDE="$parent/state" FM_DATA_OVERRIDE="$parent/data" FM_CONFIG_OVERRIDE="$parent/config" "$@"
+  # Keep child homes outside the parent's fixture code root when TMPDIR is in
+  # the source worktree, including the retention subshell's real-code override.
+  FM_ROOT_OVERRIDE="$TMP_ROOT/root" FM_HOME="$parent" FM_STATE_OVERRIDE="$parent/state" FM_DATA_OVERRIDE="$parent/data" FM_CONFIG_OVERRIDE="$parent/config" "$@"
 }
 parent_run "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/parent-bearings.json"
 jq -e 'any(.omitted[]; .surface == "events_truncated" and .owner == "mate") and any(.omitted[]; .surface == "events_unreadable" and .id == "torre-middle")' "$TMP_ROOT/parent-bearings.json" >/dev/null || fail "parent bearings lost home journal disclosures"

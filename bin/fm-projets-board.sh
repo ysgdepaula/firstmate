@@ -24,8 +24,8 @@
 #            an existing table unless --force is supplied.
 # compose    Print a mechanically composed fm-projets-board.v1 payload on stdout.
 #            The ONLY fleet-state reader is bin/fm-bearings-snapshot.sh (run with
-#            --all-events and work bounds lifted so every project sees its history); this script
-#            never parses state/ or data/ itself. Grouping BY PROJECT is the
+#            --all-events and expanded work views; upstream home bounds remain
+#            disclosed). This script never parses raw fleet-state files. Grouping BY PROJECT is the
 #            novelty: each row's task id and repo are matched against the private
 #            correspondence table config/projets.json (schema fm-projets-config.v1,
 #            owned by docs/configuration.md "Projects page"), id prefix first,
