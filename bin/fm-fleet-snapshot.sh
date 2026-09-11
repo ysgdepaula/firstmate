@@ -100,6 +100,8 @@
 # Compatibility: JSON is the primary machine-readable surface.
 # events[] preserves recorded PRs, merge notifications, terminal receipts and
 # answered captain holds with their available event clock, never observation time.
+# Completion fallback includes active Done rows and the configured markdown archive.
+# Active children in home summaries carry their backlog title, bounded to 120 characters.
 # Events use temporary JSON files for transport, independently of argv limits.
 # Malformed or unreadable task journals are skipped atomically and named in omitted[].
 # Home summaries export at most FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK (default 5)
@@ -365,8 +367,8 @@ first_pr_url_in_file() {  # <file>
   grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
 }
 
-backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
-  local backlog=${1:-$BACKLOG}
+backlog_json() {  # [<backlog-path>] [<archive: 0|1>]
+  local backlog=${1:-$BACKLOG} archive=${2:-0}
   if [ ! -f "$backlog" ]; then
     jq -n --arg path "$backlog" '{path:$path,present:false,records:[]}'
     return 0
@@ -374,7 +376,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
 
   # shellcheck disable=SC2094
   jq -Rn --arg path "$backlog" --arg today "$SNAPSHOT_TODAY" --arg now "$SNAPSHOT_NOW" \
-    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" '
+    --argjson archive "$archive" --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" '
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
     def timestamp_epoch($d):
       if ($d | type) != "string" then null
@@ -386,7 +388,8 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
       | if $a == null or $b == null then null
         else (($b - $a) / 86400 | floor) end;
     def section_state:
-      if . == "In flight" then "in_flight"
+      if $archive == 1 then "done"
+      elif . == "In flight" then "in_flight"
       elif . == "Queued" then "queued"
       elif . == "Done" then "done"
       else null end;
@@ -483,7 +486,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
              body_excerpt:null}
         end;
     reduce inputs as $line
-      ({path:$path,present:true,records:[],section:null,order:0};
+      ({path:$path,present:true,records:[],section:(if $archive == 1 then "done" else null end),order:0};
        if ($line | test("^##[[:space:]]+")) then
          .section = (($line | sub("^##[[:space:]]+";"") | trim) | section_state)
        elif .section == null or ($line | trim) == "" then
@@ -532,6 +535,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
                else "live" end)
           | .captain_actionable = (.hold_bucket == "live")
         else . end)
+    | if $archive == 1 then .records |= map(select(.structured and .checked)) else . end
     | del(.section,.order)
   ' < "$backlog"
 }
@@ -970,6 +974,7 @@ main_inventory_json() {  # <backlog-json-file> <tasks-json-file>
 secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
   jq -L "$SCRIPT_DIR" -n \
     --slurpfile event_collection "$EVENT_EVIDENCE_JSON_FILE" \
+    --slurpfile event_backlog "$EVENT_BACKLOG_JSON_FILE" \
     --arg generated "$SNAPSHOT_NOW" \
     --argjson generated_epoch "$SNAPSHOT_EPOCH" \
     --arg home "$FM_HOME" \
@@ -1047,7 +1052,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
          | select($work.current_role != "program")
          | $tasks[]
          | select(.id == $work.id and .current_state.state == "working")
-         | {id,kind,state:.current_state.state,
+         | {id,kind,title:($work.title | trunc(120)),state:.current_state.state,
             repo:(($work.repo // .project // null) | if . == null then null else trunc(120) end),
             source:.current_state.source,
             doing:((.current_state.detail // "") | trunc(120))} ]) as $active_all
@@ -1090,7 +1095,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
        elif ($active_all | length) > 0 then "active_child_work"
        elif ($holds_all | length) > 0 then "externally_held"
        else "no_active_work" end) as $state
-    | fleet_event_projection(fleet_events($backlog; $tasks; $event_collection.events); $event_per_task; $event_n) as $event_projection
+    | fleet_event_projection(fleet_events($event_backlog[0]; $tasks; $event_collection.events); $event_per_task; $event_n) as $event_projection
     | {
         schema:"fm-secondmate-home-summary.v1",
         hold_classifier_schema:"fm-captain-hold-buckets.v1",
@@ -1979,6 +1984,28 @@ printf '%s\n' "$BACKLOG_JSON" > "$BACKLOG_JSON_FILE" \
 printf '%s\n' "$TASKS_JSON" > "$TASKS_JSON_FILE" \
   || { echo "fm-fleet-snapshot: temporary task file write failed" >&2; exit 1; }
 
+EVENT_BACKLOG_JSON_FILE="$JSON_TRANSPORT_DIR/event-backlog.json"
+(
+  # shellcheck source=bin/fm-tasks-axi-lib.sh
+  . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+  # shellcheck source=bin/fm-backlog-transition-lib.sh
+  . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+  archive_file=''
+  if [ -d "$DATA" ] && [ "$(fm_tasks_axi_backend "$(fm_backlog_root "$DATA")")" = markdown ]; then
+    archive_file=$(fm_backlog_archive_file "$DATA") || exit 1
+  fi
+  if [ -n "$archive_file" ] && { [ -e "$archive_file" ] || [ -L "$archive_file" ]; }; then
+    [ -f "$archive_file" ] && [ -r "$archive_file" ] || exit 1
+    backlog_json "$archive_file" 1
+  else
+    printf '{"records":[]}\n'
+  fi
+) > "$JSON_TRANSPORT_DIR/archive.json" || { echo "fm-fleet-snapshot: archive read failed" >&2; exit 1; }
+jq --slurpfile archive "$JSON_TRANSPORT_DIR/archive.json" '
+  .records as $current
+  | .records += [$archive[0].records[] | .id as $id | select(any($current[]; .id == $id) | not)]
+' "$BACKLOG_JSON_FILE" > "$EVENT_BACKLOG_JSON_FILE" || exit 1
+
 if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
   secondmate_home_summary_json "$BACKLOG_JSON_FILE" "$TASKS_JSON_FILE" \
     || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
@@ -1996,6 +2023,7 @@ secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE
 
 jq -L "$SCRIPT_DIR" -n \
   --slurpfile event_collection "$EVENT_EVIDENCE_JSON_FILE" \
+  --slurpfile event_backlog "$EVENT_BACKLOG_JSON_FILE" \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
@@ -2025,7 +2053,7 @@ jq -L "$SCRIPT_DIR" -n \
      generated:$generated,
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
-     events:(fleet_events($backlog; $tasks; $event_collection.events) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
+     events:(fleet_events($event_backlog[0]; $tasks; $event_collection.events) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
      omitted:$event_collection.omitted,
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),

@@ -59,6 +59,7 @@
 # task state when that proof fails; otherwise it removes the task's check,
 # trust record, PR sidecar, and publication record with the rest of the
 # volatile state. Durable data/<id>/events.jsonl is retained with report.md.
+# The shared backlog close preserves non-PR deliveries before Done retention.
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.

@@ -139,3 +139,56 @@ mv "$TMP_ROOT/legacy.json" "$FM_STATE_OVERRIDE/home-summary.json"
 parent_run "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/legacy-parent.json"
 jq -e 'any(.events[]; .id == "mate/torre-livraison" and .kind == "landed" and .at == "2026-09-10")' "$TMP_ROOT/legacy-parent.json" >/dev/null || fail "legacy home summary lost landed history"
 pass "large journal transport, bounded publication, partial disclosure and legacy summaries work through real consumers"
+
+(
+  export FM_HOME="$TMP_ROOT/retention-home" FM_ROOT_OVERRIDE="$ROOT"
+  export FM_STATE_OVERRIDE="$FM_HOME/state" FM_DATA_OVERRIDE="$FM_HOME/data" FM_CONFIG_OVERRIDE="$FM_HOME/config"
+  mkdir -p "$FM_HOME/state" "$FM_HOME/data" "$FM_HOME/config" "$FM_HOME/projects" "$FM_HOME/bin"
+  cp "$ROOT/.tasks.toml" "$FM_HOME/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$FM_HOME/data/backlog.md"
+  (cd "$FM_HOME" && tasks-axi add torre-etude 'Étude du projet' --kind scout --repo agent-platform >/dev/null && tasks-axi start torre-etude >/dev/null)
+  fm_write_meta "$FM_HOME/state/torre-etude.meta" "window=firstmate:fm-torre-etude" "endpoint_task_id=torre-etude" "backend=tmux" "worktree=$FM_HOME/projects/absent" "project=agent-platform" "harness=claude" "kind=scout" "mode=" "spawn_gen=study-one"
+  mkdir -p "$FM_HOME/data/torre-etude"
+  printf 'Étude terminée.\n' > "$FM_HOME/data/torre-etude/report.md"
+  "$ROOT/bin/fm-captain-hold.sh" complete torre-etude --none >/dev/null
+  "$ROOT/bin/fm-teardown.sh" torre-etude > "$TMP_ROOT/scout-teardown.txt"
+  delivery_at=$(jq -r 'select(.kind == "landed") | .at' "$FM_HOME/data/torre-etude/events.jsonl")
+  jq -se 'length == 1 and .[0].kind == "landed" and (.[0].at | test("T[0-9:]+Z$"))' "$FM_HOME/data/torre-etude/events.jsonl" >/dev/null || fail "scout close did not preserve its delivery clock"
+  for i in {1..10}; do
+    (cd "$FM_HOME" && tasks-axi add "fm-next-$i" "Livraison suivante $i" --kind scout --repo firstmate >/dev/null && tasks-axi "done" "fm-next-$i" >/dev/null)
+  done
+  "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/rotated-fleet.json"
+  jq -e --arg at "$delivery_at" 'all(.backlog.records[]; .id != "torre-etude") and ([.events[] | select(.id == "torre-etude")] | length == 1 and .[0].at == $at)' "$TMP_ROOT/rotated-fleet.json" >/dev/null || fail "retention removed or duplicated the scout delivery"
+  "$ROOT/bin/fm-projets-board.sh" init >/dev/null
+  "$ROOT/bin/fm-projets-board.sh" compose --no-quota > "$TMP_ROOT/rotated-page.json"
+  jq -e --arg at "$delivery_at" '.projects[] | select(.id == "torre") | (.journal | length) == 1 and .journal[0].at == $at' "$TMP_ROOT/rotated-page.json" >/dev/null || fail "rotated delivery disappeared from its project"
+  rm "$FM_HOME/data/torre-etude/events.jsonl"
+  "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/archive-fleet.json"
+  jq -e --arg day "${delivery_at%%T*}" '[.events[] | select(.id == "torre-etude")] | length == 1 and .[0].kind == "landed" and .[0].at == $day' "$TMP_ROOT/archive-fleet.json" >/dev/null || fail "legacy archived delivery was not recovered with its known date"
+  pass "scout deliveries survive real Done rotation, with an archive fallback"
+
+  (cd "$FM_HOME" && tasks-axi add torre-42 'Préparer la démonstration' --kind scout --repo agent-platform >/dev/null && tasks-axi start torre-42 >/dev/null)
+  mkdir -p "$FM_HOME/projects/demo"
+  fm_write_meta "$FM_HOME/state/torre-42.meta" "window=firstmate:fm-torre-42" "endpoint_task_id=torre-42" "backend=tmux" "worktree=$FM_HOME/projects/demo" "project=agent-platform" "harness=claude" "kind=scout" "mode=" "spawn_gen=demo-one"
+  child_fakebin=$(fm_fakebin "$FM_HOME")
+  cat > "$child_fakebin/tmux" <<'TMUXCHILD'
+#!/usr/bin/env bash
+case "$1" in display-message) echo claude;; esac
+exit 0
+TMUXCHILD
+  chmod +x "$child_fakebin/tmux"
+  export PATH="$child_fakebin:$PATH"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$FM_STATE_OVERRIDE" torre-42)
+  "$ROOT/bin/fm-busy-event.sh" apply "$FM_STATE_OVERRIDE" torre-42 busy --gen "$gen" --source claude-hook --event user-prompt-submit
+  printf 'mate\n' > "$FM_HOME/.fm-secondmate-home"
+  printf '# Fixture home\n' > "$FM_HOME/AGENTS.md"
+  "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null
+  jq -e '.active_children[] | select(.id == "torre-42") | .title == "Préparer la démonstration"' "$FM_STATE_OVERRIDE/home-summary.json" >/dev/null || fail "home summary lost the active child title"
+  printf -- '- mate - fixture (home: %s; scope: fixture work; projects: agent-platform; added 2026-09-11)\n' "$FM_HOME" > "$parent/data/secondmates.md"
+  fm_write_secondmate_meta "$parent/state/mate.meta" "$FM_HOME" "fmtest:fm-mate" agent-platform claude
+  parent_run "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/titled-bearings.json"
+  jq -e '.in_flight[] | select(.id == "mate/torre-42") | .title == "Préparer la démonstration"' "$TMP_ROOT/titled-bearings.json" >/dev/null || fail "parent bearings lost the child title"
+  parent_run "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$TMP_ROOT/titled-bearings.json" --no-quota > "$TMP_ROOT/titled-page.json"
+  jq -e '.projects[] | select(.id == "torre") | any(.doing[]; .result == "Préparer la démonstration")' "$TMP_ROOT/titled-page.json" >/dev/null || fail "project result lost the child title"
+  pass "the real home-summary producer carries child titles through bearings to projects"
+)
