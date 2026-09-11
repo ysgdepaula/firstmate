@@ -84,6 +84,7 @@ CACHE="$STATE/prior-art"
 INDEX="$CACHE/index"
 DOCS="$CACHE/docs"
 MANIFEST="$CACHE/manifest"
+ORIGINALS="$CACHE/originals"
 
 LIMIT=8
 REBUILD_ONLY=0
@@ -163,6 +164,7 @@ term_regex() {  # <folded lowercase word>
 # number in the original document.
 fold_program() {
   cat <<'PL'
+use Time::HiRes ();
 my %F = (
   "\xc3\xa0"=>"a","\xc3\xa1"=>"a","\xc3\xa2"=>"a","\xc3\xa4"=>"a","\xc3\xa5"=>"a",
   "\xc3\x80"=>"a","\xc3\x81"=>"a","\xc3\x82"=>"a","\xc3\x84"=>"a","\xc3\x85"=>"a",
@@ -186,19 +188,30 @@ while (my $path = <$list>) {
   chomp $path;
   $id++;
   open(my $fh, "<", $path) or die "Not read: $path: $!\n";
+  my @before = Time::HiRes::stat($fh);
+  @before or die "Cannot date the source: $path: $!\n";
+  open(my $original, ">", "$ARGV[1]/$id") or die "Cannot keep the source: $path: $!\n";
   my $n = 0;
   $! = 0;
   while (my $line = <$fh>) {
     $n++;
+    print {$original} $line or die "Cannot keep the source: $path: $!\n";
     $line =~ s/\t/ /g;
     $line =~ s/(\xc3[\x80-\xbf])/exists $F{$1} ? $F{$1} : $1/ge;
     $line =~ tr/A-Z/a-z/;
     chomp $line;
-    print "$id\t$n\t$line\n";
+    print "$id\t$n\t$line\n" or die "Cannot prepare the local search: $!\n";
   }
   die "Not read completely: $path: $!\n" if $!;
+  my @after = Time::HiRes::stat($fh);
+  @after or die "Cannot date the source: $path: $!\n";
+  die "Source changed while being read: $path; try again\n"
+    if join(":", @before[0,1,7,9,10]) ne join(":", @after[0,1,7,9,10]);
   close $fh or die "Not read completely: $path: $!\n";
+  close $original or die "Cannot keep the source: $path: $!\n";
+  utime $before[9], $before[9], "$ARGV[1]/$id" or die "Cannot keep the source date: $path: $!\n";
 }
+close STDOUT or die "Cannot prepare the local search: $!\n";
 PL
 }
 
@@ -255,7 +268,11 @@ fi > "$WANT"
 build_index() {
   mkdir -p "$CACHE"
   fold_program > "$TMPDIR_RUN/fold.pl"
-  perl "$TMPDIR_RUN/fold.pl" "$CORPUS" > "$TMPDIR_RUN/index.new"
+  mkdir "$TMPDIR_RUN/originals.new"
+  perl "$TMPDIR_RUN/fold.pl" "$CORPUS" "$TMPDIR_RUN/originals.new" > "$TMPDIR_RUN/index.new"
+  rm -f "$MANIFEST"
+  rm -rf "$ORIGINALS"
+  mv "$TMPDIR_RUN/originals.new" "$ORIGINALS"
   cp -f "$CORPUS" "$TMPDIR_RUN/docs.new"
   mv -f "$TMPDIR_RUN/docs.new" "$DOCS"
   mv -f "$TMPDIR_RUN/index.new" "$INDEX"
@@ -267,7 +284,7 @@ INDEX_STATE=reused
 if [ "$REBUILD_ONLY" -eq 1 ]; then
   rm -f "$INDEX" "$DOCS" "$MANIFEST"
 fi
-if [ ! -s "$INDEX" ] || [ ! -s "$DOCS" ] || [ ! -s "$MANIFEST" ] || ! cmp -s "$WANT" "$MANIFEST"; then
+if [ ! -d "$ORIGINALS" ] || [ ! -s "$INDEX" ] || [ ! -s "$DOCS" ] || [ ! -s "$MANIFEST" ] || ! cmp -s "$WANT" "$MANIFEST"; then
   BUILD_START=$(date +%s)
   build_index
   BUILD_TOOK=$(( $(date +%s) - BUILD_START ))
@@ -316,7 +333,12 @@ START=$(date +%s)
 # grep only narrows; the scoring below re-checks every hit against the text
 # column alone, so a word that happens to occur in a file's path can never be
 # counted as something the document says.
-grep -E "$COMBINED" "$INDEX" > "$HITS" 2>/dev/null || true
+search_status=0
+grep -E -e "$COMBINED" "$INDEX" > "$HITS" 2> "$TMPDIR_RUN/search-error" || search_status=$?
+case "$search_status" in
+  0|1) ;;
+  *) die "search could not be completed (exit $search_status); no answer was produced" ;;
+esac
 
 TERMRE=$(printf '%s\n' "${REGEXES[@]}" | paste -sd "$US" -)
 TERMNAME=$(printf '%s\n' "${NAMES[@]}" | paste -sd "$US" -)
@@ -348,7 +370,7 @@ BEGIN {
     }
   }
   if (here == 0) next
-  files[path] = 1
+  files[path] = $1 + 0
   linepath[NR] = path; linenumber[NR] = lno
 }
 END {
@@ -388,7 +410,7 @@ END {
       sum = sum (sum == "" ? "" : ", ") TN[i] " (" c ")"
     }
     if (cov == 0) continue
-    printf "D\t%.4f\t%d\t%s\t%d\t%s\n", s, cov, path, bestline[path], sum
+    printf "D\t%.4f\t%d\t%s\t%d\t%d\t%s\n", s, cov, path, bestline[path], files[path], sum
   }
 }
 ' "$HITS" > "$RANKED"
@@ -425,6 +447,21 @@ describe() {  # <path> <best line number> <fallback year>
   NR > BEST && NR > 15 { exit }
   {
     if (NR == BEST) quote = $0
+    if (match($0, /^ ? ? ?(```+|~~~+)/)) {
+      fence = substr($0, 1, RLENGTH)
+      sub(/^ +/, "", fence)
+      rest = substr($0, RLENGTH + 1)
+      if (fencechar != "") {
+        if (substr(fence, 1, 1) == fencechar && length(fence) >= fencelen && rest ~ /^[ \t]*$/)
+          fencechar = ""
+        next
+      }
+      if (substr(fence, 1, 1) != "`" || rest !~ /`/) {
+        fencechar = substr(fence, 1, 1); fencelen = length(fence)
+        next
+      }
+    }
+    if (fencechar != "") next
     isheading = match($0, /^#+[ \t]+/)
     if (isheading) {
       prefix = substr($0, 1, RLENGTH)
@@ -526,12 +563,14 @@ fi
 
 printf '\n'
 RANK=0
-while IFS="$TAB" read -r _ _ cov path bestline summary; do
+while IFS="$TAB" read -r _ _ cov path bestline docid summary; do
   RANK=$(( RANK + 1 ))
   [ "$RANK" -le "$LIMIT" ] || break
   rel=${path#"$DATA"/}
-  mt=$(mtime_epoch "$path")
-  { read -r heading; read -r hdate; read -r hdrdate; read -r quote; } < <(describe "$path" "$bestline" "$(epoch_date "$mt" %Y)")
+  original="$ORIGINALS/$docid"
+  mt=$(mtime_epoch "$original")
+  describe "$original" "$bestline" "$(epoch_date "$mt" %Y)" > "$TMPDIR_RUN/description"
+  { read -r heading; read -r hdate; read -r hdrdate; read -r quote; } < "$TMPDIR_RUN/description"
 
   if [ -n "$hdate" ]; then
     when=${hdate%%"$TAB"*}
