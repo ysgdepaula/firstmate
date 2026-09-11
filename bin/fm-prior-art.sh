@@ -572,8 +572,7 @@ describe() {  # <path> <best line number> <fallback year>
   END {
     endparagraph(1)
     if (uncertain_at && uncertain_at <= BEST) { hdate = ""; heading = "" }
-    gsub(/\t/, " ", heading); gsub(/\t/, " ", quote)
-    sub(/^[ \t>*+-]+/, "", quote)
+    gsub(/\t/, " ", heading)
     print heading; print hdate; print hdrdate; print quote
   }
   ' "$1"
@@ -655,7 +654,7 @@ while IFS="$TAB" read -r _ _ cov path bestline docid summary; do
   original="$ORIGINALS/$docid"
   mt=$(mtime_epoch "$original")
   describe "$original" "$bestline" "$(epoch_date "$mt" %Y)" > "$TMPDIR_RUN/description"
-  { read -r heading; read -r hdate; read -r hdrdate; read -r quote; } < "$TMPDIR_RUN/description"
+  { read -r heading; read -r hdate; read -r hdrdate; IFS= read -r quote; } < "$TMPDIR_RUN/description"
 
   if [ -n "$hdate" ]; then
     when=${hdate%%"$TAB"*}

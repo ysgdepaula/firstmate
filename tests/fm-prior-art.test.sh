@@ -420,7 +420,7 @@ MD
     assert_contains "$out" "under: Multilineheadingword continued title 2026-10-03" "fences and standalone rules must not replace the real heading"
   done
   out=$(case_run Multilineheadingword) || fail "Setext title quotation failed: $out"
-  assert_contains "$out" $'> Multilineheadingword\r' "a Setext heading quotation must retain its original text"
+  assert_contains "$out" $'>   Multilineheadingword\r' "a Setext heading quotation must retain its original text"
   pass "ATX and Setext headings share section, fence, and date handling"
 }
 
@@ -537,6 +537,20 @@ check_mixed_indentation() {
   pass "space and tab indentation cannot manufacture section dates"
 }
 
+check_quotation_prefixes() {
+  local case_home="$HOME_DIR/quotation-prefixes" out line
+  mkdir -p "$case_home/data"
+  for line in '-10% marge nette pour signword' '+10% marge nette pour signword' \
+    '>10% marge nette pour signword' '- -10% marge nette pour signword' \
+    '> -10% marge nette pour signword' '* -10% marge nette pour signword' \
+    '**-10%** marge nette pour signword' $' \t-10% marge nette pour signword\t\r'; do
+    printf '# Note\nDate: 2025-07-10\n\n%s\n' "$line" > "$case_home/data/report.md"
+    out=$(case_run signword) || fail "quotation prefix lookup failed: $out"
+    assert_contains "$out" "   > $line" "quotations must preserve meaningful signs and source prefixes"
+  done
+  pass "quotations preserve numeric signs and original prefixes"
+}
+
 if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
   case "$FM_PRIOR_ART_TEST_CASE" in
     search-options) check_search_options ;;
@@ -554,6 +568,7 @@ if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
     container-dates) check_container_dates ;;
     uncertain-dates) check_uncertain_dates ;;
     mixed-indentation) check_mixed_indentation ;;
+    quotation-prefixes) check_quotation_prefixes ;;
     *) fail "unknown focused test case: $FM_PRIOR_ART_TEST_CASE" ;;
   esac
   exit 0
@@ -911,3 +926,5 @@ check_container_dates
 check_uncertain_dates
 
 check_mixed_indentation
+
+check_quotation_prefixes
