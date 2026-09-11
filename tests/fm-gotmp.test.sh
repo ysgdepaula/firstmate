@@ -115,6 +115,8 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  # Backlog transitions source the durable delivery-event writer.
+  ln -s "$ROOT/bin/fm-task-events-lib.sh" "$fake/bin/fm-task-events-lib.sh"
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
@@ -141,8 +143,8 @@ test_teardown_removes_tasktmp_dir() {
   # Sanity: dir + contents exist before teardown.
   [ -d "$task_tmp/gotmp" ] || fail "precondition: gotmp missing before teardown"
   # Run the REAL teardown against the fake root.
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
-    || fail "teardown exited non-zero with a valid tasktmp"
+  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$fake/teardown.log" 2>&1 \
+    || { cat "$fake/teardown.log" >&2; fail "teardown exited non-zero with a valid tasktmp"; }
   [ ! -e "$task_tmp" ] \
     || fail "teardown did not remove the tasktmp dir ($task_tmp still exists)"
   pass "fm-teardown removes the dir pointed to by tasktmp= in meta"
@@ -207,6 +209,8 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  # Backlog transitions source the durable delivery-event writer.
+  ln -s "$ROOT/bin/fm-task-events-lib.sh" "$fake/bin/fm-task-events-lib.sh"
   # No tasktmp= line at all.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
@@ -217,8 +221,8 @@ kind=ship
 mode=no-mistakes
 yolo=off
 META
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
-    || fail "teardown exited non-zero when tasktmp= was absent"
+  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$fake/teardown.log" 2>&1 \
+    || { cat "$fake/teardown.log" >&2; fail "teardown exited non-zero when tasktmp= was absent"; }
   pass "fm-teardown skips gracefully when tasktmp= is absent (backward compat)"
 }
 
@@ -230,8 +234,8 @@ test_teardown_skips_gracefully_when_dir_missing() {
   [ ! -e "$task_tmp" ] || fail "precondition: task_tmp should not exist yet"
   local fake
   fake=$(make_fake_root "$id" "$task_tmp")
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
-    || fail "teardown exited non-zero when tasktmp dir was missing"
+  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >"$fake/teardown.log" 2>&1 \
+    || { cat "$fake/teardown.log" >&2; fail "teardown exited non-zero when tasktmp dir was missing"; }
   [ ! -e "$task_tmp" ] || fail "teardown created/left the tasktmp dir unexpectedly"
   pass "fm-teardown skips gracefully when tasktmp= points to a nonexistent dir"
 }
