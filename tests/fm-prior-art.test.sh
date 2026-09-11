@@ -424,6 +424,85 @@ MD
   pass "ATX and Setext headings share section, fence, and date handling"
 }
 
+
+check_query_separators() {
+  local case_home="$HOME_DIR/query-separators" out word grouped separate
+  mkdir -p "$case_home/data"
+  cat > "$case_home/data/report.md" <<'MD'
+L'agent avance d'abord aujourd'hui avec l’agent.
+La mémoire de chaque agent compte.
+Use C++ and agent[prod], agent\memoire or agent/memoire with foo&bar.
+MD
+  printf 'lagent dabord aujourdhui memoireagent\n' > "$case_home/data/joined.md"
+  for word in "l'agent" "d'abord" "aujourd'hui" 'l’agent' 'C++' 'agent[prod]' 'agent\memoire' 'agent/memoire' 'foo&bar'; do
+    out=$(case_run "$word") || fail "literal query failed: $out"
+    assert_contains "$out" "source: data/report.md" "query separators must preserve literal matches"
+    assert_not_contains "$out" "source: data/joined.md" "query separators must never disappear"
+    assert_not_contains "$out" "FOUND NOWHERE" "an existing literal subject cannot be declared absent"
+  done
+  grouped=$(case_run 'mémoire agent') || fail "grouped query failed: $grouped"
+  separate=$(case_run mémoire agent) || fail "separate query failed: $separate"
+  assert_contains "$grouped" "ALREADY KNOWN ABOUT: memoire agent" "multiword arguments must keep word boundaries"
+  [ "$(printf '%s\n' "$grouped" | sed -n '/source:/p')" = "$(printf '%s\n' "$separate" | sed -n '/source:/p')" ] || fail "grouped and separate words must find the same sources"
+  out=$(case_run $'mémoire\tagent\nl\x27agent') || fail "whitespace query failed: $out"
+  assert_contains "$out" "ALREADY KNOWN ABOUT: memoire agent l'agent" "all ASCII whitespace must separate words"
+  for word in '???' $'agent\001memoire'; do
+    out=$(case_run "$word")
+    [ "$?" -ne 0 ] || fail "unsupported query input must be refused: $out"
+    assert_not_contains "$out" "FOUND NOWHERE" "unsupported input cannot establish absence"
+  done
+  pass "literal separators and multiword queries preserve indexed spelling"
+}
+
+check_container_dates() {
+  local case_home="$HOME_DIR/container-dates" out
+  mkdir -p "$case_home/data"
+  cat > "$case_home/data/report.md" <<'MD'
+# Note
+> ```text
+> Date: 1999-01-01
+> ```
+Date: 2025-07-10
+containerword
+MD
+  touch -t 202407101200 "$case_home/data/report.md"
+  out=$(case_run containerword) || fail "container lookup failed: $out"
+  assert_contains "$out" "2024-07-10  (file last changed" "container examples must degrade to a trusted file date"
+  assert_not_contains "$out" "1999-01-01" "a quoted example must not date the document"
+  assert_not_contains "$out" "dated section" "unsupported container context must not assert a section date"
+  pass "container examples cannot supply authored dates"
+}
+
+check_uncertain_dates() {
+  local case_home="$HOME_DIR/uncertain-dates" out variant metadata
+  mkdir -p "$case_home/data"
+  for metadata in 'Date: 2025-07-10' ''; do
+    for variant in html list quote directive; do
+      {
+        printf '# Note\n%s\n## Known 2026-08-01\nknownbeforeword\n\n' "$metadata"
+        case "$variant" in
+          html) printf '<div>\n## Example 1999-01-01\nambiguousword\n</div>\n' ;;
+          list) printf -- '- ```text\n  Date: 1999-01-01\n  ```\n  ambiguousword\n' ;;
+          quote) printf '> > ```\n> > Date: 1999-01-01\n> > ```\nambiguousword\n' ;;
+          directive) printf ':::example\n## Example 1999-01-01\nambiguousword\n:::\n' ;;
+        esac
+      } > "$case_home/data/report.md"
+      touch -t 202407101200 "$case_home/data/report.md"
+      out=$(case_run ambiguousword) || fail "ambiguous context lookup failed: $out"
+      if [ -n "$metadata" ]; then
+        assert_contains "$out" "2025-07-10  (stated in the document)" "uncertain sections must fall back to earlier trusted metadata"
+      else
+        assert_contains "$out" "2024-07-10  (file last changed" "uncertain sections without trusted metadata must use the file date"
+      fi
+      assert_not_contains "$out" "dated section" "uncertainty must never claim precise section provenance"
+      assert_not_contains "$out" "1999-01-01" "unsupported examples must not provide a date"
+      out=$(case_run knownbeforeword) || fail "earlier supported context lookup failed: $out"
+      assert_contains "$out" "2026-08-01  (dated section)" "later uncertainty must not change an earlier known section"
+    done
+  done
+  pass "uncertain block context consistently weakens date provenance"
+}
+
 if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
   case "$FM_PRIOR_ART_TEST_CASE" in
     search-options) check_search_options ;;
@@ -437,6 +516,9 @@ if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
     cache-permissions) check_cache_permissions ;;
     linked-records) check_linked_records ;;
     setext-dates) check_setext_dates ;;
+    query-separators) check_query_separators ;;
+    container-dates) check_container_dates ;;
+    uncertain-dates) check_uncertain_dates ;;
     *) fail "unknown focused test case: $FM_PRIOR_ART_TEST_CASE" ;;
   esac
   exit 0
@@ -447,7 +529,7 @@ mkdir -p "$DATA/alpha-sujet"
 cat > "$DATA/alpha-sujet/report.md" <<'MD'
 # Etude sur la memoire des agents
 
-> Date : 2026-08-25. Auteur : un equipier.
+Date : 2026-08-25. Auteur : un equipier.
 
 ## Ce que l'on a trouve
 
@@ -522,7 +604,7 @@ cat > "$DATA/zzpathonly/report.md" <<'MD'
 Rien ici ne reprend le nom du dossier. Chantier courant.
 MD
 
-touch -t 202407101200 "$DATA/learnings.md" "$DATA/beta-sujet/report.md"
+touch -t 202407101200 "$DATA/learnings.md" "$DATA/beta-sujet/report.md" "$DATA/done-archive.md"
 
 run() { FM_HOME="$HOME_DIR" "$TOOL" "$@" 2>&1; }
 
@@ -532,7 +614,9 @@ out=$(run --limit 9 memoire) || fail "lookup failed: $out"
 
 assert_contains "$out" "2026-08-25" "the report's stated date must be reported"
 assert_contains "$out" "stated in the document" "a header date must be labelled as stated"
-assert_contains "$out" "2026-09-02" "the archive passage must take its own section's date"
+archive_out=$(run club) || fail "archive lookup failed: $archive_out"
+assert_contains "$archive_out" "2024-07-10  (file last changed" "list context must use the weaker file date"
+assert_not_contains "$archive_out" "dated section" "uncertain archive structure must not claim a section date"
 assert_contains "$out" "dated section" "a section date must be labelled as such"
 
 # The yearless "(06/09)" heading must be completed from the file and labelled.
@@ -786,3 +870,7 @@ check_indented_headings
 check_cache_permissions
 check_linked_records
 check_setext_dates
+
+check_query_separators
+check_container_dates
+check_uncertain_dates

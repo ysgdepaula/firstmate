@@ -139,18 +139,13 @@ fold_ascii() {
   printf '%s' "$s"
 }
 
-# One word, ready to match the folded index: a word boundary, then the word with
-# its regex punctuation defused. The open end is deliberate, so "cout" still
-# finds "couts"; the boundary is what stops "ia" matching inside "media".
-term_regex() {  # <folded lowercase word>
-  local t=$1 out='(^|[^a-z0-9])' i c
+literal_regex() {
+  local t=$1 out='' i c
   for (( i=0; i<${#t}; i++ )); do
     c=${t:i:1}
     case "$c" in
-      [a-z0-9]) out+="$c" ;;
-      .|+)      out+="[$c]" ;;
-      -|_)      out+="$c" ;;
-      *)        ;;  # punctuation in a subject is not part of the word
+      '.'|'['|']'|'\'|'*'|'^'|'$'|'+'|'?'|'('|')'|'{'|'}'|'|') out+="\\$c" ;;
+      *) out+="$c" ;;
     esac
   done
   printf '%s' "$out"
@@ -323,19 +318,22 @@ NAMES=()
 REGEXES=()
 DROPPED_EMPTY=()
 for raw in "${TERMS_RAW[@]}"; do
-  # ASCII ranges on purpose: fold_ascii has already taken the accents off, and
-  # the index this must match is plain lowercase ASCII. A locale-aware class
-  # here would make the answer depend on the machine.
   # shellcheck disable=SC2018,SC2019
-  clean=$(fold_ascii "$raw" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9._+-')
-  if [ -z "$clean" ]; then DROPPED_EMPTY+=("$raw"); continue; fi
-  already=0
-  for seen in ${NAMES[@]+"${NAMES[@]}"}; do
-    if [ "$seen" = "$clean" ]; then already=1; break; fi
+  clean=$(fold_ascii "$raw" | tr 'A-Z' 'a-z' | tr '[:space:]' ' ')
+  if [[ "$clean" =~ [[:cntrl:]] ]]; then die "the subject contains unsupported control bytes"; fi
+  WORDS=()
+  IFS=' ' read -r -a WORDS <<< "$clean"
+  if [ ${#WORDS[@]} -eq 0 ]; then DROPPED_EMPTY+=("$raw"); continue; fi
+  for word in "${WORDS[@]}"; do
+    case "$word" in *[a-z0-9]*) ;; *) die "nothing searchable in subject: $word" ;; esac
+    already=0
+    for seen in ${NAMES[@]+"${NAMES[@]}"}; do
+      if [ "$seen" = "$word" ]; then already=1; break; fi
+    done
+    [ "$already" -eq 1 ] && continue
+    NAMES+=("$word")
+    REGEXES+=("(^|[^a-z0-9])$(literal_regex "$word")")
   done
-  [ "$already" -eq 1 ] && continue
-  NAMES+=("$clean")
-  REGEXES+=("$(term_regex "$clean")")
 done
 [ ${#NAMES[@]} -gt 0 ] || die "nothing searchable in that subject: give at least one word with letters or digits"
 
@@ -347,7 +345,7 @@ done
 COMBINED=""
 for name in "${NAMES[@]}"; do
   [ -n "$COMBINED" ] && COMBINED+="|"
-  COMBINED+="$(printf '%s' "$name" | sed 's/[.[\*^$+?(){}|]/\\&/g')"
+  COMBINED+="$(literal_regex "$name")"
 done
 
 START=$(date +%s)
@@ -368,7 +366,7 @@ TERMNAME=$(printf '%s\n' "${NAMES[@]}" | paste -sd "$US" -)
 # Rarer words weigh more. That is what makes the boilerplate shared by every
 # set of commissioning instructions weigh nothing: a word in nearly every
 # document cannot tell one document from another.
-awk -F"$TAB" -v TERMRE="$TERMRE" -v TERMNAME="$TERMNAME" -v NDOCS="$NDOCS" -v DOCS="$DOCS" '
+TERMRE="$TERMRE" TERMNAME="$TERMNAME" awk -F"$TAB" -v NDOCS="$NDOCS" -v DOCS="$DOCS" '
 function search_failed() {
   print "fm-prior-art: search could not be completed: unreadable matching text; no answer was produced" > "/dev/stderr"
   invalid = 1
@@ -380,7 +378,7 @@ function count_matches(s, re,   n) {
   return n
 }
 BEGIN {
-  nt = split(TERMRE, RE, "\037"); split(TERMNAME, TN, "\037")
+  nt = split(ENVIRON["TERMRE"], RE, "\037"); split(ENVIRON["TERMNAME"], TN, "\037")
   while ((readstatus = getline line < DOCS) > 0) { docpath[++nd] = line }
   if (readstatus < 0 || nd != NDOCS) search_failed()
   close(DOCS)
@@ -484,12 +482,25 @@ describe() {  # <path> <best line number> <fallback year>
         if (dates[depth] != "") hdate = dates[depth]
     }
   }
+  function document_date(s) {
+    if (s ~ /^ ? ? ?[Dd][Aa][Tt][Ee][ \t]*:/) return finddate(s, 0)
+    return ""
+  }
   function endparagraph(astext) {
     if (astext && !insection && hdrdate == "") hdrdate = paragraphdate
     paragraph = ""; paragraphdate = ""; firstline = 0
   }
   function markdown(s, n,   prefix, rest, level, title) {
     sub(/\r$/, "", s)
+    if (uncertain_at) return
+    if (fencechar == "" &&
+        (s ~ /^ ? ? ?(>|[-+*]([ \t]+|$)|[0-9]+[.)][ \t]+)/ ||
+         s ~ /^ ? ? ?(<|\[|!\[|:::+|\\)/ ||
+         (n == 1 && s ~ /^(---|[+][+][+])[ \t]*$/))) {
+      endparagraph(1)
+      uncertain_at = n
+      return
+    }
     if (match(s, /^ ? ? ?(```+|~~~+)/)) {
       prefix = substr(s, 1, RLENGTH)
       sub(/^ +/, "", prefix)
@@ -526,16 +537,15 @@ describe() {  # <path> <best line number> <fallback year>
     }
     if (!firstline && (s ~ /^    / || s ~ /^\t/)) return
     prefix = s; gsub(/[ \t]/, "", prefix)
-    if (s ~ /^[ \t]*$/ || s ~ /^ ? ? ?(>|[-+*]([ \t]+|$)|[0-9]+[.)][ \t]+)/ ||
-        prefix ~ /^---+$/ || prefix ~ /^\*\*\*+$/ || prefix ~ /^___+$/) {
+    if (s ~ /^[ \t]*$/ || prefix ~ /^---+$/ || prefix ~ /^\*\*\*+$/ || prefix ~ /^___+$/) {
       endparagraph(1)
-      if (!insection && n <= 15 && hdrdate == "") hdrdate = finddate(s, 0)
+      if (!insection && n <= 15 && hdrdate == "") hdrdate = document_date(s)
       return
     }
     if (!firstline) firstline = n
     title = s; sub(/^ +/, "", title); sub(/[ \t]+$/, "", title)
     paragraph = paragraph (paragraph == "" ? "" : " ") title
-    if (n <= 15 && paragraphdate == "") paragraphdate = finddate(s, 0)
+    if (n <= 15 && paragraphdate == "") paragraphdate = document_date(s)
   }
   NR > BEST && NR > 15 && !firstline { exit }
   {
@@ -544,6 +554,7 @@ describe() {  # <path> <best line number> <fallback year>
   }
   END {
     endparagraph(1)
+    if (uncertain_at && uncertain_at <= BEST) { hdate = ""; heading = "" }
     gsub(/\t/, " ", heading); gsub(/\t/, " ", quote)
     sub(/^[ \t>*+-]+/, "", quote)
     print heading; print hdate; print hdrdate; print quote
