@@ -1,0 +1,73 @@
+{
+  "transport": "In-memory Lavish transport double; no live message sent. Chrome real pointer events.",
+  "cards": [
+    {
+      "key": "torre-relance",
+      "nature": "decision",
+      "question": "relancer le fournisseuron le fait, ou on ne le fait pas ?",
+      "ask": "on le fait, ou on ne le fait pas ?",
+      "buttons": [
+        "on y va",
+        "on ne le fait pas",
+        "pas maintenant",
+        "on en parle"
+      ]
+    },
+    {
+      "key": "torre-domaine",
+      "nature": "etat",
+      "question": "le domaine est basculé ?je ne sais pas si c’est déjà fait",
+      "ask": "je ne sais pas si c’est déjà fait",
+      "buttons": [
+        "je l’ai fait",
+        "pas encore",
+        "on en parle"
+      ]
+    },
+    {
+      "key": "torre-hebergement",
+      "nature": "decision",
+      "question": "Hébergement : chez toi ou chez Torre ?",
+      "ask": null,
+      "buttons": [
+        "chez toi",
+        "chez Torre"
+      ]
+    }
+  ],
+  "clicks": [
+    {
+      "text": "Projets · Torre · relancer le fournisseur : on ne le fait pas",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-relance",
+        "choix": "on-ne-le-fait-pas",
+        "nature": "decision"
+      },
+      "tag": "choice",
+      "message": "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "text": "Projets · Torre · le domaine est basculé ? : pas encore",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-domaine",
+        "choix": "pas-encore",
+        "nature": "etat"
+      },
+      "tag": "choice",
+      "message": "envoyé à firstmate : pas encore. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "text": "Projets · Torre · le domaine est basculé ? : je l’ai fait",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-domaine",
+        "choix": "je-l-ai-fait",
+        "nature": "etat"
+      },
+      "tag": "choice",
+      "message": "envoyé à firstmate : je l’ai fait. Firstmate te reposera la question en chat avant d'agir."
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "baseline": [
+    {
+      "key": "torre-relance",
+      "question": "relancer le fournisseur",
+      "options": [
+        {
+          "value": "fait",
+          "label": "c’est fait"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        },
+        {
+          "value": "plus-tard",
+          "label": "plus tard"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-relance"
+    },
+    {
+      "key": "torre-domaine",
+      "question": "le domaine est basculé ?",
+      "options": [
+        {
+          "value": "fait",
+          "label": "c’est fait"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        },
+        {
+          "value": "plus-tard",
+          "label": "plus tard"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-domaine"
+    },
+    {
+      "key": "torre-hebergement",
+      "question": "Hébergement : chez toi ou chez Torre ?",
+      "options": [
+        {
+          "value": "chez-toi",
+          "label": "chez toi"
+        },
+        {
+          "value": "chez-torre",
+          "label": "chez Torre"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-hebergement"
+    }
+  ],
+  "current": [
+    {
+      "key": "torre-relance",
+      "question": "relancer le fournisseur",
+      "nature": "decision",
+      "ask": "on le fait, ou on ne le fait pas ?",
+      "options": [
+        {
+          "value": "on-y-va",
+          "label": "on y va"
+        },
+        {
+          "value": "on-ne-le-fait-pas",
+          "label": "on ne le fait pas"
+        },
+        {
+          "value": "pas-maintenant",
+          "label": "pas maintenant"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-relance"
+    },
+    {
+      "key": "torre-domaine",
+      "question": "le domaine est basculé ?",
+      "nature": "etat",
+      "ask": "je ne sais pas si c’est déjà fait",
+      "options": [
+        {
+          "value": "je-l-ai-fait",
+          "label": "je l’ai fait"
+        },
+        {
+          "value": "pas-encore",
+          "label": "pas encore"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-domaine"
+    },
+    {
+      "key": "torre-hebergement",
+      "question": "Hébergement : chez toi ou chez Torre ?",
+      "nature": "decision",
+      "ask": null,
+      "options": [
+        {
+          "value": "chez-toi",
+          "label": "chez toi"
+        },
+        {
+          "value": "chez-torre",
+          "label": "chez Torre"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-hebergement"
+    }
+  ],
+  "comparison": "Identical held tasks and correspondence table: baseline offers c’est fait; current separates decision and unknown state while preserving configured hosting choices."
+}

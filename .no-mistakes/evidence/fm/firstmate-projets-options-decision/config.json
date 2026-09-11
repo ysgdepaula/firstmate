@@ -1,0 +1,30 @@
+{
+  "schema": "fm-projets-config.v1",
+  "projects": [
+    {
+      "id": "torre",
+      "name": "Torre",
+      "prefixes": [
+        "torre-"
+      ],
+      "decisions": {
+        "torre-domaine": {
+          "nature": "etat"
+        },
+        "torre-hebergement": {
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "options": [
+            {
+              "value": "chez-toi",
+              "label": "chez toi"
+            },
+            {
+              "value": "chez-torre",
+              "label": "chez Torre"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

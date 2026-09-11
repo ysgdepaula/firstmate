@@ -1,0 +1,41 @@
+{
+  "schema": "fm-bearings.v1",
+  "home": "demonstration",
+  "generated": "2026-09-11T12:00:00Z",
+  "in_flight": [],
+  "decisions_open": [
+    {
+      "id": "torre-relance",
+      "key": "torre-relance",
+      "verb": "captain-hold",
+      "title": "Torre : relancer le fournisseur",
+      "summary": "Torre : relancer le fournisseur",
+      "owner": "(main)",
+      "repo": "torre"
+    },
+    {
+      "id": "torre-domaine",
+      "key": "torre-domaine",
+      "verb": "captain-hold",
+      "title": "Torre : le domaine est basculé ?",
+      "summary": "Torre : le domaine est basculé ?",
+      "owner": "(main)",
+      "repo": "torre"
+    },
+    {
+      "id": "torre-hebergement",
+      "key": "torre-hebergement",
+      "verb": "captain-hold",
+      "title": "Torre : choisir l’hébergement",
+      "summary": "Torre : choisir l’hébergement",
+      "owner": "(main)",
+      "repo": "torre"
+    }
+  ],
+  "landed": [],
+  "gates": [],
+  "reports": [],
+  "recorded_prs": [],
+  "omitted": [],
+  "secondmates": []
+}
