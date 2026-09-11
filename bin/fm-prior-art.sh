@@ -195,6 +195,7 @@ while (my $path = <$list>) {
   $! = 0;
   while (my $line = <$fh>) {
     $n++;
+    die "Not read: $path: contains a zero byte; save it as plain text\n" if index($line, "\0") >= 0;
     print {$original} $line or die "Cannot keep the source: $path: $!\n";
     $line =~ s/\t/ /g;
     $line =~ s/(\xc3[\x80-\xbf])/exists $F{$1} ? $F{$1} : $1/ge;
@@ -259,11 +260,12 @@ NDOCS=$(wc -l < "$CORPUS" | tr -d ' ')
 # The freshness test: what is on disk now, against what the index was built
 # from. Cheap enough to run every time, which is what keeps the index honest
 # without anyone having to remember to refresh it.
+printf 'text-sources-1\n' > "$WANT"
 if [ "$STAT_STYLE" = gnu ]; then
   tr '\n' '\0' < "$CORPUS" | xargs -0 stat -c '%y %z %s %i %a %n'
 else
   tr '\n' '\0' < "$CORPUS" | xargs -0 stat -f '%.9Fm %.9Fc %z %i %p %N'
-fi > "$WANT"
+fi >> "$WANT"
 
 build_index() {
   mkdir -p "$CACHE"
@@ -336,7 +338,8 @@ START=$(date +%s)
 search_status=0
 grep -E -e "$COMBINED" "$INDEX" > "$HITS" 2> "$TMPDIR_RUN/search-error" || search_status=$?
 case "$search_status" in
-  0|1) ;;
+  0) [ -s "$HITS" ] || die "search could not be completed: matching text was missing" ;;
+  1) [ ! -s "$HITS" ] || die "search could not be completed: unexpected matching text" ;;
   *) die "search could not be completed (exit $search_status); no answer was produced" ;;
 esac
 
@@ -347,6 +350,11 @@ TERMNAME=$(printf '%s\n' "${NAMES[@]}" | paste -sd "$US" -)
 # set of commissioning instructions weigh nothing: a word in nearly every
 # document cannot tell one document from another.
 awk -F"$TAB" -v TERMRE="$TERMRE" -v TERMNAME="$TERMNAME" -v NDOCS="$NDOCS" -v DOCS="$DOCS" '
+function search_failed() {
+  print "fm-prior-art: search could not be completed: unreadable matching text; no answer was produced" > "/dev/stderr"
+  invalid = 1
+  exit 1
+}
 function count_matches(s, re,   n) {
   n = 0
   while (match(s, re)) { n++; if (RLENGTH <= 0) break; s = substr(s, RSTART + RLENGTH) }
@@ -354,12 +362,14 @@ function count_matches(s, re,   n) {
 }
 BEGIN {
   nt = split(TERMRE, RE, "\037"); split(TERMNAME, TN, "\037")
-  while ((getline line < DOCS) > 0) { docpath[++nd] = line }
+  while ((readstatus = getline line < DOCS) > 0) { docpath[++nd] = line }
+  if (readstatus < 0 || nd != NDOCS) search_failed()
   close(DOCS)
 }
 {
+  if (NF != 3 || $1 !~ /^[1-9][0-9]*$/ || $2 !~ /^[1-9][0-9]*$/) search_failed()
   path = docpath[$1 + 0]; lno = $2 + 0; text = $3
-  if (path == "") next
+  if (path == "") search_failed()
   here = 0
   for (i = 1; i <= nt; i++) {
     c = count_matches(text, RE[i])
@@ -374,6 +384,7 @@ BEGIN {
   linepath[NR] = path; linenumber[NR] = lno
 }
 END {
+  if (invalid) exit 1
   anyused = 0
   for (i = 1; i <= nt; i++) {
     if (df[i] == 0)               state[i] = "nowhere"
@@ -447,6 +458,7 @@ describe() {  # <path> <best line number> <fallback year>
   NR > BEST && NR > 15 { exit }
   {
     if (NR == BEST) quote = $0
+    sub(/\r$/, "", $0)
     if (match($0, /^ ? ? ?(```+|~~~+)/)) {
       fence = substr($0, 1, RLENGTH)
       sub(/^ +/, "", fence)
@@ -462,11 +474,15 @@ describe() {  # <path> <best line number> <fallback year>
       }
     }
     if (fencechar != "") next
-    isheading = match($0, /^#+[ \t]+/)
+    isheading = match($0, /^ ? ? ?#+([ \t]+|$)/)
     if (isheading) {
       prefix = substr($0, 1, RLENGTH)
+      sub(/^ +/, "", prefix)
       sub(/[ \t]+$/, "", prefix)
       level = length(prefix)
+      if (level > 6) isheading = 0
+    }
+    if (isheading) {
       headings++
       if (level > 1 || headings > 1) insection = 1
       if (NR <= BEST) {

@@ -173,12 +173,131 @@ SH
   pass "matches, quotations, and dates share the same saved source"
 }
 
+
+check_binary_records() {
+  local case_home="$HOME_DIR/binary-records" out rc word
+  mkdir -p "$case_home/data"
+  printf 'An ordinary documentedword.\n' > "$case_home/data/report.md"
+  printf 'A binaryword beside a zero byte: \000\n' > "$case_home/data/binary.md"
+  for word in documentedword binaryword absentword; do
+    out=$(case_run "$word")
+    rc=$?
+    [ "$rc" -ne 0 ] || fail "zero bytes must fail the search instead of establishing absence: $out"
+    assert_contains "$out" "binary.md" "the unsupported source must be identified"
+    assert_contains "$out" "zero byte" "the unsupported byte must be explained"
+    assert_not_contains "$out" "FOUND NOWHERE" "unsupported records cannot establish absence"
+    assert_not_contains "$out" "NOTHING FOUND" "unsupported records cannot establish empty results"
+  done
+  printf 'A repaired binaryword.\n' > "$case_home/data/binary.md"
+  out=$(case_run documentedword) || fail "search after record repair failed: $out"
+  assert_contains "$out" "source: data/report.md" "repairing unsupported content must restore the search"
+  out=$(case_run binaryword) || fail "repaired record lookup failed: $out"
+  assert_contains "$out" "> A repaired binaryword." "the repaired record must be read on the next question"
+  pass "zero bytes cannot turn matching records into absence claims"
+}
+
+check_malformed_matches() {
+  local case_home="$HOME_DIR/malformed-matches" out rc record
+  mkdir -p "$case_home/data" "$case_home/bin"
+  printf 'documentedword\n' > "$case_home/data/report.md"
+  cat > "$case_home/bin/grep" <<'SH'
+#!/usr/bin/env bash
+printf '%s' "$PRIOR_ART_MATCH_OUTPUT"
+exit 0
+SH
+  chmod +x "$case_home/bin/grep"
+  for record in $'Binary file index matches\n' $'1\t0\tdocumentedword\n' \
+    $'999\t1\tdocumentedword\n' $'1\t1\tdocumentedword\textra\n' \
+    $'1\t1\tdocumentedword\nBinary file index matches\n' ''; do
+    out=$(PATH="$case_home/bin:$PATH" PRIOR_ART_MATCH_OUTPUT="$record" case_run documentedword absentword)
+    rc=$?
+    [ "$rc" -ne 0 ] || fail "unreadable matching text must fail the search: $out"
+    assert_contains "$out" "search could not be completed" "malformed matches must report an operational failure"
+    assert_not_contains "$out" "FOUND NOWHERE" "malformed matches cannot establish absence"
+    assert_not_contains "$out" "NOTHING FOUND" "malformed matches cannot establish empty results"
+    assert_not_contains "$out" "source: data/" "valid fragments cannot rescue malformed search output"
+  done
+  pass "unreadable matching text fails before any answer is printed"
+}
+
+check_crlf_dates() {
+  local case_home="$HOME_DIR/crlf-dates" out
+  mkdir -p "$case_home/data"
+  perl -pe 's/\n/\r\n/g' > "$case_home/data/report.md" <<'MD'
+# Report
+## Alpha 2026-08-01
+```sh
+# A comment
+```
+## Beta 2026-09-02
+La mémoire crlfword.
+~~~sh
+# Another comment
+~~~
+## Gamma 2026-09-03
+aftercrlftildeword
+MD
+  out=$(case_run crlfword) || fail "CRLF section lookup failed: $out"
+  assert_contains "$out" "2026-09-02  (dated section)" "CRLF fences must close before the next dated section"
+  assert_contains "$out" $'> La mémoire crlfword.\r' "the original quotation must retain its text and line ending"
+  assert_not_contains "$out" "2026-08-01" "a previous section must not date a CRLF sibling"
+  out=$(case_run aftercrlftildeword) || fail "CRLF tilde fence lookup failed: $out"
+  assert_contains "$out" "2026-09-03  (dated section)" "CRLF tilde fences must also close"
+  perl -pe 's/\n/\r\n/g' > "$case_home/data/header.md" <<'MD'
+# Note
+```text
+Date: 1999-01-01
+```
+Date: 2025-07-10
+crlfheaderword
+MD
+  out=$(case_run crlfheaderword) || fail "CRLF header lookup failed: $out"
+  assert_contains "$out" "2025-07-10  (stated in the document)" "CRLF header dates must be parsed outside fences"
+  pass "CRLF parsing preserves correct dates and original quotations"
+}
+
+check_indented_headings() {
+  local case_home="$HOME_DIR/indented-headings" out indent
+  mkdir -p "$case_home/data"
+  for indent in ' ' '  ' '   '; do
+    cat > "$case_home/data/report.md" <<MD
+# Note
+Date: 2025-07-10
+## Alpha 2026-08-01
+${indent}## Beta
+indentedsiblingword
+${indent}## Gamma 2026-09-02
+${indent}### Nested
+indentedchildword
+    ## Not a heading 1999-01-01
+####### Not a heading 1998-01-01
+protectedheadingword
+${indent}##
+emptyheadingword
+MD
+    out=$(case_run indentedsiblingword) || fail "indented sibling lookup failed: $out"
+    assert_contains "$out" "2025-07-10  (stated in the document)" "indented sibling headings must end earlier section dates"
+    assert_contains "$out" "under: Beta" "heading indentation must not enter the heading text"
+    out=$(case_run indentedchildword) || fail "indented child lookup failed: $out"
+    assert_contains "$out" "2026-09-02  (dated section)" "indented nested sections must inherit the applicable date"
+    out=$(case_run protectedheadingword) || fail "non-heading lookup failed: $out"
+    assert_contains "$out" "2026-09-02  (dated section)" "four spaces or seven hashes must not change the section"
+    out=$(case_run emptyheadingword) || fail "empty heading lookup failed: $out"
+    assert_contains "$out" "2025-07-10  (stated in the document)" "empty indented headings must also end a sibling section"
+  done
+  pass "Markdown heading indentation preserves section boundaries and dates"
+}
+
 if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
   case "$FM_PRIOR_ART_TEST_CASE" in
     search-options) check_search_options ;;
     search-failure) check_search_failure ;;
     fenced-dates) check_fenced_dates ;;
     source-snapshot) check_source_snapshot ;;
+    binary-records) check_binary_records ;;
+    malformed-matches) check_malformed_matches ;;
+    crlf-dates) check_crlf_dates ;;
+    indented-headings) check_indented_headings ;;
     *) fail "unknown focused test case: $FM_PRIOR_ART_TEST_CASE" ;;
   esac
   exit 0
@@ -519,3 +638,8 @@ check_search_options
 check_search_failure
 check_fenced_dates
 check_source_snapshot
+
+check_binary_records
+check_malformed_matches
+check_crlf_dates
+check_indented_headings
