@@ -82,8 +82,8 @@
 #   projects[]: {id:slug, name, brain:bool, headline:string|null, team:string|null, deadline:{label,date}|null,
 #     doing[]: {id, owner, local_id, result, status, next:string|null, url:allowed|null, url_refused?:string},
 #     scouts[]: same shape as doing, the investigations running for this project's brain,
-#     missing_from_you[]: {key:slug, owner, local_id, question, nature:"decision"|"etat",
-#       ask:string|null, options[]: {value:slug, label}, kind?:string,
+#     missing_from_you[]: {key:slug, owner, local_id, question, nature?:"decision"|"etat",
+#       ask?:string|null, options[]: {value:slug, label}, kind?:string,
 #       url:allowed|null, url_refused?:string} (kind "recommandation" or "article" marks a table-born entry),
 #     creations[]: {label, kind:string|null, url:allowed|null, url_refused?:string},
 #     unlinked[]: {id, what} (brain card only: rows that match no project),
@@ -115,10 +115,13 @@
 # that task, which is firstmate's recorded reason to believe the captain may
 # already have done the thing; its `ask` is then always the admission "je ne sais
 # pas si c'est deja fait", and its fallback affirmative is the captain's own
-# declaration "je l'ai fait", never a claim firstmate makes. A table entry that
-# supplies its own closed options keeps them verbatim and shows no `ask` line,
-# because its question already says what it asks; the fallback applies by
-# default only. The validator refuses an "etat" entry with no admission line.
+# declaration "je l'ai fait", followed by "pas encore / on en parle", never a
+# claim firstmate makes. A table entry with nonempty options keeps them verbatim;
+# only a decision entry then omits `ask`, while an "etat" entry retains its
+# admission. Without configured options, a decision's `ask` is "on le fait, ou
+# on ne le fait pas ?". The composer emits both fields; older payloads may omit
+# them, and a click without `nature` sends "decision". The validator requires a
+# nonempty captain-facing `ask` for "etat", but does not enforce its exact text.
 #
 # Captain vocabulary: no string may carry an internal term (crewmate, brief,
 # gate, teardown, worktree, watcher, heartbeat, wake, harness, backend, stale,
@@ -400,16 +403,7 @@ PYTIME
            | . as $d
            | (($pc.decisions // {})[$d.id] // ($pc.decisions // {})[($d.id | local_id)] // {}) as $dc
            | (($dc.question // $d.title // $d.summary // $d.id) | clean) as $q
-           # Two natures, never mixed: a DECISION asks whether we do the thing, a
-           # STATE asks whether it is already done. A held task records neither,
-           # so the fallback never guesses a state question out of free text: it
-           # asks a decision, the only thing a held task is by definition. A
-           # state question exists only where the table recorded a reason to
-           # believe the captain may already have done the thing, and it always
-           # carries the admission line, because firstmate asks precisely
-           # because it cannot establish that state. Its affirmative choice is
-           # therefore worded as a declaration the captain makes, never as a
-           # fact firstmate claims to know.
+           # The header owns nature selection and the unknown-state admission.
            | (if ($dc.nature // "") == "etat" then "etat" else "decision" end) as $nature
            | ((($dc.options // []) | length) > 0) as $closed
            | {key: ($d.id | gsub("/"; "__")),
