@@ -536,10 +536,10 @@ list_portable_serial() {
 }
 
 # Measured portable-serial script durations in milliseconds, from the CI timing
-# artifacts and completed-script logs recorded in docs/fm-test-portable-shards.md.
-# Retain measured maxima when refreshing hints, so the balance holds on a slow
-# runner rather than only on the fastest one measured. These are balance hints
-# only: the partition stays complete and disjoint, so a stale hint costs
+# artifacts recorded in docs/fm-test-portable-shards.md. Each value is the
+# slowest of several green runs, so the balance holds on a slow runner rather
+# than only on the fastest one measured. These are balance hints only: the shard
+# partition stays complete and disjoint whatever they say, so a stale hint costs
 # balance rather than coverage. That doc owns the refresh procedure.
 portable_serial_weight_hints() {
   cat <<'EOF'
@@ -608,7 +608,7 @@ tests/fm-opencode-primary-live-e2e.test.sh 21
 tests/fm-operational-input.test.sh 231
 tests/fm-peek-remote.test.sh 1018
 tests/fm-pending-reply.test.sh 24679
-tests/fm-pi-branch-extension.test.sh 168991
+tests/fm-pi-branch-extension.test.sh 22239
 tests/fm-pi-branch-live-e2e.test.sh 56
 tests/fm-pi-branch-responsiveness-live-e2e.test.sh 21
 tests/fm-pi-primary-live-e2e.test.sh 20
@@ -638,7 +638,6 @@ tests/fm-secondmate-harness.test.sh 151589
 tests/fm-secondmate-lifecycle-e2e.test.sh 8793
 tests/fm-secondmate-liveness.test.sh 18146
 tests/fm-secondmate-reconcile.test.sh 62726
-tests/fm-secondmate-restart.test.sh 106996
 tests/fm-secondmate-safety.test.sh 57689
 tests/fm-secondmate-sync.test.sh 17183
 tests/fm-send-inbox-doorbell-live-e2e.test.sh 22
@@ -680,13 +679,13 @@ tests/fm-voice-relay.test.sh 28699
 tests/fm-wake-daemon-lifecycle-e2e.test.sh 7381
 tests/fm-wake-drain-open-decisions-cursor.test.sh 20629
 tests/fm-wake-drain-open-decisions.test.sh 6240
-tests/fm-wake-drain-outcome-backstop.test.sh 92802
+tests/fm-wake-drain-outcome-backstop.test.sh 15182
 tests/fm-wake-drain-unread-status.test.sh 35078
 tests/fm-wake-queue.test.sh 56674
 tests/fm-watch-arm.test.sh 58528
 tests/fm-watch-checkpoint.test.sh 5779
 tests/fm-watch-recovery-loop.test.sh 58731
-tests/fm-watch-triage.test.sh 425700
+tests/fm-watch-triage.test.sh 262626
 tests/fm-watcher-lock.test.sh 88554
 EOF
 }
