@@ -142,6 +142,8 @@ const cards = main.children.filter((c) => c.className.split(/\s+/).includes("car
       decisions: body.all().filter((c) => c.attributes["data-decision"]).map((li) => ({
         key: li.attributes["data-decision"],
         kind: li.attributes["data-kind"] ?? null,
+        nature: li.attributes["data-nature"] ?? null,
+        ask: li.byClass("ask")[0]?.textContent ?? null,
         choices: li.all().filter((c) => c.attributes["data-choice"]).map((c) => c.attributes["data-choice"]),
         message: li.byClass("ok")[0]?.textContent ?? "",
         refused: li.className.split(/\s+/).includes("refused"),

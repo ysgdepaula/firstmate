@@ -112,6 +112,11 @@ td.dim { color: var(--muted); }
 .you li { border: var(--struct) solid var(--ink); border-radius: var(--r-sm); padding: 10px 12px;
           display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .you .q { flex: 1 1 260px; min-width: 0; }
+/* La ligne qui dit ce que la carte demande : une decision, ou un etat que le
+   cerveau ne connait pas. Pointille = ce qui n'est pas su, comme ailleurs. */
+.you .ask { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+.you li[data-nature="etat"] .ask { width: fit-content; max-width: 100%; color: var(--ink);
+                                   border-bottom: var(--hair) dashed var(--faint); padding-bottom: 2px; }
 .you .btns { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--paper);
        text-align: left; max-width: 100%; }
@@ -389,9 +394,14 @@ __FM_PROJETS_BOARD_DATA__
       var li = el("li", "");
       li.setAttribute("data-decision", r.key);
       if (r.kind) li.setAttribute("data-kind", r.kind);
+      if (r.nature) li.setAttribute("data-nature", r.nature);
       var q = el("span", "q");
       q.appendChild(link(r.question, r.url, "", r.url_refused));
       if (r.kind) q.appendChild(tag(r.kind));
+      /* La carte dit ce qu'elle demande, a cote de la question : une decision,
+         ou un etat que le cerveau ne sait pas. Le composeur ecrit la phrase ;
+         la page n'en invente aucune et n'en affiche aucune par defaut. */
+      if (r.ask) q.appendChild(el("span", "ask", r.ask));
       li.appendChild(q);
       var btns = el("div", "btns");
       var ok = el("span", "ok");
@@ -422,7 +432,7 @@ __FM_PROJETS_BOARD_DATA__
           try {
             window.lavish.queuePrompt(text, {
               tag: "choice", text: project.name + " : " + r.question + " -> " + o.label, element: li,
-              data: { projet: project.id, decision: r.key, choix: o.value }
+              data: { projet: project.id, decision: r.key, choix: o.value, nature: r.nature || "decision" }
             });
             var result = window.lavish.sendQueuedPrompts();
             if (result && typeof result.then === "function") result.then(function (value) { if (value === false) failed(); else sent(); }, failed);

@@ -222,7 +222,8 @@ test_compose_translates_states_and_keeps_internal_wording_off_the_page() {
     and (.projects[] | select(.id == "torre") | .missing_from_you[0]
          | .question == "Hébergement : chez toi ou chez Torre ?" and [.options[].value] == ["chez-toi", "chez-torre"])
     and (.projects[] | select(.id == "club") | .missing_from_you[0]
-         | .question == "basculer le domaine" and [.options[].value] == ["fait", "on-en-parle", "plus-tard"])
+         | .question == "basculer le domaine" and .nature == "decision"
+           and [.options[].value] == ["on-y-va", "on-ne-le-fait-pas", "pas-maintenant", "on-en-parle"])
   ' >/dev/null || fail "task states were not translated into captain wording: $out"
   printf '%s' "$out" | jq -r '.. | strings' | grep -Eiq '\b(harness|worktree|brief|hook)\b' \
     && fail "internal wording leaked into the composed page: $out"
@@ -253,7 +254,7 @@ test_compose_fills_the_seven_blocks_from_table_and_fleet() {
     and (.projects[] | select(.id == "club")
       | .meeting == null and .pages == [] and .missing_from_others == []
       and (.gaps | index("aucune réunion enregistrée, agenda non connecté") != null)
-      and (.gaps | index("2 décisions sans choix fermés, boutons génériques") != null))
+      and (.gaps | index("2 questions sans choix fermés : la page propose les choix par défaut") != null))
   ' >/dev/null || fail "the seven blocks were not filled from the table and the fleet: $out"
   pass "compose fills the seven blocks from the table and the fleet and names each gap"
 }
@@ -646,6 +647,62 @@ test_recommendation_and_article_identities() {
   pass "full titles retain distinct stable identities and duplicate keys refuse rendering"
 }
 test_recommendation_and_article_identities
+
+test_missing_from_you_declares_a_decision_apart_from_an_unknown_state() {
+  local home out data rc
+  home=$(make_home natures)
+  write_table "$home/config/projets.json"
+  # The club card gets the two state shapes: one whose closed choices the table
+  # records, one that falls back. Torre keeps a configured decision and YDEEP an
+  # unconfigured captain call, so one composition carries all four shapes.
+  jq '(.projects[] | select(.id == "club")) += {decisions: {
+        "chef-domaine": {nature: "etat", question: "Le domaine est basculé ?",
+          options: [{value: "bascule", label: "je l ai basculé"}, {value: "pas-encore", label: "pas encore"}]},
+        "chef-rose": {nature: "etat", question: "Le rose des Anglades est commandé ?"}}}' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" \
+    && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed"
+
+  printf '%s' "$out" | jq -e '
+    (.projects[] | select(.id == "ydeep") | .missing_from_you[0]
+     | .nature == "decision" and .ask == "on le fait, ou on ne le fait pas ?"
+       and [.options[].label] == ["on y va", "on ne le fait pas", "pas maintenant", "on en parle"])
+    and (.projects[] | select(.id == "club") | .missing_from_you[] | select(.key == "chef-rose")
+     | .nature == "etat" and .ask == "je ne sais pas si c\u2019est déjà fait"
+       and [.options[].label] == ["je l\u2019ai fait", "pas encore", "on en parle"])
+  ' >/dev/null || fail "the fallback did not separate a decision from an unknown state: $out"
+
+  # Nothing on the page may claim the thing is already done: a decision never
+  # offers a state choice, and no choice repeats the wording that claimed it.
+  printf '%s' "$out" | jq -e '
+    ([ .projects[].missing_from_you[].options[].label ] | all(test("^c.est fait$") | not))
+    and ([ .projects[].missing_from_you[] | select(.nature != "etat") | .options[].value ]
+         | all(. as $v | ["fait", "je-l-ai-fait", "pas-encore"] | index($v) == null))
+  ' >/dev/null || fail "a decision still offered a done-state choice: $out"
+
+  # A table that supplies its own question and choices keeps them verbatim, and
+  # a configured decision shows no declared line because its question says it.
+  printf '%s' "$out" | jq -e '
+    (.projects[] | select(.id == "torre") | .missing_from_you[0]
+     | .nature == "decision" and .ask == null
+       and [.options[].label] == ["chez toi", "chez Torre"])
+    and (.projects[] | select(.id == "club") | .missing_from_you[] | select(.key == "chef-domaine")
+     | .nature == "etat" and .ask == "je ne sais pas si c\u2019est déjà fait"
+       and [.options[].label] == ["je l ai basculé", "pas encore"])
+  ' >/dev/null || fail "the fallback overrode closed choices the table recorded: $out"
+
+  data="$home/payload.json"
+  printf '%s' "$out" > "$data"
+  run_board "$home" render "$data" >/dev/null || fail "the composed natures did not render"
+
+  # A state the page cannot establish may never reach the captain without saying so.
+  jq '(.projects[] | select(.id == "club") | .missing_from_you[] | select(.nature == "etat") | .ask) = null' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" render "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a state entry without its admission was accepted: $out"
+  pass "the fallback asks a decision, and a state question admits it is not known"
+}
+test_missing_from_you_declares_a_decision_apart_from_an_unknown_state
 
 test_optional_text_preserves_entries() {
   local home out

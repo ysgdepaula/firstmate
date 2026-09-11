@@ -4,6 +4,9 @@
 # no text may be covered by another element, nothing may overflow the viewport,
 # and every button must be reachable on the selected card at exactly 390 px,
 # with the folded and unfolded block states asserted before geometry checks.
+# The decision card fixtures carry both natures, including the four-choice
+# decision fallback and the line admitting an unknown state, because those are
+# the widest rows the captain reads on a phone.
 set -eu
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
@@ -88,8 +91,10 @@ cat > "$TMP_ROOT/filled.json" <<'DATA'
             {"id":"t3","result":"agent client WhatsApp v0","status":"en pause, attente extérieure · numéro Meta","next":null,"url":null},
             {"id":"t4","result":"quatrième résultat replié","status":"en cours","next":null,"url":null}],
    "scouts":[{"id":"s1","result":"audit Shopify vs Stripe custom (vs Square Online) pour le site click and collect","status":"état inconnu","next":null,"url":null}],
-   "missing_from_you":[{"key":"torre-hebergement","question":"trancher hebergement et montage de facturation, les deux sont lies","options":[{"value":"a","label":"hébergé chez toi"},{"value":"b","label":"hébergé chez Torre"},{"value":"c","label":"plus tard"}],"url":null},
-                       {"key":"reco__meta","question":"Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend","kind":"recommandation","options":[{"value":"on-y-va","label":"on y va"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null}],
+   "missing_from_you":[{"key":"torre-hebergement","question":"trancher hebergement et montage de facturation, les deux sont lies","nature":"decision","ask":null,"options":[{"value":"a","label":"hébergé chez toi"},{"value":"b","label":"hébergé chez Torre"},{"value":"c","label":"plus tard"}],"url":null},
+                       {"key":"torre-relance","question":"relancer le fournisseur de la boutique pilote avant le 14/09","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null},
+                       {"key":"torre-domaine","question":"Le domaine de la boutique est basculé chez le registrar ?","nature":"etat","ask":"je ne sais pas si c’est déjà fait","options":[{"value":"je-l-ai-fait","label":"je l’ai fait"},{"value":"pas-encore","label":"pas encore"},{"value":"on-en-parle","label":"on en parle"}],"url":null},
+                       {"key":"reco__meta","question":"Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend","nature":"decision","ask":null,"kind":"recommandation","options":[{"value":"on-y-va","label":"on y va"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null}],
    "missing_from_others":[{"who":"Eli","what":"les factures d un circuit fournisseur","tag":"avant le 11/09"}],
    "pages":[{"label":"Espace client","url":"http://machine.ts.net:4387/session/1","state":"à jour 10/09"}],
    "creations":[{"label":"Démo de l interface de suivi","url":"http://machine.ts.net:4387/session/2","kind":"page"}],
@@ -97,9 +102,9 @@ cat > "$TMP_ROOT/filled.json" <<'DATA'
    "journal":[{"when":"11/09 01:04","what":"livraison : Torre e-commerce : benchmark des references et squelette du site","url":"https://example.test/pr/2"}],
    "meeting":{"title":"Pilote sur place","date":"2026-09-14","time":"10:00","source":"agenda et chat","with":"Eli et la boutique pilote","bring":["la démo"],"decide":["l enveloppe"]},
    "meetings":[{"title":"Pilote sur place","date":"2026-09-14","time":"10:00","source":"agenda et chat","with":"Eli et la boutique pilote","bring":["la démo"],"decide":["l enveloppe"]}],
-   "agenda_available":true,"gaps":["coûts à mesurer","1 décision sans choix fermés, boutons génériques"]},
+   "agenda_available":true,"gaps":["coûts à mesurer","2 questions sans choix fermés : la page propose les choix par défaut"]},
   {"id":"cerveau","name":"Cerveau","brain":true,"doing":[],"scouts":[],
-   "missing_from_you":[{"key":"article__x","question":"Article à valider : Doctrine de dépense des modèles","kind":"article","options":[{"value":"valide","label":"validé"},{"value":"a-revoir","label":"à revoir"}],"url":null}],
+   "missing_from_you":[{"key":"article__x","question":"Article à valider : Doctrine de dépense des modèles","nature":"decision","ask":null,"kind":"article","options":[{"value":"valide","label":"validé"},{"value":"a-revoir","label":"à revoir"}],"url":null}],
    "missing_from_others":[],"pages":[],"creations":[],"unlinked":[{"id":"u1","what":"SACEM : relancer Sabine Jacob si pas de reponse"}],"quick_wins":["Indexer les rapports de scouts"],
    "costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"à mesurer"},"journal":[],"meeting":null,"gaps":[]}],
  "unassigned":[],"table_missing":false}

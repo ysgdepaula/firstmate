@@ -63,9 +63,10 @@
 #            the captain decided that a page button SENDS the answer to firstmate,
 #            who asks the question again in chat before acting, and that nothing
 #            acts directly from the page. The template therefore queues plain
-#            Lavish prompts whose context data carries `projet`, `decision`, and
-#            `choix` (never the `question`/`answer` pair the keyed intake reads),
-#            so even a bound source could not close a task from a click.
+#            Lavish prompts whose context data carries `projet`, `decision`,
+#            `choix`, and `nature` (never the `question`/`answer` pair the keyed
+#            intake reads), so even a bound source could not close a task from
+#            a click.
 # path       Print the stable page path for this home.
 #
 # Validation is fail-closed: the payload must be valid JSON with
@@ -81,7 +82,8 @@
 #   projects[]: {id:slug, name, brain:bool, headline:string|null, team:string|null, deadline:{label,date}|null,
 #     doing[]: {id, owner, local_id, result, status, next:string|null, url:allowed|null, url_refused?:string},
 #     scouts[]: same shape as doing, the investigations running for this project's brain,
-#     missing_from_you[]: {key:slug, owner, local_id, question, options[]: {value:slug, label}, kind?:string,
+#     missing_from_you[]: {key:slug, owner, local_id, question, nature:"decision"|"etat",
+#       ask:string|null, options[]: {value:slug, label}, kind?:string,
 #       url:allowed|null, url_refused?:string} (kind "recommandation" or "article" marks a table-born entry),
 #     creations[]: {label, kind:string|null, url:allowed|null, url_refused?:string},
 #     unlinked[]: {id, what} (brain card only: rows that match no project),
@@ -102,6 +104,21 @@
 # Allowed links: HTTPS, or HTTP on loopback, RFC1918 IPv4, the Tailscale range 100.64/10, and .ts.net hosts.
 # Refused links retain url_refused and render an explicit refusal.
 # bin/fm-projets-data.jq owns this shared composition/validation policy.
+#
+# Two natures in "il manque de toi", never mixed, because the page never claims
+# to know what it does not know. `nature` is "decision" (do we do it, or not) or
+# "etat" (is it already done), and `ask` is the line the card shows to declare
+# which one it asks. A held task records neither nature, so the composer's
+# fallback is always a decision - "on y va / on ne le fait pas / pas maintenant /
+# on en parle" - and never guesses a state question out of free text. A state
+# question exists only where config/projets.json recorded `"nature": "etat"` for
+# that task, which is firstmate's recorded reason to believe the captain may
+# already have done the thing; its `ask` is then always the admission "je ne sais
+# pas si c'est deja fait", and its fallback affirmative is the captain's own
+# declaration "je l'ai fait", never a claim firstmate makes. A table entry that
+# supplies its own closed options keeps them verbatim and shows no `ask` line,
+# because its question already says what it asks; the fallback applies by
+# default only. The validator refuses an "etat" entry with no admission line.
 #
 # Captain vocabulary: no string may carry an internal term (crewmate, brief,
 # gate, teardown, worktree, watcher, heartbeat, wake, harness, backend, stale,
@@ -383,12 +400,36 @@ PYTIME
            | . as $d
            | (($pc.decisions // {})[$d.id] // ($pc.decisions // {})[($d.id | local_id)] // {}) as $dc
            | (($dc.question // $d.title // $d.summary // $d.id) | clean) as $q
+           # Two natures, never mixed: a DECISION asks whether we do the thing, a
+           # STATE asks whether it is already done. A held task records neither,
+           # so the fallback never guesses a state question out of free text: it
+           # asks a decision, the only thing a held task is by definition. A
+           # state question exists only where the table recorded a reason to
+           # believe the captain may already have done the thing, and it always
+           # carries the admission line, because firstmate asks precisely
+           # because it cannot establish that state. Its affirmative choice is
+           # therefore worded as a declaration the captain makes, never as a
+           # fact firstmate claims to know.
+           | (if ($dc.nature // "") == "etat" then "etat" else "decision" end) as $nature
+           | ((($dc.options // []) | length) > 0) as $closed
            | {key: ($d.id | gsub("/"; "__")),
               question: (if ($q | safe) then ($q | strip_label($proj.name; $pfx) | trunc(160)) else ($d.id | fallback($pfx)) end | if safe and length > 0 then . else ($d.id | fallback($pfx)) end),
-              options: (if (($dc.options // []) | length) > 0 then [ $dc.options[] | {value, label} ]
-                        else [{value: "fait", label: "c\u2019est fait"}, {value: "on-en-parle", label: "on en parle"}, {value: "plus-tard", label: "plus tard"}] end),
+              nature: $nature,
+              ask: (if $nature == "etat" then "je ne sais pas si c\u2019est d\u00e9j\u00e0 fait"
+                    elif $closed then null
+                    else "on le fait, ou on ne le fait pas ?" end),
+              options: (if $closed then [ $dc.options[] | {value, label} ]
+                        elif $nature == "etat" then
+                          [{value: "je-l-ai-fait", label: "je l\u2019ai fait"},
+                           {value: "pas-encore", label: "pas encore"},
+                           {value: "on-en-parle", label: "on en parle"}]
+                        else
+                          [{value: "on-y-va", label: "on y va"},
+                           {value: "on-ne-le-fait-pas", label: "on ne le fait pas"},
+                           {value: "pas-maintenant", label: "pas maintenant"},
+                           {value: "on-en-parle", label: "on en parle"}] end),
               url: null,
-              configured: ((($dc.options // []) | length) > 0)} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $decisions_you
+              configured: $closed} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $decisions_you
       # Recommendations are what firstmate proposes and the captain has not ruled
       # on yet: they wait on him exactly like a decision, as closed choices.
       | ([ ($pc.recommendations // [])[] | . as $rc
@@ -398,6 +439,7 @@ PYTIME
            | ((if ($rc | type) == "object" then ($rc.why // null) else null end) | optional_captain_text) as $why
            | {key: $key, owner: "(main)", local_id: $key,
               question: (($w + (if $why != null then " : " + $why else "" end)) | trunc(200)),
+              nature: "decision", ask: null,
               options: [{value: "on-y-va", label: "on y va"}, {value: "pas-maintenant", label: "pas maintenant"}, {value: "on-en-parle", label: "on en parle"}],
               kind: "recommandation", configured: true}
              + ((if ($rc | type) == "object" then ($rc.url // null) else null end) | project_link) ]) as $recommendations
@@ -408,6 +450,7 @@ PYTIME
              | ("article__" + ($t | slugify) + "-" + $decision_hashes[$text]) as $key
              | {key: $key, owner: "(main)", local_id: $key,
                 question: (("Article à valider : " + $t) | trunc(200)),
+                nature: "decision", ask: null,
                 options: [{value: "valide", label: "validé"}, {value: "a-revoir", label: "à revoir"}, {value: "plus-tard", label: "plus tard"}],
                 kind: "article", configured: true}
                + ((if ($ar | type) == "object" then ($ar.url // null) else null end) | project_link) ]
@@ -452,7 +495,7 @@ PYTIME
            (if ($is_brain | not) and $meeting == null then (if $agenda_fresh then "aucune prochaine réunion enregistrée" else "aucune réunion enregistrée, agenda non connecté" end) else empty end),
            (if $cost == null then "coûts à mesurer" else empty end),
            (([ $missing_you[] | select(.configured | not) ] | length) as $n
-            | if $n > 0 then "\($n) décision\(if $n > 1 then "s" else "" end) sans choix fermés, boutons génériques" else empty end),
+            | if $n > 0 then "\($n) question\(if $n > 1 then "s" else "" end) sans choix fermés : la page propose les choix par défaut" else empty end),
            (if $deferred_n > 0 then "\($deferred_n) décision\(if $deferred_n > 1 then "s" else "" end) mise\(if $deferred_n > 1 then "s" else "" end) de côté, datée\(if $deferred_n > 1 then "s" else "" end) ou ancienne\(if $deferred_n > 1 then "s" else "" end)" else empty end) ]) as $gaps
       | {id: $proj.id, name: $proj.name, brain: $is_brain,
          headline: (($pc.headline // null) | if . == null then null else clean end),
@@ -497,6 +540,12 @@ validate_payload() {  # <data.json>
     def you_item: type == "object" and (.key | slug(128)) and (.question | captain_string)
       and (.options | type == "array" and length > 0 and all(.[]; option_item))
       and optional_captain("kind")
+      and optional_captain("ask")
+      # An entry that says its state is unknown must carry the admission the
+      # captain reads; a nature the page does not know is refused rather than
+      # rendered as a question of unstated nature.
+      and ((has("nature") | not) or .nature == "decision"
+           or (.nature == "etat" and (.ask | captain_string)))
       and link_item;
     def creation_item: type == "object" and (.label | captain_string) and optional_captain("kind") and link_item;
     def unlinked_item: type == "object" and (.id | nonempty_string) and (.what | captain_string);

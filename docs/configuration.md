@@ -556,7 +556,7 @@ This section is the single owner of these configuration schemas; the script head
       "missing_from_others": [{"who": "<person>", "what": "<what is expected>", "tag": "<optional date or state>"}],
       "pages": [{"label": "<page name>", "url": "<optional allowed URL>", "state": "<optional state such as à jour 10/09>"}],
       "meeting": {"title": "<title>", "date": "YYYY-MM-DD", "with": "<optional attendees>", "bring": ["..."], "decide": ["..."]},
-      "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}},
+      "decisions": {"<task-id>": {"nature": "decision|etat", "question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}},
       "recommendations": [{"what": "<what firstmate proposes>", "why": "<optional reason>", "url": "<optional allowed URL>"}],
       "creations": [{"label": "<page, film or product material>", "url": "<optional allowed URL>", "kind": "<optional kind>"}],
       "brain": false,
@@ -577,7 +577,10 @@ Empty or vocabulary-rejected primary text (`what`, `label`, `title`) excludes th
 Investigations running for a project (scout work) leave the "on est en train de" table for their own list under it, so results being built and knowledge being gathered stay apart.
 
 `id` and `name` identify each card; optional `prefixes` and `repos` route fleet rows to it, while cards without either can still display configured content.
-A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
+A decision entry's `options` replace the page's default buttons for that task, and its optional `nature` declares what the entry asks: `decision` (the default: do we do it, or not) or `etat` (is it already done).
+Only this table can declare `etat`, because it is where firstmate records a reason to believe the captain may already have done the thing, and the page then always admits it cannot establish that state.
+`bin/fm-projets-board.sh`'s header owns those default buttons and the wording of that admission.
+The page counts entries without recorded options as a brain gap.
 The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
 Missing `team` or `deadline` becomes a visible knowledge gap.
 Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, the Tailscale range 100.64/10 and hosts ending in .ts.net.
