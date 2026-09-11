@@ -1,0 +1,130 @@
+{
+  "schema": "fm-projets-board.v1",
+  "home": "test/home",
+  "generated": "2026-09-12T10:00:00Z",
+  "updated_label": "12/09 10h00",
+  "badges": {
+    "workers": 0,
+    "decisions": 4,
+    "subscriptions": null
+  },
+  "projects": [
+    {
+      "id": "torre",
+      "name": "Torre",
+      "brain": false,
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "scouts": [],
+      "missing_from_you": [
+        {
+          "key": "torre-relance",
+          "question": "Relancer le fournisseur de la boutique pilote",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-relance"
+        },
+        {
+          "key": "torre-domaine",
+          "question": "Le domaine de la boutique est basculé ?",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-domaine"
+        },
+        {
+          "key": "torre-hebergement",
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "options": [
+            {
+              "value": "chez-toi",
+              "label": "chez toi"
+            },
+            {
+              "value": "chez-torre",
+              "label": "chez Torre"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-hebergement"
+        },
+        {
+          "key": "torre-commande",
+          "question": "La commande de matériel est passée ?",
+          "options": [
+            {
+              "value": "commandee",
+              "label": "je l’ai commandé"
+            },
+            {
+              "value": "pas-encore",
+              "label": "pas encore"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-commande"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "creations": [],
+      "unlinked": [],
+      "quick_wins": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer",
+        "2 décisions sans choix fermés, boutons génériques"
+      ]
+    }
+  ],
+  "unassigned": [],
+  "warnings": [],
+  "table_missing": false
+}

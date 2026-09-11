@@ -1,0 +1,33 @@
+{
+  "calls": [
+    "queuePrompt",
+    "sendQueuedPrompts"
+  ],
+  "queued": [
+    {
+      "prompt": "Projets · Torre · Relancer le fournisseur de la boutique pilote : on ne le fait pas",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-relance",
+        "choix": "on-ne-le-fait-pas",
+        "nature": "decision"
+      },
+      "tag": "choice"
+    }
+  ],
+  "card": {
+    "key": "torre-relance",
+    "kind": null,
+    "nature": "decision",
+    "ask": "on le fait, ou on ne le fait pas ?",
+    "choices": [
+      "on-y-va",
+      "on-ne-le-fait-pas",
+      "pas-maintenant",
+      "on-en-parle"
+    ],
+    "message": "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir.",
+    "refused": false,
+    "sent": true
+  }
+}

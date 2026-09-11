@@ -1,41 +1,52 @@
 {
   "schema": "fm-bearings.v1",
-  "home": "demonstration",
-  "generated": "2026-09-11T12:00:00Z",
+  "home": "test/home",
+  "generated": "2026-09-12T10:00:00Z",
+  "prs": "not_requested",
   "in_flight": [],
-  "decisions_open": [
-    {
-      "id": "torre-relance",
-      "key": "torre-relance",
-      "verb": "captain-hold",
-      "title": "Torre : relancer le fournisseur",
-      "summary": "Torre : relancer le fournisseur",
-      "owner": "(main)",
-      "repo": "torre"
-    },
-    {
-      "id": "torre-domaine",
-      "key": "torre-domaine",
-      "verb": "captain-hold",
-      "title": "Torre : le domaine est basculé ?",
-      "summary": "Torre : le domaine est basculé ?",
-      "owner": "(main)",
-      "repo": "torre"
-    },
-    {
-      "id": "torre-hebergement",
-      "key": "torre-hebergement",
-      "verb": "captain-hold",
-      "title": "Torre : choisir l’hébergement",
-      "summary": "Torre : choisir l’hébergement",
-      "owner": "(main)",
-      "repo": "torre"
-    }
-  ],
+  "secondmates": [],
+  "secondmate_reconcile": [],
   "landed": [],
   "gates": [],
   "reports": [],
   "recorded_prs": [],
   "omitted": [],
-  "secondmates": []
+  "decisions_open": [
+    {
+      "id": "torre-relance",
+      "key": "torre-relance",
+      "verb": "captain-hold",
+      "title": "Relancer le fournisseur de la boutique pilote",
+      "summary": "Relancer le fournisseur de la boutique pilote",
+      "owner": "(main)",
+      "repo": "boutique"
+    },
+    {
+      "id": "torre-domaine",
+      "key": "torre-domaine",
+      "verb": "captain-hold",
+      "title": "Le domaine de la boutique est basculé ?",
+      "summary": "Le domaine de la boutique est basculé ?",
+      "owner": "(main)",
+      "repo": "boutique"
+    },
+    {
+      "id": "torre-hebergement",
+      "key": "torre-hebergement",
+      "verb": "captain-hold",
+      "title": "Hébergement : chez toi ou chez Torre ?",
+      "summary": "Hébergement : chez toi ou chez Torre ?",
+      "owner": "(main)",
+      "repo": "boutique"
+    },
+    {
+      "id": "torre-commande",
+      "key": "torre-commande",
+      "verb": "captain-hold",
+      "title": "La commande de matériel est passée ?",
+      "summary": "La commande de matériel est passée ?",
+      "owner": "(main)",
+      "repo": "boutique"
+    }
+  ]
 }

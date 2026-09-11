@@ -1,0 +1,170 @@
+{
+  "before": [
+    {
+      "key": "torre-relance",
+      "question": "Relancer le fournisseur de la boutique pilote",
+      "options": [
+        {
+          "value": "fait",
+          "label": "c’est fait"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        },
+        {
+          "value": "plus-tard",
+          "label": "plus tard"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-relance"
+    },
+    {
+      "key": "torre-domaine",
+      "question": "Le domaine de la boutique est basculé ?",
+      "options": [
+        {
+          "value": "fait",
+          "label": "c’est fait"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        },
+        {
+          "value": "plus-tard",
+          "label": "plus tard"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-domaine"
+    },
+    {
+      "key": "torre-hebergement",
+      "question": "Hébergement : chez toi ou chez Torre ?",
+      "options": [
+        {
+          "value": "chez-toi",
+          "label": "chez toi"
+        },
+        {
+          "value": "chez-torre",
+          "label": "chez Torre"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-hebergement"
+    },
+    {
+      "key": "torre-commande",
+      "question": "La commande de matériel est passée ?",
+      "options": [
+        {
+          "value": "commandee",
+          "label": "je l’ai commandé"
+        },
+        {
+          "value": "pas-encore",
+          "label": "pas encore"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-commande"
+    }
+  ],
+  "after": [
+    {
+      "key": "torre-relance",
+      "question": "Relancer le fournisseur de la boutique pilote",
+      "nature": "decision",
+      "ask": "on le fait, ou on ne le fait pas ?",
+      "options": [
+        {
+          "value": "on-y-va",
+          "label": "on y va"
+        },
+        {
+          "value": "on-ne-le-fait-pas",
+          "label": "on ne le fait pas"
+        },
+        {
+          "value": "pas-maintenant",
+          "label": "pas maintenant"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-relance"
+    },
+    {
+      "key": "torre-domaine",
+      "question": "Le domaine de la boutique est basculé ?",
+      "nature": "etat",
+      "ask": "je ne sais pas si c’est déjà fait",
+      "options": [
+        {
+          "value": "je-l-ai-fait",
+          "label": "je l’ai fait"
+        },
+        {
+          "value": "pas-encore",
+          "label": "pas encore"
+        },
+        {
+          "value": "on-en-parle",
+          "label": "on en parle"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-domaine"
+    },
+    {
+      "key": "torre-hebergement",
+      "question": "Hébergement : chez toi ou chez Torre ?",
+      "nature": "decision",
+      "ask": null,
+      "options": [
+        {
+          "value": "chez-toi",
+          "label": "chez toi"
+        },
+        {
+          "value": "chez-torre",
+          "label": "chez Torre"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-hebergement"
+    },
+    {
+      "key": "torre-commande",
+      "question": "La commande de matériel est passée ?",
+      "nature": "etat",
+      "ask": "je ne sais pas si c’est déjà fait",
+      "options": [
+        {
+          "value": "commandee",
+          "label": "je l’ai commandé"
+        },
+        {
+          "value": "pas-encore",
+          "label": "pas encore"
+        }
+      ],
+      "url": null,
+      "owner": "(main)",
+      "local_id": "torre-commande"
+    }
+  ]
+}

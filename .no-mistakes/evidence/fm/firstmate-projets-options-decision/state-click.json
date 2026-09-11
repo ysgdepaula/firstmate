@@ -1,0 +1,32 @@
+{
+  "calls": [
+    "queuePrompt",
+    "sendQueuedPrompts"
+  ],
+  "queued": [
+    {
+      "prompt": "Projets · Torre · Le domaine de la boutique est basculé ? : je l’ai fait",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-domaine",
+        "choix": "je-l-ai-fait",
+        "nature": "etat"
+      },
+      "tag": "choice"
+    }
+  ],
+  "card": {
+    "key": "torre-domaine",
+    "kind": null,
+    "nature": "etat",
+    "ask": "je ne sais pas si c’est déjà fait",
+    "choices": [
+      "je-l-ai-fait",
+      "pas-encore",
+      "on-en-parle"
+    ],
+    "message": "envoyé à firstmate : je l’ai fait. Firstmate te reposera la question en chat avant d'agir.",
+    "refused": false,
+    "sent": true
+  }
+}

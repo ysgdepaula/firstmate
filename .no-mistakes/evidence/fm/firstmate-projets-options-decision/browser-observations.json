@@ -1,0 +1,166 @@
+{
+  "surfaces": [
+    {
+      "page": "before",
+      "width": 1440,
+      "overflow": false,
+      "rows": [
+        {
+          "key": "torre-relance",
+          "question": "Relancer le fournisseur de la boutique pilote",
+          "choices": [
+            "c’est fait",
+            "on en parle",
+            "plus tard"
+          ]
+        },
+        {
+          "key": "torre-domaine",
+          "question": "Le domaine de la boutique est basculé ?",
+          "choices": [
+            "c’est fait",
+            "on en parle",
+            "plus tard"
+          ]
+        },
+        {
+          "key": "torre-hebergement",
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "choices": [
+            "chez toi",
+            "chez Torre"
+          ]
+        },
+        {
+          "key": "torre-commande",
+          "question": "La commande de matériel est passée ?",
+          "choices": [
+            "je l’ai commandé",
+            "pas encore"
+          ]
+        }
+      ]
+    },
+    {
+      "page": "after",
+      "width": 1440,
+      "overflow": false,
+      "rows": [
+        {
+          "key": "torre-relance",
+          "nature": "decision",
+          "question": "Relancer le fournisseur de la boutique piloteon le fait, ou on ne le fait pas ?",
+          "choices": [
+            "on y va",
+            "on ne le fait pas",
+            "pas maintenant",
+            "on en parle"
+          ]
+        },
+        {
+          "key": "torre-domaine",
+          "nature": "etat",
+          "question": "Le domaine de la boutique est basculé ?je ne sais pas si c’est déjà fait",
+          "choices": [
+            "je l’ai fait",
+            "pas encore",
+            "on en parle"
+          ]
+        },
+        {
+          "key": "torre-hebergement",
+          "nature": "decision",
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "choices": [
+            "chez toi",
+            "chez Torre"
+          ]
+        },
+        {
+          "key": "torre-commande",
+          "nature": "etat",
+          "question": "La commande de matériel est passée ?je ne sais pas si c’est déjà fait",
+          "choices": [
+            "je l’ai commandé",
+            "pas encore"
+          ]
+        }
+      ]
+    },
+    {
+      "page": "after",
+      "width": 390,
+      "overflow": false,
+      "rows": [
+        {
+          "key": "torre-relance",
+          "nature": "decision",
+          "question": "Relancer le fournisseur de la boutique piloteon le fait, ou on ne le fait pas ?",
+          "choices": [
+            "on y va",
+            "on ne le fait pas",
+            "pas maintenant",
+            "on en parle"
+          ]
+        },
+        {
+          "key": "torre-domaine",
+          "nature": "etat",
+          "question": "Le domaine de la boutique est basculé ?je ne sais pas si c’est déjà fait",
+          "choices": [
+            "je l’ai fait",
+            "pas encore",
+            "on en parle"
+          ]
+        },
+        {
+          "key": "torre-hebergement",
+          "nature": "decision",
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "choices": [
+            "chez toi",
+            "chez Torre"
+          ]
+        },
+        {
+          "key": "torre-commande",
+          "nature": "etat",
+          "question": "La commande de matériel est passée ?je ne sais pas si c’est déjà fait",
+          "choices": [
+            "je l’ai commandé",
+            "pas encore"
+          ]
+        }
+      ]
+    }
+  ],
+  "delivery": "Lavish API stub; no external message sent",
+  "clicks": {
+    "captured": [
+      {
+        "prompt": "Projets · Torre · Relancer le fournisseur de la boutique pilote : on ne le fait pas",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-relance",
+          "choix": "on-ne-le-fait-pas",
+          "nature": "decision"
+        }
+      },
+      {
+        "prompt": "Projets · Torre · Le domaine de la boutique est basculé ? : je l’ai fait",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-domaine",
+          "choix": "je-l-ai-fait",
+          "nature": "etat"
+        }
+      }
+    ],
+    "messages": [
+      "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir.",
+      "envoyé à firstmate : je l’ai fait. Firstmate te reposera la question en chat avant d'agir.",
+      "",
+      ""
+    ]
+  }
+}

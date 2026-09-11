@@ -23,6 +23,19 @@
               "label": "chez Torre"
             }
           ]
+        },
+        "torre-commande": {
+          "nature": "etat",
+          "options": [
+            {
+              "value": "commandee",
+              "label": "je l’ai commandé"
+            },
+            {
+              "value": "pas-encore",
+              "label": "pas encore"
+            }
+          ]
         }
       }
     }
