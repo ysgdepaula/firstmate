@@ -3,15 +3,14 @@
 # home's own records, before commissioning an investigation that would
 # re-explore ground already covered.
 #
-# Every investigation costs tokens and machine time and leaves a report behind
-# in data/<name>/report.md. Those reports accumulate, but nothing re-reads them
-# before the next investigation is commissioned, so the same subject gets
-# explored a second and a third time. This command is that missing read. It
-# answers from records that already exist and commissions nothing.
+# Reuse accumulated evidence before paying for another investigation.
+# This command answers from records that already exist and commissions nothing.
 #
 # Usage:
 #   fm-prior-art.sh <subject words>...
 #   fm-prior-art.sh --limit 5 memoire lavish
+#   fm-prior-art.sh "l'agent" "mémoire locale"
+#   fm-prior-art.sh -- --resolve-key     search a subject beginning with a dash
 #   fm-prior-art.sh --rebuild            rebuild the index and stop
 #
 # Options:
@@ -19,18 +18,29 @@
 #   --rebuild    discard the index and build it again, then stop
 #   -h, --help   this help
 #
-# WHAT IT READS: every *.md under this home's data/ - the investigation
+# WHAT IT READS: recursively, regular *.md files under this home's data/ - the investigation
 # reports, the instructions that commissioned them, the captain's notes, the
 # learnings, the work queue and the archives. Nothing else.
+# Unreadable records, failed directory traversal, symbolic links to Markdown
+# files or directories, broken links, ambiguous source names containing tabs or
+# line endings, and records containing zero bytes fail the lookup.
+# Incomplete coverage or failed search is an error, never evidence of absence.
 #
 # COST: no model call, ever. Reading these records must never cost more than
 # the re-investigation it exists to prevent, so the work is done once and kept:
-# a folded copy of the corpus lives under state/prior-art/ and is rebuilt only
-# when a document actually changes. A normal answer costs a few hundred
-# milliseconds and no tokens at all.
+# a folded copy of the corpus lives under state/prior-art/ alongside the source
+# snapshots, document map and freshness record.
+# Changes to the document list or file metadata trigger a rebuild; an unchanged
+# corpus reuses the cache unless --rebuild is requested or cache data is missing.
+# The command itself consumes no model tokens; reading its output uses context.
 #
 # PRIVACY: local files only, no network call of any kind. The only thing it
-# writes is its own index, under this home's state/. These records hold
+# writes is its own cache, including temporary work, under this home's state/.
+# Cache directories are owner-only (0700), and files owner-only (0600), enforced
+# on creation and reuse; source contents and permissions are never changed.
+# Lookups and rebuilds share a lock, and quotations and dates use the same saved
+# source as the match. The cache can be deleted when no lookup is running.
+# These records hold
 # strategy, clients and contact details, and none of it leaves this machine.
 #
 # DATES: every result carries a date and says where that date came from. A
@@ -38,27 +48,43 @@
 # back without its date reproduces the very mistake this command exists to
 # prevent. Three sources, in this order of preference:
 #
-#   dated section           a dated heading at or above the passage that
-#                           matched. This is what makes a 250 KB archive
-#                           usable: the date belongs to the passage that
-#                           matched, not to the whole file.
-#   stated in the document  a date in the document's first 15 lines.
+#   dated section           a date in the enclosing heading or an ancestor,
+#                           when the section context is confidently parsed.
+#   stated in the document  an explicit Date: line in the first 15 lines,
+#                           before subsections and outside fenced examples,
+#                           captured before any uncertain Markdown context.
 #   file last changed       the file's modification time, used only when the
-#                           document dates nothing itself. This is NOT an
+#                           parser has no usable authored date. This is NOT an
 #                           authored date and is labelled so it can never be
 #                           read as one.
 #
-# A yearless date such as "(06/09)" is a real convention in these records. Its
-# year is completed from the file and the result is labelled "year inferred",
+# The shared parser recognizes ATX and Setext headings and excludes fenced
+# examples from date parsing, with CRLF normalized only for parsing.
+# Containers, unsupported blocks and indentation outside known fences that
+# reaches four columns (tabs advance to four-column stops) make context uncertain.
+# From that point onward, section dates are withheld and the earlier trusted
+# document date or modification time supplies the weaker provenance label.
+# This deliberately sacrifices precision; it is not a complete Markdown parser.
+# A yearless heading date such as "(06/09)" is a real convention in these records.
+# Its year comes from the file's modification time and is labelled "year inferred",
 # never silently. Slash dates are read day/month/year, matching how these
 # records are written; an out-of-range reading is rejected rather than guessed.
 #
-# HONEST ABOUT ITS GAPS: a word found in no document at all is named as found
-# nowhere, because that is the most valuable answer this command can give - it
-# means the ground really is new. A word too common to tell two documents apart
-# is dropped from the ranking and named as dropped. When nothing matches, it
-# says so and returns nothing, rather than offering something adjacent that
-# would read like an answer.
+# MATCHING: whitespace separates query terms, even inside quoted arguments;
+# quoted multiword input is not an exact phrase search.
+# Punctuation, including apostrophes, stays literal, and terms match at a word
+# start without requiring a word end ("agent" also matches "agents").
+# Only document text is searched, never filenames; this is not semantic search.
+# Results may match only some terms, with coverage shown for each document.
+# More covered terms rank first, then a score favoring rarer terms.
+# Terms in more than 60% of documents are set aside and named; if no more
+# specific term matches, common terms are used with an explicit weak-ranking label.
+# FOUND NOWHERE means no textual match for that term in the searched records;
+# other spellings, synonyms, other homes and non-Markdown material are not covered.
+# NOTHING FOUND is a successful empty result; invalid input or failed lookup
+# exits nonzero with a diagnostic on stderr.
+# Each quotation preserves the source prefix and signs, limited to 200 bytes;
+# open the cited source and line to read the full passage and its context.
 #
 # ACCENTS AND CASE: half of these records are written with accents and half
 # without, so "memoire" and "mémoire" are one word here, as are "MEMOIRE" and
@@ -68,7 +94,11 @@
 #
 # Environment:
 #   FM_HOME   operational home whose data/ is read and whose state/ holds the
-#             index.
+#             index; defaults to the tracked code root.
+#   FM_DATA_OVERRIDE, FM_STATE_OVERRIDE   override the data and state directories.
+#
+# Requires Bash and Perl (including Time::HiRes); supports macOS and GNU tools.
+# Behavior regressions: tests/fm-prior-art.test.sh.
 set -euo pipefail
 
 # Byte-deterministic throughout. Folding is done by explicit byte substitution

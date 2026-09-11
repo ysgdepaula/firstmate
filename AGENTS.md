@@ -123,7 +123,7 @@ state/               runtime records and signals; gitignored
   .lease-<task>        per-task supervision lease naming which actor (main or branch) may change that task; bin/fm-lease-lib.sh owns the contract the guarded scripts enforce
   x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll
-  prior-art/         folded copy of this home's data/*.md plus the document map and the freshness record behind bin/fm-prior-art.sh; derived, rebuilt whenever a document changes, and safe to delete
+  prior-art/         local evidence-search cache; bin/fm-prior-art.sh's header owns its contents, privacy, and lifecycle
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (section 13)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
@@ -293,8 +293,7 @@ For one-off or infrequent operational work, start with the simplest direct end-t
 Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
 
 Before commissioning an investigation, run `bin/fm-prior-art.sh <subject words>` and read what it returns.
-It answers from the reports, notes, decisions and instructions this home already holds, gives each one a source and a date, and says plainly when it finds nothing, so a subject already covered is not investigated a second time.
-Weigh what it returns as established evidence, checking each item's date before relying on it.
+Read the cited sources and date provenance before treating matches as established evidence; the command's header and help own search coverage and limitations.
 Classify the deliverable:
 
 - **Ship** is the default and produces a project change through the selected delivery mode; once implementation is authorized, dispatch a ship and keep any remaining bounded research inside it unless unresolved uncertainty could materially change whether or what to build.
