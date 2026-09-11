@@ -1,0 +1,80 @@
+{
+  "schema": "fm-bearings.v1",
+  "home": "title/parent",
+  "generated": "2026-09-11T02:17:54Z",
+  "prs": "not_requested (run: /bearings include PRs)",
+  "events": [],
+  "in_flight": [
+    {
+      "id": "mate/torre-42",
+      "owner": "mate",
+      "local_id": "torre-42",
+      "kind": "scout",
+      "state": "working",
+      "repo": "agent-platform",
+      "title": "Préparer la démonstration",
+      "doing": "harness busy (claude-hook)"
+    }
+  ],
+  "secondmates": [
+    {
+      "id": "mate",
+      "state": "active_child_work",
+      "doing": "torre-42: harness busy (claude-hook)",
+      "provenance": "structured-home",
+      "freshness": "fresh",
+      "age_seconds": 7,
+      "contradiction": false,
+      "reason": "-"
+    }
+  ],
+  "secondmate_reconcile": [
+    {
+      "id": "mate",
+      "spawn_gen": null,
+      "host": null,
+      "kind": null,
+      "ids": []
+    }
+  ],
+  "decisions_open": [],
+  "landed": [],
+  "gates": [],
+  "reports": [],
+  "recorded_prs": [],
+  "unhealthy_endpoints": [
+    {
+      "id": "mate",
+      "backend": "tmux",
+      "target": "fmtest:fm-mate",
+      "exists": true,
+      "agent": "dead"
+    }
+  ],
+  "omitted": [
+    {
+      "surface": "backlog item bodies",
+      "reveal": "--fields bodies"
+    },
+    {
+      "surface": "task paths",
+      "reveal": "--fields paths"
+    },
+    {
+      "surface": "watch/steer actions",
+      "reveal": "--fields actions"
+    },
+    {
+      "surface": "healthy endpoint detail",
+      "reveal": "--fields endpoints"
+    },
+    {
+      "surface": "full scout-report inventory",
+      "reveal": "--all-reports"
+    },
+    {
+      "surface": "live PR discovery + checks",
+      "reveal": "--include-prs"
+    }
+  ]
+}

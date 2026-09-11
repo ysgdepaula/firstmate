@@ -1,0 +1,37 @@
+import {spawn} from 'node:child_process';
+import {readFileSync,writeFileSync,existsSync,mkdirSync,mkdtempSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import assert from 'node:assert/strict';
+const work=resolve('.test-phase'), evidence='/Users/ydeep/.no-mistakes/evidence/01M26W67QDF9ADAFC3R0EWBV0P';
+const profile=mkdtempSync(resolve(work,'chrome-profile-'));
+const chrome=spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',detached:true});
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+let ws; const pending=new Map(); let seq=0; const errors=[]; const report={fixture:'Synthetic fleet, costs and agenda; real composer, renderer and Chrome. Successful transport is simulated; no user decision or external message is sent.',checks:[]};
+try {
+  for(let n=0;n<100&&!existsSync(profile+'/DevToolsActivePort');n++) await delay(200);
+  const port=readFileSync(profile+'/DevToolsActivePort','utf8').split('\n')[0];
+  const targets=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  ws=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);
+  await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}else if(m.method==='Runtime.exceptionThrown')errors.push(m.params);};
+  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});
+  const evaluate=async expression=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+  const size=async(width,height)=>send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+  const navigate=async()=>{await send('Page.navigate',{url:pathToFileURL(evidence+'/projets.html').href});for(let n=0;n<50;n++){if(await evaluate('document.querySelectorAll(".card").length > 0'))return;await delay(100);}throw Error('render timeout');};
+  const screenshot=async name=>{await delay(150);const {cssContentSize}=await send('Page.getLayoutMetrics');const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:cssContentSize.width,height:cssContentSize.height,scale:1}});writeFileSync(evidence+'/'+name,Buffer.from(result.data,'base64'));};
+  const state=()=>evaluate(`(()=>{const card=document.querySelector('.card:not([hidden])');return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,rail:[...document.querySelectorAll('.nav [data-project]')].map(x=>x.dataset.project),visible:[...document.querySelectorAll('.card:not([hidden])')].map(x=>x.dataset.project),badges:[...document.querySelectorAll('.badge')].map(x=>x.innerText),open:[...card.querySelectorAll('.bloc')].map(x=>x.open),doing:[...card.querySelectorAll('table.doing [data-doing]')].filter(x=>getComputedStyle(x).display!=='none').length,journal:card.querySelectorAll('.bloc')[5].querySelectorAll('li').length}})()`);
+  await send('Runtime.enable'); await send('Page.enable'); await size(1440,1100);await navigate();
+  let s=await state();assert.equal(s.rail[0],'torre');assert.equal(s.visible.length,1);assert.equal(s.badges.length,3);assert.equal(s.doing,3);assert.equal(s.journal,5);assert.equal(s.open.length,7);assert.ok(s.open.every(Boolean));assert.ok(s.scrollWidth<=s.width);report.desktop=s;
+  await screenshot('projets-desktop.png');
+  await evaluate('document.querySelector(".card:not([hidden]) .more").click()');s=await state();assert.equal(s.doing,4);report.checks.push('Voir tout expands three visible rows to four.');
+  await evaluate('document.querySelector(".nav [data-project=solos]").click()');s=await state();assert.deepEqual(s.visible,['solos']);report.checks.push('Rail navigation displays only Solos.');await screenshot('projets-empty.png');
+  await size(390,844);await navigate();s=await state();assert.deepEqual(s.open,[false,true,false,false,false,false,false]);assert.ok(s.scrollWidth<=390);report.mobile=s;await screenshot('projets-mobile.png');
+  await evaluate('document.querySelector(".card:not([hidden]) [data-choice]").click()');
+  const refusal=await evaluate('document.querySelector(".card:not([hidden]) .you .ok").innerText');assert.ok(refusal.includes('non transmis'));report.refusal=refusal;await screenshot('projets-delivery-unavailable.png');
+  await navigate();await evaluate('window.__prompts=[];window.__sends=0;window.lavish={queuePrompt:(prompt,options)=>window.__prompts.push({prompt,options}),sendQueuedPrompts:()=>{window.__sends++;return Promise.resolve();}};document.querySelector(".card:not([hidden]) [data-choice]").click()');await delay(150);
+  const delivery=await evaluate('({prompts:window.__prompts,sends:window.__sends,message:document.querySelector(".card:not([hidden]) .you .ok").innerText,decisions:document.querySelector(".card:not([hidden]) .you").children.length})');
+  assert.equal(delivery.sends,1);assert.equal(delivery.prompts.length,1);assert.equal(delivery.decisions,3);assert.ok(delivery.message.includes('envoyé'));report.simulatedTransport=delivery;
+  await screenshot('projets-choice-simulated.png');assert.deepEqual(errors,[]);report.runtimeErrors=errors;
+  writeFileSync(evidence+'/browser-checks.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
+} finally {if(ws)ws.close();try{process.kill(-chrome.pid,'SIGKILL');}catch{}}

@@ -1,0 +1,212 @@
+{
+  "schema": "fm-projets-board.v1",
+  "home": "title/parent",
+  "generated": "2026-09-11T02:18:49Z",
+  "updated_label": "11/09 02h18",
+  "badges": {
+    "workers": 1,
+    "decisions": 0,
+    "subscriptions": null
+  },
+  "projects": [
+    {
+      "id": "cria",
+      "name": "CRIA",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "club",
+      "name": "Club Julien Dumas",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "firstmate",
+      "name": "Firstmate",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "solos",
+      "name": "Solos",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "torre",
+      "name": "Torre",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [
+        {
+          "id": "mate/torre-42",
+          "result": "Préparer la démonstration",
+          "status": "en cours",
+          "next": null,
+          "url": null,
+          "owner": "mate",
+          "local_id": "torre-42"
+        }
+      ],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "ydeep",
+      "name": "YDEEP",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer"
+      ]
+    }
+  ],
+  "unassigned": [],
+  "warnings": [],
+  "table_missing": false
+}

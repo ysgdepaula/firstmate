@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Projets</title>
+<style>
+/* ============================================================
+   Page projets. Surface page monochrome du systeme de Yan (papaye-tokens),
+   inlinee pour que la page s'ouvre en file:// sans reseau ni webfont.
+   Hierarchie par la taille, le poids et le blanc ; jamais par la couleur.
+   Trois traits, trois roles : 1px filet, 1.6px structure, pointille = optionnel.
+   ============================================================ */
+:root {
+  --paper: #FAFAF8; --surround: #EFEEE9; --ink: #111111; --muted: #8A8A87;
+  --faint: #B8B7B1; --line: #DBDAD4; --fill: #F1F0EB;
+  --f-sans: "Helvetica Neue", Helvetica, "Inter", Arial, sans-serif;
+  --f-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --hair: 1px; --struct: 1.6px;
+  --sh-card: 0 1px 2px rgba(17,17,17,.03), 0 10px 30px rgba(17,17,17,.05);
+  --r: 18px; --r-sm: 10px; --pad: 22px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--surround); color: var(--ink); font-family: var(--f-sans); font-size: 15px;
+       line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; min-width: 0; }
+:where(p, h1, h2, h3, li, td, th, span) { overflow-wrap: anywhere; }
+
+/* --- barre du haut : titre, mise a jour, trois badges ---------------------- */
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+       margin-bottom: 20px; }
+.top h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.top .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.badges { display: flex; gap: 10px; flex-wrap: wrap; }
+.badge { display: flex; align-items: center; gap: 10px; background: var(--paper);
+         border: var(--struct) solid var(--ink); border-radius: 999px; padding: 8px 16px 8px 12px;
+         box-shadow: var(--sh-card); min-width: 0; }
+.badge svg { width: 20px; height: 20px; flex: none; stroke: var(--ink); fill: none;
+             stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.badge b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.badge small { display: block; color: var(--muted); font-size: 11px; font-family: var(--f-mono);
+               letter-spacing: .1em; text-transform: uppercase; margin-top: 3px; }
+.badge.soft { border-style: dashed; border-color: var(--faint); }
+.notice { border: var(--hair) dashed var(--faint); border-radius: var(--r-sm); padding: 10px 14px;
+          color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+
+/* --- rail + carte ---------------------------------------------------------- */
+.rail { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 18px; align-items: start; }
+.rail > * { min-width: 0; max-width: 100%; }
+.nav { display: flex; flex-direction: column; background: var(--paper); border: var(--hair) solid var(--line);
+       border-radius: var(--r); padding: 8px; box-shadow: var(--sh-card); position: sticky; top: 16px; }
+.nav button { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%;
+              text-align: left; padding: 10px 12px; border-radius: var(--r-sm); border: var(--hair) solid transparent; }
+.nav button:hover { background: var(--fill); }
+.nav button.on { border-color: var(--ink); font-weight: 700; }
+.nav .n { font-family: var(--f-mono); font-size: 12px; border: var(--hair) solid var(--ink); border-radius: 999px;
+          padding: 1px 8px; min-width: 26px; text-align: center; flex: none; font-variant-numeric: tabular-nums; }
+.nav .n.z { border-color: var(--line); color: var(--muted); }
+.nav .foot { color: var(--muted); font-size: 12px; padding: 10px 12px 4px; }
+
+.card { background: var(--paper); border: var(--struct) solid var(--ink); border-radius: var(--r);
+        padding: var(--pad); box-shadow: var(--sh-card); min-width: 0; }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px 24px; flex-wrap: wrap;
+        border-bottom: var(--hair) solid var(--line); padding-bottom: 14px; margin-bottom: 8px; }
+.head h2 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.head .headline { color: var(--muted); font-size: 14px; max-width: 62ch; }
+
+.bloc { border-top: var(--hair) dashed var(--line); padding: 18px 0 6px; }
+.bloc:first-of-type { border-top: 0; }
+.bloc summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+.bloc summary::-webkit-details-marker { display: none; }
+.bloc summary::before { content: ""; width: 8px; height: 8px; border-right: var(--struct) solid var(--ink);
+                        border-bottom: var(--struct) solid var(--ink); transform: rotate(45deg) translate(-2px, -2px); transition: transform .2s; }
+.bloc:not([open]) summary::before { transform: rotate(-45deg) translate(-1px, 1px); }
+.bloc h3 { font-family: var(--f-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+           color: var(--muted); font-weight: 400; }
+.bloc h3 b { color: var(--ink); font-weight: 700; }
+.bloc .body { margin-top: 14px; }
+.empty { color: var(--muted); font-style: italic; font-size: 14px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: var(--hair) solid var(--line); vertical-align: top; }
+th { font-family: var(--f-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+tr:last-child td { border-bottom: 0; }
+table.doing th:nth-child(1) { width: 52%; } table.doing th:nth-child(2) { width: 26%; } table.doing th:nth-child(3) { width: 22%; }
+.scrollx { overflow-x: auto; max-width: 100%; }
+td.dim { color: var(--muted); }
+
+.tl { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tl li { padding-left: 18px; position: relative; font-size: 15px; }
+.tl li::before { content: ""; position: absolute; left: 0; top: .8em; width: 10px; height: 1px; background: var(--faint); }
+.tag { display: inline-block; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; border: var(--hair) solid var(--line);
+       border-radius: 4px; padding: 0 6px; margin-left: 8px; color: var(--muted); vertical-align: 1px; white-space: nowrap; }
+.tag.ok { border-color: var(--ink); color: var(--ink); }
+.src { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.more { margin-top: 10px; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; color: var(--muted); }
+.more:hover { color: var(--ink); }
+
+/* --- il manque de toi : une ligne encadree, des boutons par choix ----------- */
+.you { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.you li { border: var(--struct) solid var(--ink); border-radius: var(--r-sm); padding: 10px 12px;
+          display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.you .q { flex: 1 1 260px; min-width: 0; }
+.you .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; white-space: nowrap; background: var(--paper); }
+.btn:hover { background: var(--ink); color: var(--paper); }
+.you li.sent { border-style: dashed; }
+.you li.sent .btn { border-color: var(--line); color: var(--muted); }
+.you .ok { flex-basis: 100%; color: var(--muted); font-size: 13px; display: none; }
+.you li.refused { border-style: dotted; }
+.you li.sent .ok, .you li.refused .ok { display: block; }
+
+.gaps { margin-top: 22px; border-top: var(--hair) dashed var(--line); padding-top: 14px; }
+.gaps h3 { font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 400; margin-bottom: 8px; }
+.gaps .tl li { color: var(--muted); font-size: 14px; }
+
+.err { border: var(--struct) solid var(--ink); border-radius: var(--r); padding: var(--pad); background: var(--paper); }
+.err h2 { font-size: 20px; margin-bottom: 8px; }
+
+/* --- telephone : le rail devient une barre, chaque bloc se replie ---------- */
+@media (max-width: 720px) {
+  .wrap { padding: 16px 12px 64px; }
+  .top h1 { font-size: 20px; }
+  .badge { padding: 6px 12px 6px 10px; } .badge b { font-size: 17px; }
+  .rail { grid-template-columns: 1fr; gap: 12px; }
+  .nav { position: static; flex-direction: row; overflow-x: auto; gap: 6px; padding: 6px; }
+  .nav button { width: auto; flex: none; padding: 8px 10px; }
+  .nav .foot { display: none; }
+  .card { padding: 16px; border-radius: 14px; }
+  .head h2 { font-size: 22px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Projets</h1>
+      <div class="meta" id="pj-meta"></div>
+    </div>
+    <div class="badges" id="pj-badges"></div>
+  </header>
+  <div id="pj-notice" class="notice" hidden></div>
+  <div class="rail">
+    <nav class="nav" id="pj-nav" aria-label="Projets"></nav>
+    <main id="pj-main"></main>
+  </div>
+</div>
+
+<script id="projets-data" type="application/json">
+{"schema":"fm-projets-board.v1","home":"test/home","generated":"2026-09-11T09:00:00Z","updated_label":"11/09 09h00","badges":{"workers":3,"decisions":8,"subscriptions":null},"projects":[{"id":"torre","name":"Torre","headline":"Pilote le 14/09 avec Eli","team":"Eli · Yan","deadline":{"label":"Pilote sur place","date":"2026-09-14"},"partial":false,"meetings":[{"title":"Pilote sur place","date":"2026-09-14","time":null,"with":"Eli","bring":["la démo"],"decide":["l enveloppe"],"source":"chat"},{"title":"Pilote sur place","date":"2026-09-15","time":"10:00","with":"Eli","bring":[],"decide":[],"source":"agenda"}],"agenda_available":true,"meeting_warning":"l’agenda et le chat ne disent pas la même chose","doing":[{"id":"torre-interfaces","result":"interfaces v0 pour la direction","status":"livré","next":"fusion à confirmer","url":"https://github.com/acme/agent-platform/pull/58","owner":"(main)","local_id":"torre-interfaces"},{"id":"torre-audit","result":"audit Shopify contre Stripe","status":"en cours","next":null,"url":null,"owner":"(main)","local_id":"torre-audit"},{"id":"torre-site","result":"site click and collect","status":"en pause, attente extérieure · en attente du numero Meta de Bechir","next":null,"url":null,"owner":"(main)","local_id":"torre-site"},{"id":"torre-hermes","result":"préparer la démonstration","status":"en cours","next":null,"url":null,"owner":"(main)","local_id":"torre-hermes"}],"missing_from_you":[{"key":"torre-hebergement","question":"Hébergement : chez toi ou chez Torre ?","options":[{"value":"chez-toi","label":"chez toi"},{"value":"chez-torre","label":"chez Torre"}],"url":null,"owner":"(main)","local_id":"torre-hebergement"},{"key":"torre-paiement","question":"Paiement du pilote : quelle solution ?","options":[{"value":"square","label":"Square"},{"value":"stripe","label":"Stripe"},{"value":"later","label":"plus tard"}],"url":null,"owner":"(main)","local_id":"torre-paiement"},{"key":"torre-demo","question":"La démonstration est-elle prête ?","options":[{"value":"fait","label":"c’est fait"},{"value":"on-en-parle","label":"on en parle"},{"value":"plus-tard","label":"plus tard"}],"url":null,"owner":"(main)","local_id":"torre-demo"}],"missing_from_others":[{"who":"Eli","what":"les factures fournisseur","tag":"avant le 11/09"}],"pages":[{"label":"Espace client","state":"à jour 10/09","url":"https://example.test/client"}],"costs":{"period":"septembre","tokens_api":"123 EUR au prix API","subscription_share":"14.5 % de tes abonnements","source":"journaux de sessions, prix API publics"},"journal":[{"at":"2026-09-10","kind":"landed","when":"10/09","what":"cerveau achats v1","url":"https://github.com/acme/agent-platform/pull/61"},{"at":"2026-09-10","kind":"landed","when":"10/09","what":"page architecture","url":"https://github.com/acme/x-deep/pull/229"},{"at":"2026-09-10","kind":"landed","when":"10/09","what":"agent interne Hermes v0","url":"https://github.com/acme/agent-platform/pull/59"},{"at":"2026-09-10","kind":"landed","when":"10/09","what":"agent client WhatsApp v0","url":"https://github.com/acme/agent-platform/pull/60"},{"at":"2026-09-09","kind":"landed","when":"09/09","what":"cerveau achats v0","url":"https://github.com/acme/agent-platform/pull/56"}],"meeting":{"title":"Pilote sur place","date":"2026-09-14","time":null,"with":"Eli","bring":["la démo"],"decide":["l enveloppe"],"source":"chat"},"gaps":["1 décision sans choix fermés, boutons génériques","1 décision mise de côté, datée ou ancienne"]},{"id":"club","name":"Club Julien Dumas","headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":true,"meeting_warning":null,"doing":[{"id":"chef-parcours","result":"parcours client","status":"bloqué","next":"firstmate doit débloquer","url":null,"owner":"(main)","local_id":"chef-parcours"}],"missing_from_you":[{"key":"chef-domaine","question":"basculer le domaine","options":[{"value":"fait","label":"c’est fait"},{"value":"on-en-parle","label":"on en parle"},{"value":"plus-tard","label":"plus tard"}],"url":null,"owner":"(main)","local_id":"chef-domaine"},{"key":"chef-rose","question":"le rose des Anglades","options":[{"value":"fait","label":"c’est fait"},{"value":"on-en-parle","label":"on en parle"},{"value":"plus-tard","label":"plus tard"}],"url":null,"owner":"(main)","local_id":"chef-rose"}],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[{"at":"2026-09-08","kind":"landed","when":"08/09","what":"Julia moins scolaire","url":"https://github.com/acme/agent-platform/pull/40"}],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune prochaine réunion enregistrée","coûts à mesurer","2 décisions sans choix fermés, boutons génériques"]},{"id":"ydeep","name":"YDEEP","headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":true,"meeting_warning":null,"doing":[{"id":"core-sync","result":"Sync du cerveau","status":"en cours","next":null,"url":null,"owner":"(main)","local_id":"core-sync"}],"missing_from_you":[{"key":"core-source-de-verite","question":"trancher la source de verite","options":[{"value":"fait","label":"c’est fait"},{"value":"on-en-parle","label":"on en parle"},{"value":"plus-tard","label":"plus tard"}],"url":null,"owner":"(main)","local_id":"core-source-de-verite"}],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune prochaine réunion enregistrée","coûts à mesurer","1 décision sans choix fermés, boutons génériques"]},{"id":"cria","name":"CRIA","headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":true,"meeting_warning":null,"doing":[],"missing_from_you":[],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune prochaine réunion enregistrée","coûts à mesurer"]},{"id":"firstmate","name":"Firstmate","headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":true,"meeting_warning":null,"doing":[],"missing_from_you":[],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune prochaine réunion enregistrée","coûts à mesurer"]},{"id":"solos","name":"Solos","headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":true,"meeting_warning":null,"doing":[],"missing_from_you":[],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune prochaine réunion enregistrée","coûts à mesurer"]}],"unassigned":[{"id":"sacem-relance","what":"SACEM: relancer Sabine"}],"warnings":[],"table_missing":false}
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  /* Refus explicite : une page dont les donnees sont illisibles le dit,
+     plutot que de ressembler a une flotte vide. */
+  function renderError(msg) {
+    var main = document.getElementById("pj-main");
+    main.innerHTML = "";
+    var box = el("div", "err");
+    box.appendChild(el("h2", "", "Cette page n'a pas pu se charger"));
+    box.appendChild(el("p", "", msg + ". Demande à firstmate de la régénérer."));
+    main.appendChild(box);
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+  function link(text, url, cls, refused) {
+    if (!url) return el("span", cls || "", text + (refused ? " · lien refusé, hors réseau autorisé" : ""));
+    var a = el("a", cls || "", text);
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    return a;
+  }
+  function tag(text, ok) {
+    return el("span", "tag" + (ok ? " ok" : ""), text);
+  }
+  function utf8ByteLength(s) {
+    return typeof TextEncoder === "function" ? new TextEncoder().encode(s).length : s.length;
+  }
+  function plural(n, one, many) { return n + " " + (n > 1 ? many : one); }
+
+  var ICONS = {
+    /* trois icones minimales, trait 1.6, monochromes */
+    workers: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg>',
+    decisions: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="m16 15 2.2 2.2L22 13"/></svg>',
+    subscriptions: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5l6 3.5"/></svg>'
+  };
+
+  var raw, data;
+  try {
+    raw = document.getElementById("projets-data").textContent;
+    data = JSON.parse(raw);
+  } catch (e) {
+    renderError("Les données de la page sont illisibles");
+    return;
+  }
+  if (!data || data.schema !== "fm-projets-board.v1" || !Array.isArray(data.projects)) {
+    renderError("Les données de la page ne sont pas au format attendu");
+    return;
+  }
+
+  try {
+  /* --- barre du haut ------------------------------------------------------ */
+  document.getElementById("pj-meta").textContent =
+    "mis à jour " + data.updated_label + " · à chaque événement";
+  var badges = document.getElementById("pj-badges");
+  function badge(kind, value, label, soft) {
+    var b = el("div", "badge" + (soft ? " soft" : ""));
+    b.setAttribute("data-badge", kind);
+    var ic = el("span", "ic");
+    ic.innerHTML = ICONS[kind];
+    b.appendChild(ic);
+    var t = el("span", "");
+    t.appendChild(el("b", "", value));
+    t.appendChild(el("small", "", label));
+    b.appendChild(t);
+    badges.appendChild(b);
+  }
+  var bd = data.badges || {};
+  badge("workers", String(bd.workers || 0), (bd.workers === 1 ? "worker en cours" : "workers en cours"));
+  badge("decisions", String(bd.decisions || 0), (bd.decisions === 1 ? "décision à prendre" : "décisions à prendre"));
+  badge("subscriptions", bd.subscriptions || "à mesurer", "abonnements dépensés", !bd.subscriptions);
+
+  var notice = document.getElementById("pj-notice");
+  if (data.table_missing) {
+    notice.hidden = false;
+    notice.textContent = "La table des projets n'est pas encore écrite : un projet par dépôt en attendant. Demande à firstmate de la remplir.";
+  }
+
+  /* --- rail : ordre du payload (le composeur trie : le plus de « il manque de toi » en haut) --- */
+  if (data.warnings && data.warnings.length) {
+    notice.hidden = false;
+    notice.textContent += (notice.textContent ? " · " : "") + data.warnings.join(" · ");
+  }
+
+  var projects = data.projects.slice();
+  var unassigned = Array.isArray(data.unassigned) ? data.unassigned : [];
+  if (unassigned.length) {
+    projects.push({ id: "sans-projet", name: "Sans projet", synthetic: true, items: unassigned,
+      doing: [], missing_from_you: [], missing_from_others: [], pages: [], journal: [], meeting: null, gaps: [],
+      costs: null });
+  }
+  var nav = document.getElementById("pj-nav");
+  var main = document.getElementById("pj-main");
+  var navButtons = [];
+  projects.forEach(function (p, i) {
+    var b = el("button", "");
+    b.type = "button";
+    b.setAttribute("data-project", p.id);
+    b.appendChild(el("span", "", p.name));
+    var n = p.synthetic ? p.items.length : p.missing_from_you.length;
+    b.appendChild(el("span", "n" + (n ? "" : " z"), String(n)));
+    b.addEventListener("click", function () { show(i); });
+    nav.appendChild(b);
+    navButtons.push(b);
+  });
+  nav.appendChild(el("div", "foot", "Le chiffre : ce qui manque de toi. Le plus urgent en haut."));
+
+  /* --- une carte par projet, sept blocs -------------------------------------- */
+  function bloc(num, title, open) {
+    var d = el("details", "bloc");
+    d.setAttribute("data-bloc", String(num));
+    if (open) d.open = true;
+    var s = el("summary", "");
+    var h = el("h3", "");
+    h.appendChild(el("b", "", num + ". "));
+    h.appendChild(el("span", "", title));
+    s.appendChild(h);
+    d.appendChild(s);
+    var body = el("div", "body");
+    d.appendChild(body);
+    return { node: d, body: body };
+  }
+
+  function renderDoing(body, rows, partial) {
+    if (!rows.length) { body.appendChild(el("p", "empty", partial ? "État partiel : activité non confirmée." : "Rien en cours sur ce projet.")); return; }
+    var wrap = el("div", "scrollx");
+    var t = el("table", "doing");
+    var thead = el("tr", "");
+    ["Résultat", "Où ça en est", "Ensuite"].forEach(function (h) { thead.appendChild(el("th", "", h)); });
+    t.appendChild(thead);
+    var hiddenRows = [];
+    rows.forEach(function (r, i) {
+      var tr = el("tr", "");
+      tr.setAttribute("data-doing", r.id);
+      var td1 = el("td", "");
+      td1.appendChild(link(r.result, r.url, "", r.url_refused));
+      tr.appendChild(td1);
+      tr.appendChild(el("td", "", r.status));
+      tr.appendChild(el("td", r.next ? "" : "dim", r.next || "rien de ton côté"));
+      if (i >= 3) { tr.hidden = true; hiddenRows.push(tr); }
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+    body.appendChild(wrap);
+    if (hiddenRows.length) {
+      var more = el("button", "more", "voir tout (" + rows.length + ")");
+      more.type = "button";
+      var shown = false;
+      more.addEventListener("click", function () {
+        shown = !shown;
+        hiddenRows.forEach(function (tr) { tr.hidden = !shown; });
+        more.textContent = shown ? "voir moins" : "voir tout (" + rows.length + ")";
+      });
+      body.appendChild(more);
+    }
+  }
+
+  function renderYou(body, project) {
+    var rows = project.missing_from_you;
+    if (!rows.length) { body.appendChild(el("p", "empty", project.partial ? "État partiel : décisions non confirmées." : "Rien ne manque de toi sur ce projet.")); return; }
+    var ul = el("ul", "you");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      li.setAttribute("data-decision", r.key);
+      var q = el("span", "q");
+      q.appendChild(link(r.question, r.url, "", r.url_refused));
+      li.appendChild(q);
+      var btns = el("div", "btns");
+      var ok = el("span", "ok");
+      r.options.forEach(function (o) {
+        var b = el("button", "btn", o.label);
+        b.type = "button";
+        b.setAttribute("data-choice", o.value);
+        b.addEventListener("click", function () {
+          /* Le bouton ENVOIE a firstmate ; rien n'agit depuis la page. Le
+             contexte porte projet/decision/choix, jamais le couple
+             question/answer que l'entree a cle lit : un clic ne peut pas
+             fermer une decision, firstmate repose la question en chat. */
+          var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
+          if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
+          if (!window.lavish || typeof window.lavish.queuePrompt !== "function" || typeof window.lavish.sendQueuedPrompts !== "function") {
+            li.className = "refused";
+            ok.textContent = "non transmis : ouvre cette page dans Lavish";
+            return;
+          }
+          function sent() {
+            li.className = "sent";
+            ok.textContent = "envoyé à firstmate : " + o.label + ". Firstmate te reposera la question en chat avant d'agir.";
+          }
+          function failed() {
+            li.className = "refused";
+            ok.textContent = "non transmis : l’envoi a échoué, réessaie dans Lavish";
+          }
+          try {
+            window.lavish.queuePrompt(text, {
+              tag: "choice", text: project.name + " : " + r.question + " -> " + o.label, element: li,
+              data: { projet: project.id, decision: r.key, choix: o.value }
+            });
+            var result = window.lavish.sendQueuedPrompts();
+            if (result && typeof result.then === "function") result.then(function (value) { if (value === false) failed(); else sent(); }, failed);
+            else if (result === false) failed(); else sent();
+          } catch (e) { failed(); }
+
+        });
+        btns.appendChild(b);
+      });
+      li.appendChild(btns);
+      li.appendChild(ok);
+      ul.appendChild(li);
+    });
+    body.appendChild(ul);
+  }
+
+  function renderOthers(body, rows) {
+    if (!rows.length) { body.appendChild(el("p", "empty", "Aucune attente des autres n'est enregistrée.")); return; }
+    var ul = el("ul", "tl");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      li.appendChild(el("b", "", r.who + " : "));
+      li.appendChild(el("span", "", r.what));
+      if (r.tag) li.appendChild(tag(r.tag));
+      ul.appendChild(li);
+    });
+    body.appendChild(ul);
+  }
+
+  function renderPages(body, rows) {
+    if (!rows.length) { body.appendChild(el("p", "empty", "Aucune page de gestion n'est enregistrée.")); return; }
+    var ul = el("ul", "tl");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      li.appendChild(link(r.label, r.url, "", r.url_refused));
+      if (r.state) li.appendChild(tag(r.state, /à jour|publié/.test(r.state)));
+      ul.appendChild(li);
+    });
+    body.appendChild(ul);
+  }
+
+  function renderCosts(body, costs) {
+    var c = costs || { period: "ce mois", tokens_api: null, subscription_share: null, source: "" };
+    var wrap = el("div", "scrollx");
+    var t = el("table", "");
+    var thead = el("tr", "");
+    ["Jetons, valeur API", "Part de tes abonnements"].forEach(function (h) { thead.appendChild(el("th", "", h)); });
+    t.appendChild(thead);
+    var tr = el("tr", "");
+    tr.appendChild(el("td", c.tokens_api ? "" : "dim", c.tokens_api || "à mesurer"));
+    tr.appendChild(el("td", c.subscription_share ? "" : "dim", c.subscription_share || "à mesurer"));
+    t.appendChild(tr);
+    wrap.appendChild(t);
+    body.appendChild(wrap);
+    if (c.source) body.appendChild(el("div", "src", c.source));
+  }
+
+  function renderJournal(body, rows) {
+    if (!rows.length) { body.appendChild(el("p", "empty", "Aucun événement récent.")); return; }
+    var ul = el("ul", "tl");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      if (r.when) li.appendChild(el("span", "", r.when + " · "));
+      li.appendChild(link(r.what, r.url, "", r.url_refused));
+      ul.appendChild(li);
+    });
+    body.appendChild(ul);
+  }
+
+  function frDate(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    return m ? m[3] + "/" + m[2] : iso;
+  }
+  function renderMeeting(body, m, available) {
+    if (!m) { body.appendChild(el("p", "empty", available ? "Aucune reunion a venir dans ton agenda pour ce projet" : "Agenda non lu : fichier absent ou vieux de plus d’un jour")); return; }
+    var ul = el("ul", "tl");
+    var li = el("li", "");
+    li.appendChild(el("b", "", m.title + ", " + frDate(m.date)));
+    if (m.time) li.appendChild(el("span", "", " à " + m.time));
+    if (m.source) li.appendChild(el("span", "", " · " + m.source));
+    if (m.with) li.appendChild(el("span", "", " avec " + m.with));
+    ul.appendChild(li);
+    if (m.bring && m.bring.length) ul.appendChild(el("li", "", "À emporter : " + m.bring.join(", ")));
+    if (m.decide && m.decide.length) ul.appendChild(el("li", "", "À décider : " + m.decide.join(", ")));
+    body.appendChild(ul);
+  }
+
+  function renderUnassigned(body, items) {
+    var ul = el("ul", "tl");
+    items.forEach(function (it) { ul.appendChild(el("li", "", it.what)); });
+    body.appendChild(ul);
+    body.appendChild(el("div", "src", plural(items.length, "élément à rattacher", "éléments à rattacher") + " à un projet : c'est ce que le cerveau ne sait pas encore ranger."));
+  }
+
+  function card(p) {
+    var c = el("section", "card");
+    c.setAttribute("data-project", p.id);
+    var head = el("div", "head");
+    head.appendChild(el("h2", "", p.name));
+    if (p.deadline) head.appendChild(el("div", "deadline", "Prochaine échéance : " + p.deadline.label + ", " + frDate(p.deadline.date)));
+    if (p.team) head.appendChild(el("div", "team", p.team));
+    if (p.headline) head.appendChild(el("div", "headline", p.headline));
+    c.appendChild(head);
+
+    if (p.synthetic) {
+      var b0 = bloc(0, "sans projet", true);
+      renderUnassigned(b0.body, p.items);
+      c.appendChild(b0.node);
+      return c;
+    }
+
+    var narrow = typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 720;
+    var b1 = bloc(1, "On est en train de", !narrow); renderDoing(b1.body, p.doing, p.partial); c.appendChild(b1.node);
+    var b2 = bloc(2, "Il manque de toi", true); renderYou(b2.body, p); c.appendChild(b2.node);
+    var b3 = bloc(3, "Il manque des autres", !narrow); renderOthers(b3.body, p.missing_from_others); c.appendChild(b3.node);
+    var b4 = bloc(4, "Pages de gestion", !narrow); renderPages(b4.body, p.pages); c.appendChild(b4.node);
+    var b5 = bloc(5, "Coûts du mois (" + ((p.costs && p.costs.period) || "ce mois") + ")", !narrow); renderCosts(b5.body, p.costs); c.appendChild(b5.node);
+    var b6 = bloc(6, "Journal, les 5 derniers événements", !narrow); renderJournal(b6.body, p.journal); c.appendChild(b6.node);
+    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m, p.agenda_available); });
+    if (p.meeting_warning) b7.body.appendChild(el("p", "", p.meeting_warning));
+    b7.body.appendChild(el("p", "src", "La prochaine reunion est lue depuis ton agenda ; ce qui n'y est pas n'y entre pas encore.")); c.appendChild(b7.node);
+
+    if (p.gaps && p.gaps.length) {
+      var g = el("div", "gaps");
+      g.appendChild(el("h3", "", "Ce que le cerveau ne sait pas encore"));
+      var ul = el("ul", "tl");
+      p.gaps.forEach(function (s) { ul.appendChild(el("li", "", s)); });
+      g.appendChild(ul);
+      c.appendChild(g);
+    }
+    return c;
+  }
+
+  var cards = projects.map(card);
+  cards.forEach(function (c) { main.appendChild(c); });
+
+  var active = 0;
+  function show(i) {
+    active = Math.max(0, Math.min(cards.length - 1, i));
+    cards.forEach(function (c, j) { c.hidden = j !== active; });
+    navButtons.forEach(function (b, j) { b.className = j === active ? "on" : ""; });
+    if (typeof history !== "undefined" && history.replaceState && projects[active]) {
+      try { history.replaceState(null, "", "#" + projects[active].id); } catch (e) { /* file:// */ }
+    }
+  }
+  if (!cards.length) {
+    main.appendChild(el("p", "empty", "Aucun projet à afficher."));
+  } else {
+    var start = 0;
+    if (typeof location !== "undefined" && location.hash) {
+      var want = location.hash.slice(1);
+      projects.forEach(function (p, i) { if (p.id === want) start = i; });
+    }
+    show(start);
+  }
+  } catch (e) {
+    renderError("La page n'a pas pu être dessinée");
+  }
+})();
+</script>
+</body>
+</html>

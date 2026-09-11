@@ -1,0 +1,481 @@
+{
+  "schema": "fm-projets-board.v1",
+  "home": "test/home",
+  "generated": "2026-09-11T09:00:00Z",
+  "updated_label": "11/09 09h00",
+  "badges": {
+    "workers": 3,
+    "decisions": 8,
+    "subscriptions": null
+  },
+  "projects": [
+    {
+      "id": "torre",
+      "name": "Torre",
+      "headline": "Pilote le 14/09 avec Eli",
+      "team": "Eli · Yan",
+      "deadline": {
+        "label": "Pilote sur place",
+        "date": "2026-09-14"
+      },
+      "partial": false,
+      "meetings": [
+        {
+          "title": "Pilote sur place",
+          "date": "2026-09-14",
+          "time": null,
+          "with": "Eli",
+          "bring": [
+            "la démo"
+          ],
+          "decide": [
+            "l enveloppe"
+          ],
+          "source": "chat"
+        },
+        {
+          "title": "Pilote sur place",
+          "date": "2026-09-15",
+          "time": "10:00",
+          "with": "Eli",
+          "bring": [],
+          "decide": [],
+          "source": "agenda"
+        }
+      ],
+      "agenda_available": true,
+      "meeting_warning": "l’agenda et le chat ne disent pas la même chose",
+      "doing": [
+        {
+          "id": "torre-interfaces",
+          "result": "interfaces v0 pour la direction",
+          "status": "livré",
+          "next": "fusion à confirmer",
+          "url": "https://github.com/acme/agent-platform/pull/58",
+          "owner": "(main)",
+          "local_id": "torre-interfaces"
+        },
+        {
+          "id": "torre-audit",
+          "result": "audit Shopify contre Stripe",
+          "status": "en cours",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-audit"
+        },
+        {
+          "id": "torre-site",
+          "result": "site click and collect",
+          "status": "en pause, attente extérieure · en attente du numero Meta de Bechir",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-site"
+        },
+        {
+          "id": "torre-hermes",
+          "result": "préparer la démonstration",
+          "status": "en cours",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-hermes"
+        }
+      ],
+      "missing_from_you": [
+        {
+          "key": "torre-hebergement",
+          "question": "Hébergement : chez toi ou chez Torre ?",
+          "options": [
+            {
+              "value": "chez-toi",
+              "label": "chez toi"
+            },
+            {
+              "value": "chez-torre",
+              "label": "chez Torre"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-hebergement"
+        },
+        {
+          "key": "torre-paiement",
+          "question": "Paiement du pilote : quelle solution ?",
+          "options": [
+            {
+              "value": "square",
+              "label": "Square"
+            },
+            {
+              "value": "stripe",
+              "label": "Stripe"
+            },
+            {
+              "value": "later",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-paiement"
+        },
+        {
+          "key": "torre-demo",
+          "question": "La démonstration est-elle prête ?",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "torre-demo"
+        }
+      ],
+      "missing_from_others": [
+        {
+          "who": "Eli",
+          "what": "les factures fournisseur",
+          "tag": "avant le 11/09"
+        }
+      ],
+      "pages": [
+        {
+          "label": "Espace client",
+          "state": "à jour 10/09",
+          "url": "https://example.test/client"
+        }
+      ],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": "123 EUR au prix API",
+        "subscription_share": "14.5 % de tes abonnements",
+        "source": "journaux de sessions, prix API publics"
+      },
+      "journal": [
+        {
+          "at": "2026-09-10",
+          "kind": "landed",
+          "when": "10/09",
+          "what": "cerveau achats v1",
+          "url": "https://github.com/acme/agent-platform/pull/61"
+        },
+        {
+          "at": "2026-09-10",
+          "kind": "landed",
+          "when": "10/09",
+          "what": "page architecture",
+          "url": "https://github.com/acme/x-deep/pull/229"
+        },
+        {
+          "at": "2026-09-10",
+          "kind": "landed",
+          "when": "10/09",
+          "what": "agent interne Hermes v0",
+          "url": "https://github.com/acme/agent-platform/pull/59"
+        },
+        {
+          "at": "2026-09-10",
+          "kind": "landed",
+          "when": "10/09",
+          "what": "agent client WhatsApp v0",
+          "url": "https://github.com/acme/agent-platform/pull/60"
+        },
+        {
+          "at": "2026-09-09",
+          "kind": "landed",
+          "when": "09/09",
+          "what": "cerveau achats v0",
+          "url": "https://github.com/acme/agent-platform/pull/56"
+        }
+      ],
+      "meeting": {
+        "title": "Pilote sur place",
+        "date": "2026-09-14",
+        "time": null,
+        "with": "Eli",
+        "bring": [
+          "la démo"
+        ],
+        "decide": [
+          "l enveloppe"
+        ],
+        "source": "chat"
+      },
+      "gaps": [
+        "1 décision sans choix fermés, boutons génériques",
+        "1 décision mise de côté, datée ou ancienne"
+      ]
+    },
+    {
+      "id": "club",
+      "name": "Club Julien Dumas",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": true,
+      "meeting_warning": null,
+      "doing": [
+        {
+          "id": "chef-parcours",
+          "result": "parcours client",
+          "status": "bloqué",
+          "next": "firstmate doit débloquer",
+          "url": null,
+          "owner": "(main)",
+          "local_id": "chef-parcours"
+        }
+      ],
+      "missing_from_you": [
+        {
+          "key": "chef-domaine",
+          "question": "basculer le domaine",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "chef-domaine"
+        },
+        {
+          "key": "chef-rose",
+          "question": "le rose des Anglades",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "chef-rose"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [
+        {
+          "at": "2026-09-08",
+          "kind": "landed",
+          "when": "08/09",
+          "what": "Julia moins scolaire",
+          "url": "https://github.com/acme/agent-platform/pull/40"
+        }
+      ],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune prochaine réunion enregistrée",
+        "coûts à mesurer",
+        "2 décisions sans choix fermés, boutons génériques"
+      ]
+    },
+    {
+      "id": "ydeep",
+      "name": "YDEEP",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": true,
+      "meeting_warning": null,
+      "doing": [
+        {
+          "id": "core-sync",
+          "result": "Sync du cerveau",
+          "status": "en cours",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "core-sync"
+        }
+      ],
+      "missing_from_you": [
+        {
+          "key": "core-source-de-verite",
+          "question": "trancher la source de verite",
+          "options": [
+            {
+              "value": "fait",
+              "label": "c’est fait"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            },
+            {
+              "value": "plus-tard",
+              "label": "plus tard"
+            }
+          ],
+          "url": null,
+          "owner": "(main)",
+          "local_id": "core-source-de-verite"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune prochaine réunion enregistrée",
+        "coûts à mesurer",
+        "1 décision sans choix fermés, boutons génériques"
+      ]
+    },
+    {
+      "id": "cria",
+      "name": "CRIA",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": true,
+      "meeting_warning": null,
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune prochaine réunion enregistrée",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "firstmate",
+      "name": "Firstmate",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": true,
+      "meeting_warning": null,
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune prochaine réunion enregistrée",
+        "coûts à mesurer"
+      ]
+    },
+    {
+      "id": "solos",
+      "name": "Solos",
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": true,
+      "meeting_warning": null,
+      "doing": [],
+      "missing_from_you": [],
+      "missing_from_others": [],
+      "pages": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune prochaine réunion enregistrée",
+        "coûts à mesurer"
+      ]
+    }
+  ],
+  "unassigned": [
+    {
+      "id": "sacem-relance",
+      "what": "SACEM: relancer Sabine"
+    }
+  ],
+  "warnings": [],
+  "table_missing": false
+}

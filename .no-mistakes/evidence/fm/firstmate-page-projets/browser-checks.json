@@ -1,0 +1,93 @@
+{
+  "fixture": "Synthetic fleet, costs and agenda; real composer, renderer and Chrome. Successful transport is simulated; no user decision or external message is sent.",
+  "checks": [
+    "Voir tout expands three visible rows to four.",
+    "Rail navigation displays only Solos."
+  ],
+  "desktop": {
+    "width": 1440,
+    "scrollWidth": 1440,
+    "rail": [
+      "torre",
+      "club",
+      "ydeep",
+      "cria",
+      "firstmate",
+      "solos",
+      "sans-projet"
+    ],
+    "visible": [
+      "torre"
+    ],
+    "badges": [
+      "3\nWORKERS EN COURS",
+      "8\nDÉCISIONS À PRENDRE",
+      "à mesurer\nABONNEMENTS DÉPENSÉS"
+    ],
+    "open": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "doing": 3,
+    "journal": 5
+  },
+  "mobile": {
+    "width": 390,
+    "scrollWidth": 390,
+    "rail": [
+      "torre",
+      "club",
+      "ydeep",
+      "cria",
+      "firstmate",
+      "solos",
+      "sans-projet"
+    ],
+    "visible": [
+      "torre"
+    ],
+    "badges": [
+      "3\nWORKERS EN COURS",
+      "8\nDÉCISIONS À PRENDRE",
+      "à mesurer\nABONNEMENTS DÉPENSÉS"
+    ],
+    "open": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "doing": 3,
+    "journal": 5
+  },
+  "refusal": "non transmis : ouvre cette page dans Lavish",
+  "simulatedTransport": {
+    "prompts": [
+      {
+        "prompt": "Projets · Torre · Hébergement : chez toi ou chez Torre ? : chez toi",
+        "options": {
+          "tag": "choice",
+          "text": "Torre : Hébergement : chez toi ou chez Torre ? -> chez toi",
+          "element": {},
+          "data": {
+            "projet": "torre",
+            "decision": "torre-hebergement",
+            "choix": "chez-toi"
+          }
+        }
+      }
+    ],
+    "sends": 1,
+    "message": "envoyé à firstmate : chez toi. Firstmate te reposera la question en chat avant d'agir.",
+    "decisions": 3
+  },
+  "runtimeErrors": []
+}
