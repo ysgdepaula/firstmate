@@ -214,7 +214,7 @@ cpu_count() {
 family_for_basename() {
   case "$1" in
     fm-arm-pretool-check.test.sh|fm-ask-user-authority.test.sh|\
-    fm-bearings-board.test.sh|\
+    fm-bearings-board.test.sh|fm-projets-board.test.sh|fm-projets-couts.test.sh|\
     fm-brief.test.sh|fm-vendor-auth-probe.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
@@ -310,6 +310,7 @@ family_for_basename() {
       printf '%s\n' afk
       ;;
     fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|\
+    fm-projets-board-render.test.sh|fm-projets-board-chrome.test.sh|fm-projets-events.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -617,6 +618,9 @@ tests/fm-procevent-quota.test.sh 1949
 tests/fm-procevent-when.test.sh 17392
 tests/fm-procevent.test.sh 69715
 tests/fm-project-origin.test.sh 137
+tests/fm-projets-board-render.test.sh 7838
+tests/fm-projets-board.test.sh 18711
+tests/fm-projets-serve.test.sh 6000
 tests/fm-public-followup.test.sh 196745
 tests/fm-quota-array-dispatch-live-e2e.test.sh 21
 tests/fm-quota-choose.test.sh 1461
@@ -1299,6 +1303,21 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-procevent-when.test.sh
       printf '%s\n' __script__:fm-remote-reply.test.sh
       ;;
+    bin/fm-projets-couts.sh|bin/fm-projets-couts.py)
+      printf '%s\n' __script__:fm-projets-couts.test.sh
+      ;;
+    bin/fm-projets-serve.sh|bin/fm-projets-serve.py)
+      printf '%s\n' __script__:fm-projets-serve.test.sh
+      ;;
+    bin/fm-projets-board.sh|bin/fm-projets-data.jq|.agents/skills/projets/assets/*)
+      printf '%s\n' __script__:fm-projets-board.test.sh __script__:fm-projets-board-render.test.sh __script__:fm-projets-board-chrome.test.sh
+      ;;
+    bin/fm-task-events-lib.sh)
+      printf '%s\n' __script__:fm-projets-events.test.sh
+      ;;
+    bin/fm-fleet-events.jq)
+      printf '%s\n' snapshot-bearings
+      ;;
     bin/fm-timeout-lib.sh)
       # The shared hard bound: session start's runtime bound, the fleet/bearings
       # snapshots, the vendor auth probe, the stow cascade's per-home step, and
@@ -1419,6 +1438,12 @@ families_for_changed_path() {
         families_for_unmapped_bin "$path" \
           || printf '%s\n' "__unmapped__:$path"
       fi
+      ;;
+    tests/assets/*)
+      # A render harness or other shared asset belongs to whichever suite
+      # names it, found by the same reference scan used for shared helpers.
+      families_for_test_reference "$(basename "$path")" \
+        || printf '%s\n' "__unmapped__:$path"
       ;;
     tests/*)
       printf '%s\n' "__unmapped__:$path"

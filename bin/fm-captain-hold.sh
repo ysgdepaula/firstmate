@@ -202,10 +202,12 @@
 # one captain call. See "record divergence" beside command_diverged below.
 #
 # Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, or repaired.
+# decision digest, `Resolution at:` (ISO UTC), and a `Resolution mode:` of answered, released, or repaired.
 # Records written by the retired fm-decision-hold.sh (routed, declined,
 # answered, repaired) are recognized everywhere a record is read, so nothing
-# already closed needs rewriting.
+# already closed needs rewriting. New dated answers are also retained in
+# data/<id>/events.jsonl through fm-task-events-lib.sh, including on replay after
+# an interrupted close; legacy undated answers keep their existing day-only evidence.
 #
 # Parent channel: inside a secondmate home a task held for the captain, and its
 # answer, are captain-facing facts the moment they are recorded, so `hold`
@@ -242,6 +244,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-task-events-lib.sh
+. "$SCRIPT_DIR/fm-task-events-lib.sh"
 
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
   local id=$1 occurrence=$2 verb=$3 note=$4 rc=0
@@ -492,8 +496,8 @@ recorded_resolution_mode() {  # <task-body>
 }
 
 resolution_block() {  # <mode>
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\nCaptain decision:\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$DECISION_TEXT"
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\nResolution at: %s\n\nCaptain decision:\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DECISION_TEXT"
 }
 
 # Durable state of one captain call: an active captain hold (annotations
@@ -1204,10 +1208,17 @@ close_answered() {  # <task-id> <release-0-or-1>
 }
 
 remove_interrupted_answer_stamp() {  # <task-id>
-  local id=$1 show body existing tmp
+  local id=$1 show body existing tmp at occurrence repo
   show=$(task_show "$id") || fail "task $id disappeared after closing"
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the closed body for $id"
+  at=$(printf '%s\n' "$body" | sed -n 's/^Resolution at: //p' | head -1)
+  if [ -n "$at" ]; then
+    occurrence=$(resolution_record_count "$(show_field "$show" body)")
+    repo=$(show_field_value "$show" repo)
+    fm_task_event_append "$DATA" "$id" "decision:$occurrence:$DECISION_DIGEST" "$at" decision "$DECISION_TEXT" "" "$repo" \
+      || fail "could not preserve the captain decision event for $id"
+  fi
   existing=$(body_hold_set_timestamp "$body")
   [ -n "$existing" ] || return 0
   body=${body#"Captain hold set: $existing"}

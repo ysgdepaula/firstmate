@@ -51,12 +51,17 @@
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
 # it publishes the meta first, so a crash
 # leaves the meta itself as the evidence that the row is owed a start.
+# Non-PR close and retain transitions preserve a timestamped delivery through
+# fm-task-events-lib.sh before changing the row, without closing a retained call.
+# Its result title is limited to 240 characters; repeated transitions preserve it.
 # A captain-held row uses the same record with a `mode=retain` line: replay then
 # records the deliverable and reopens the row instead of closing it, and never
 # closes a row that reads as an open captain call. An answer that closed the row
 # first simply retires the record.
 
 _FM_BACKLOG_TRANSITION_LIB_DIR=$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+# shellcheck source=bin/fm-task-events-lib.sh
+. "$_FM_BACKLOG_TRANSITION_LIB_DIR/fm-task-events-lib.sh"
 
 # Set by fm_backlog_transition_applies for a return-1 exemption.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
@@ -715,9 +720,45 @@ fm_backlog_dispatch_rollback() {
   return 0
 }
 
+fm_backlog_preserve_delivery() {
+  local meta=$1 data=$2 id=$3
+  shift 3
+  local arg pr_close=0 repo='' title fields shown
+  for arg in "$@"; do
+    [ "$arg" != --pr ] || pr_close=1
+  done
+  if [ "$pr_close" = 0 ]; then
+    fm_backlog_row_probe "$data" "$id" || return 1
+    if [ "${FM_BACKLOG_ROW_STATE%% *}" != "done" ]; then
+      shown=$(fm_backlog_row_show "$data" "$id") || return 1
+      fields=$(printf '%s\n' "$shown" | jq -Rn '
+        def field($name):
+          [.[] | select(startswith("  " + $name + ": ")) | ltrimstr("  " + $name + ": ")][0] // ""
+          | if startswith("\"") then fromjson else . end
+          | if . == "-" then "" else . end;
+        [inputs] | {title:(field("title") | gsub("\\s+"; " ") | if length > 240 then .[:239] + "…" else . end),repo:field("repo")}
+      ') || return 1
+      title=$(printf '%s' "$fields" | jq -r .title) || return 1
+      repo=$(printf '%s' "$fields" | jq -r .repo) || return 1
+      [ -n "$title" ] || title=$id
+      if [ -z "$repo" ] && [ -n "$meta" ] && [ -f "$meta" ]; then
+        repo=$(sed -n 's/^project=//p' "$meta" | tail -1)
+        repo=${repo%/}
+        repo=${repo##*/}
+      fi
+      fm_task_event_append "$data" "$id" "landed:$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        landed "$title" '' "$repo" || {
+          FM_BACKLOG_TRANSITION_ERROR="could not preserve delivery event for $id"
+          return 1
+        }
+    fi
+  fi
+}
+
 fm_backlog_close_transition() {
   local meta=$1 marker=$2 data=$3 id=$4 state=$5
   shift 5
+  fm_backlog_preserve_delivery "$meta" "$data" "$id" "$@" || return 1
   [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
   fm_backlog_done "$data" "$id" "$@" || return 1
   fm_backlog_record_remove "$marker" "pending-close record" "$state"
@@ -728,6 +769,7 @@ fm_backlog_close_transition() {
 fm_backlog_retain_transition() {
   local meta=$1 marker=$2 data=$3 id=$4 state=$5
   shift 5
+  fm_backlog_preserve_delivery "$meta" "$data" "$id" "$@" || return 1
   [ -z "$meta" ] || fm_backlog_record_remove "$meta" "task record" "$state" || return 1
   fm_backlog_retain "$data" "$id" "$@" || return 1
   fm_backlog_record_remove "$marker" "pending-close record" "$state"

@@ -115,6 +115,17 @@ env.update(GITHUB_EVENT_PATH=str(event), GITHUB_OUTPUT=str(output),
            GITHUB_API_URL=f"http://127.0.0.1:{server.server_port}")
 try:
     for label, archived, live, http_status, expected, diagnostic in (
+        # Keep the same archived event through a CI-fix publication cycle.
+        # The live body must be republished after the fix advances the head;
+        # replaying the event alone cannot recover the failed check.
+        ("before CI fix push", pr(old, old), pr(old, old), 200, 0,
+         "Found structurally compliant"),
+        ("CI fix pushed without attestation refresh", pr(old, old), pr(new, old), 200, 1,
+         "head_sha does not match"),
+        ("rerun before attestation refresh", pr(old, old), pr(new, old), 200, 1,
+         "head_sha does not match"),
+        ("same event after attestation refresh", pr(old, old), pr(new, new), 200, 0,
+         "Found structurally compliant"),
         ("rerun after body refresh", pr(new, old), pr(new, new), 200, 0,
          "Found structurally compliant"),
         ("push before body refresh", pr(new, old), pr(new, old), 200, 1,

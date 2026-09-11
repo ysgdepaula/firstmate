@@ -530,6 +530,134 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Projects page (config/projets.json, data/projets-couts.json, data/projets-agenda.json)
+
+`config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page.
+[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the brain card, or to the page's "sans projet" entry when no brain card is configured.
+Without the table every repo becomes its own project and the page says the table is missing.
+Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP, Firstmate and the brain card Cerveau; an existing table is preserved unless `--force` is passed.
+All configured projects remain visible, including those without activity.
+The shared `agent-platform` repository is deliberately absent from the seed: project prefixes distinguish its work.
+Secondmate routing uses the local task id after the slash, preserving the owner independently; ambiguous repository matches remain unassigned.
+This section is the single owner of these configuration schemas; the script header owns the page payload and the mechanics.
+
+```json
+{
+  "schema": "fm-projets-config.v1",
+  "projects": [
+    {
+      "id": "<slug, unique>",
+      "name": "<captain-facing name>",
+      "prefixes": ["<task-id prefix such as torre->", "..."],
+      "repos": ["<registry repo name>", "..."],
+      "team": "<optional team description>",
+      "deadline": {"label": "<next milestone>", "date": "YYYY-MM-DD"},
+      "headline": "<optional one-line context shown under the name>",
+      "missing_from_others": [{"who": "<person>", "what": "<what is expected>", "tag": "<optional date or state>"}],
+      "pages": [{"label": "<page name>", "url": "<optional allowed URL>", "state": "<optional state such as à jour 10/09>"}],
+      "meeting": {"title": "<title>", "date": "YYYY-MM-DD", "with": "<optional attendees>", "bring": ["..."], "decide": ["..."]},
+      "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}},
+      "recommendations": [{"what": "<what firstmate proposes>", "why": "<optional reason>", "url": "<optional allowed URL>"}],
+      "creations": [{"label": "<page, film or product material>", "url": "<optional allowed URL>", "kind": "<optional kind>"}],
+      "brain": false,
+      "articles": [{"title": "<article to validate, brain card only>", "url": "<optional allowed URL>"}],
+      "quick_wins": ["<brain card only>"]
+    }
+  ]
+}
+```
+
+At most one project carries `brain: true`: it is the captain's brain card, seeded as `cerveau`.
+That card swaps two blocks: "pas encore rattaché à un projet" lists every fleet row that matches no project (the page then has no separate "sans projet" entry), and "quick wins du cerveau" replaces the meeting block.
+Its `articles` become closed choices "validé / à revoir / plus tard" in "il manque de toi", and its `pages` are the brain's pages.
+Every project may carry `recommendations`, which become closed choices "on y va / pas maintenant / on en parle" tagged `recommandation` in "il manque de toi" because they wait on the captain, and `creations`, listed under the management pages.
+A recommendation, creation or article may be a plain string or an object; `what`, `why`, `label`, `kind` and `title` are captain-facing French.
+These lists contain pending recommendations and articles, and produced creations; every retained recommendation or article becomes a choice regardless of extra status fields.
+Empty or vocabulary-rejected primary text (`what`, `label`, `title`) excludes the entry; empty or rejected optional text (`why`, `kind`) becomes null while preserving the entry.
+Investigations running for a project (scout work) leave the "on est en train de" table for their own list under it, so results being built and knowledge being gathered stay apart.
+
+`id` and `name` identify each card; optional `prefixes` and `repos` route fleet rows to it, while cards without either can still display configured content.
+A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
+The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
+Missing `team` or `deadline` becomes a visible knowledge gap.
+Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, the Tailscale range 100.64/10 and hosts ending in .ts.net.
+Refused links are preserved as `url: null` with `url_refused` in the page payload, and visibly labeled in management pages, work, decisions and journal entries.
+All display text must be captain-facing French; after composition's filtering, remaining display text must pass the script's internal-vocabulary validator or `render` refuses the page.
+
+`data/projets-couts.json` is the gitignored output of `bin/fm-projets-couts.sh`, read by the same `compose`:
+
+```json
+{
+  "schema": "fm-projets-couts.v1",
+  "period": "YYYY-MM",
+  "projects": {"<project id>": {
+    "tokens_api_usd": 140.0, "tokens_api_eur": 123.4, "subscription_share_pct": 14.5,
+    "sources": {"measured": ["Claude : jetons du mois"], "missing": ["Codex : journaux non lus"]}
+  }}
+}
+```
+
+A project absent from that file shows "à mesurer" for both figures; the page never invents a cost.
+The subscriptions badge on top of the page comes from `quota-axi --json` at compose time, one consumed share per provider that reports an all-models window, and reads "à mesurer" when quota-axi is absent or silent.
+The producer reads Claude JSONL assistant usage for the selected UTC month, deduplicates request ids, and attributes sessions by the first user text naming a task status path, then by project prefix or repository folder suffix.
+Nested `<project>/<session>/subagents/agent-*.jsonl` logs inherit their parent session’s attribution and share the global request-id deduplication.
+A project with no valid request in the selected month has null amounts and share, no measured-source claim, and a named missing-source note, including when logs are malformed or contain only user messages.
+The subscription share is the project’s fraction of all Claude tokens read, including unattributed usage in the denominator; it is not a cash charge.
+The dated public model prices, cache creation tiers and read rates live in the Python helper; unknown models stay explicit in `sources.missing`.
+`--eur-rate` supplies EUR per USD; without it USD remains measured and EUR is unavailable because the private CRIA report and its conversion rate are not bundled.
+The output also records `price_date`, `price_source` and `eur_per_usd` for provenance.
+`data/projets-couts-cache.json` uses schema `fm-projets-couts-cache.v1`, a `period`, a `parser_version` and a `files` map keyed by absolute JSONL path, with `[mtime_ns, size]` signatures and parsed task, requests and missing-source notes; it is disposable and invalidated on month or parser-version changes.
+Only a costs file whose `period` matches composition is displayed; otherwise the page names both periods and leaves current costs unavailable.
+
+`data/projets-agenda.json` is a session-produced calendar reading through Wispr, with this schema:
+
+```json
+{
+  "schema": "fm-projets-agenda.v1",
+  "read_at": "2026-09-11T08:00:00Z",
+  "meetings": [{"project": "torre", "title": "Pilote", "date": "2026-09-14", "time": "10:00", "with": "Eli", "source": "agenda"}]
+}
+```
+
+`time` and `with` are optional; `read_at` is an ISO timestamp with a timezone and marks a successful read, including an empty calendar.
+A missing, invalid or older-than-one-day reading is unavailable; it never silently replaces a chat date.
+The page shows the next agenda meeting and upcoming chat meeting, combines equal title/date/time/attendees while preserving chat preparation, and keeps different readings with a disagreement notice.
+The project table’s optional top-level `timezone` is an IANA name, defaulting to `Europe/Paris`; `FM_PROJETS_TIMEZONE` overrides it.
+Dates and optional `HH:MM` times use that timezone; composition converts `--now` to it and excludes elapsed meetings before selecting the next one, for both calendar and chat.
+A date without a time remains eligible throughout that local day.
+A fresh empty reading says there are no upcoming meetings; an unavailable reading says the agenda has not been read.
+Bidirectional calendar synchronization is a following task, disclosed in block 7.
+These files are not inherited by secondmate homes.
+
+## Stable page address (config/projets-serve.json)
+
+`config/projets-serve.json` is the optional local, gitignored table of the base's stable HTTP front door on the tailnet, served by [`bin/fm-projets-serve.py`](../bin/fm-projets-serve.py) and operated by [`bin/fm-projets-serve.sh`](../bin/fm-projets-serve.sh).
+The server binds every interface on one reserved port so the stable address is reachable by the MagicDNS name from the captain's machines.
+`/projets` redirects with HTTP 302 and `Cache-Control: no-store` to the existing, non-ended Lavish session whose file matches `$FM_HOME/.lavish/projets.html`, preserving the bridge that sends button responses to firstmate.
+Rebuilding that file in place keeps the same page path and Lavish session.
+If the session is absent or Lavish does not answer, the route serves the page with a prominent French warning and marks its buttons as unsent; the index also discloses this fallback.
+Its index at `/` is the page the captain bookmarks: one line per thing reachable on the base, with its address and a state measured by a real request when the index is opened, never assumed.
+The page and folder measurements request their published routes through `127.0.0.1:<port>`, including following the page redirect; missing or unreadable content does not count as answering.
+The listing and at most eight concurrent HTTP probes share `FM_PROJETS_SERVE_INDEX_BUDGET` (default 3 seconds); rows still unmeasured at the deadline say « mesure inachevée », and the operator status request allows one extra second for the response.
+It lists the projets page, the Lavish reviews still open (from `lavish-axi`'s own listing), and the demos and shared folders declared in the table; declared folders are served read-only under `/fichiers/<id>/` and confined to their directory.
+This section is the single owner of the table schema; the script headers own the routes, the launchd mechanics and the operator commands.
+
+```json
+{
+  "schema": "fm-projets-serve.v1",
+  "port": 4390,
+  "host": "<MagicDNS name used in printed addresses, default: this machine's hostname>",
+  "entries": [{"label": "<demo or service>", "url": "<address to measure and link>"}],
+  "folders": [{"id": "<optional slug>", "label": "<shared folder>", "path": "<absolute directory>"}]
+}
+```
+
+The reserved port is 4390 by default, beside Lavish on 4387; change it in the table before installing.
+Use `bin/fm-projets-serve.sh install` for persistence at user login and restart after a crash; its header owns the private plist, LaunchAgents link, and installation, start, stop, status, URL and uninstall commands.
+The server reads this table at startup; restart the installed service with `bin/fm-projets-serve.sh start` after changing the host, port, demos or folders.
+The tailnet only covers the captain's own machines: the front door is never a client-facing surface, the index and the page say so, and client pages go through a paid subdomain in a separate piece of work.
+The table and the plist are not inherited by secondmate homes.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.

@@ -14,7 +14,8 @@
 #   - a main home reports to the captain through the durable wake queue.
 # A poll observed in a secondmate home also receives a local durable wake after
 # the upward write, so the mate can handle its own poll observation.
-# No new state file and no new transport are involved.
+# data/<id>/events.jsonl retains the dated merge through fm-task-events-lib.sh
+# before the volatile notification marker is committed.
 #
 # Normal operation deduplicates the task's latest canonical PR identity through
 # the merge-notification marker owned by bin/fm-pr-lib.sh. Main-home wake keys
@@ -31,6 +32,8 @@ _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-task-events-lib.sh
+. "$_FM_MERGE_OUTCOME_LIB_DIR/fm-task-events-lib.sh"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
@@ -91,6 +94,10 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin>
   if [ "$status" -eq 0 ] && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
     fm_wake_append check "merged-$id-$FM_PR_URL" \
       "check: merge landed: $id $FM_PR_URL" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    fm_task_event_append "${FM_DATA_OVERRIDE:-$home/data}" "$id" "merge:$provider:$host:$path:$number" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" merge "PR fusionnée" "$FM_PR_URL" "${path##*/}" || status=1
   fi
   if [ "$status" -eq 0 ]; then
     fm_pr_poll_merge_mark_notified "$state" "$id" \

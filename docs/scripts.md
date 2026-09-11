@@ -19,6 +19,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
+| `fm-task-events-lib.sh` | Preserve dated PR, merge, captain-answer and delivery events independently of task supervision files |
+| `fm-projets-couts.sh` | Measure monthly Claude parent and subagent JSONL usage with `fm-projets-couts.py`, dated API prices, explicit conversion rate and incremental cache |
+| `fm-projets-board.sh`    | Initialize the project table, compose calendar and cost readings, render, and arm the stable per-project `/projets` Lavish page from the bearings projection and the private project table |
+| `fm-projets-serve.sh`    | Run the base's stable tailnet front door (`fm-projets-serve.py`: measured index, the `/projets` page, declared folders) and install, start, stop or remove its launchd user agent |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Fast-forward-only self-update of firstmate and local or remote secondmate homes, classifying every live mate left on the target commit for restart or fallback nudge |
 | `fm-secondmate-restart.sh` | Persist open conversational work, then restart eligible second mates or report the fallback outcome |

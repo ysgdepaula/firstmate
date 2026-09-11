@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Record a PR-ready task: store one validated canonical pr=<url> and the forge's
-# exact pr_head=<sha> when available, then atomically arm a static merge poll.
+# exact pr_head=<sha> when available and pr_recorded_at=<ISO UTC>, then atomically arm a static merge poll.
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
+# Registration also records a durable PR event via fm-task-events-lib.sh;
+# data/<id>/events.jsonl survives task cleanup and repeat registration by canonical PR URL is idempotent across worker relaunches.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -12,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -19,6 +22,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-task-events-lib.sh
+. "$SCRIPT_DIR/fm-task-events-lib.sh"
 
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
@@ -104,14 +109,22 @@ META_LOCK_HELD=1
 META_DEVICE=$(fm_pr_file_device "$META") || exit 1
 STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
 [ "$META_DEVICE" = "$STATE_DEVICE" ] || { echo "error: task metadata is unavailable" >&2; exit 1; }
+PR_RECORDED_AT=
+if [ "$(sed -n 's/^pr=//p' "$META" | tail -1)" = "$URL" ]; then
+  PR_RECORDED_AT=$(sed -n 's/^pr_recorded_at=//p' "$META" | tail -1)
+fi
+[ -n "$PR_RECORDED_AT" ] || PR_RECORDED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+PR_REPO=$(sed -n 's/^project=//p' "$META" | tail -1)
+PR_REPO=${PR_REPO%/}
+PR_REPO=${PR_REPO##*/}
 META_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || exit 1
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
-    pr=*|pr_head=*) ;;
+    pr=*|pr_head=*|pr_recorded_at=*) ;;
     *) printf '%s\n' "$line" >> "$META_TMP" || exit 1 ;;
   esac
 done < "$META"
-printf 'pr=%s\n' "$URL" >> "$META_TMP" || exit 1
+printf 'pr=%s\npr_recorded_at=%s\n' "$URL" "$PR_RECORDED_AT" >> "$META_TMP" || exit 1
 [ -z "$PR_HEAD" ] || printf 'pr_head=%s\n' "$PR_HEAD" >> "$META_TMP" || exit 1
 chmod 0600 "$META_TMP" || exit 1
 fm_pr_private_file_valid "$META_TMP" 600 "$STATE_DEVICE" || exit 1
@@ -127,6 +140,8 @@ fm_pr_metadata_identity_parse "$META" || exit 1
 [ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
   && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
   && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
+fm_task_event_append "$DATA" "$ID" "pr:$URL" "$PR_RECORDED_AT" pr "PR enregistrée" "$URL" "$PR_REPO" \
+  || { echo "error: could not preserve PR event" >&2; exit 1; }
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 
