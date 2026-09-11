@@ -4,7 +4,8 @@
 # The captain wants one address that never changes for the projets page and
 # for whatever else the base serves, reachable from every one of his machines
 # by the MagicDNS name, surviving a reboot. bin/fm-projets-serve.py is the
-# server (index at /, the page at /projets, declared folders at /fichiers/);
+# server (measured index at /, Lavish session redirect or an explicit unsent
+# fallback at /projets, streamed declared folders at /fichiers/);
 # this script runs it and owns its launchd user agent, which is private
 # material of the home, never tracked: the plist is written under
 # $FM_HOME/config/ and linked from ~/Library/LaunchAgents/ so launchd loads it
@@ -26,6 +27,8 @@
 #
 # FM_PROJETS_SERVE_LAUNCH_AGENTS overrides ~/Library/LaunchAgents (tests).
 # launchctl is taken from PATH so a test can stand in for it.
+# FM_PROJETS_SERVE_INDEX_BUDGET bounds index measurements (default 3 seconds);
+# status allows one additional second for the HTTP response.
 #
 # The tailnet only covers the captain's own machines: nothing here is a
 # client-facing surface. Client pages go through a paid subdomain, a separate
@@ -189,7 +192,7 @@ command_stop() {
 }
 
 command_status() {
-  local url code
+  local url code timeout
   if command -v launchctl >/dev/null 2>&1 && loaded; then
     printf 'agent: loaded (%s)\n' "$(label)"
   else
@@ -197,7 +200,8 @@ command_status() {
   fi
   url=$(base_url)
   if command -v curl >/dev/null 2>&1; then
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" 2>/dev/null || true)
+    timeout=$(python3 -c 'import os; print(max(0, float(os.environ.get("FM_PROJETS_SERVE_INDEX_BUDGET", "3"))) + 1)')
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$timeout" "$url" 2>/dev/null || true)
     if [ "$code" = 200 ]; then printf 'index: repond (%s)\n' "$url"; else printf 'index: ne repond pas (%s)\n' "$url"; fi
   else
     printf 'index: non teste, curl absent (%s)\n' "$url"

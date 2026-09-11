@@ -630,8 +630,13 @@ These files are not inherited by secondmate homes.
 ## Stable page address (config/projets-serve.json)
 
 `config/projets-serve.json` is the optional local, gitignored table of the base's stable HTTP front door on the tailnet, served by [`bin/fm-projets-serve.py`](../bin/fm-projets-serve.py) and operated by [`bin/fm-projets-serve.sh`](../bin/fm-projets-serve.sh).
-The captain wanted one address that never changes for the projets page, reachable from every one of his machines by the MagicDNS name, so the server binds every interface on one reserved port and reads `.lavish/projets.html` at each request: a rebuild in place changes the content, never the address.
+The server binds every interface on one reserved port so the stable address is reachable by the MagicDNS name from the captain's machines.
+`/projets` redirects with HTTP 302 and `Cache-Control: no-store` to the existing, non-ended Lavish session whose file matches `$FM_HOME/.lavish/projets.html`, preserving the bridge that sends button responses to firstmate.
+Rebuilding that file in place keeps the same page path and Lavish session.
+If the session is absent or Lavish does not answer, the route serves the page with a prominent French warning and marks its buttons as unsent; the index also discloses this fallback.
 Its index at `/` is the page the captain bookmarks: one line per thing reachable on the base, with its address and a state measured by a real request when the index is opened, never assumed.
+The page and folder measurements request their published routes through `127.0.0.1:<port>`, including following the page redirect; missing or unreadable content does not count as answering.
+The listing and at most eight concurrent HTTP probes share `FM_PROJETS_SERVE_INDEX_BUDGET` (default 3 seconds); rows still unmeasured at the deadline say « mesure inachevée », and the operator status request allows one extra second for the response.
 It lists the projets page, the Lavish reviews still open (from `lavish-axi`'s own listing), and the demos and shared folders declared in the table; declared folders are served read-only under `/fichiers/<id>/` and confined to their directory.
 This section is the single owner of the table schema; the script headers own the routes, the launchd mechanics and the operator commands.
 

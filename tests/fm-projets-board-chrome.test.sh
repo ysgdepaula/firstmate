@@ -2,7 +2,8 @@
 # Opt-in browser checks of the generated page under a real Chrome: the visible
 # delivery failure without Lavish, and the phone layout at a narrow width where
 # no text may be covered by another element, nothing may overflow the viewport,
-# and every button must be reachable, blocks folded and unfolded.
+# and every button must be reachable on the selected card at exactly 390 px,
+# with the folded and unfolded block states asserted before geometry checks.
 set -eu
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
@@ -22,24 +23,42 @@ import sys
 p=Path(sys.argv[1])
 s=p.read_text()
 s=s.replace('</body>', '''<script>
-document.querySelector('[data-choice]').click();
-var deliveryStatus = document.querySelector('.you .ok');
-document.body.dataset.deliveryVisible = String(deliveryStatus.textContent.includes('non transmis') && getComputedStyle(deliveryStatus).display !== 'none' && deliveryStatus.getBoundingClientRect().height > 0);
+document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){
+  document.querySelector('[data-choice]').click();
+  var deliveryStatus = document.querySelector('.you .ok');
+  document.body.dataset.deliveryVisible = String(deliveryStatus.textContent.includes('non transmis') && getComputedStyle(deliveryStatus).display !== 'none' && deliveryStatus.getBoundingClientRect().height > 0);
+  document.body.dataset.fallbackMarked = String(document.querySelector('[data-choice]').dataset.transmitted === 'false' && document.querySelector('[role="alert"]').textContent.includes('Ici les boutons ne transmettent rien'));
+}, 50); });
 </script></body>''')
 p.write_text(s)
 PY
-python3 - "$CHROME" "$TMP_ROOT" "$FM_HOME/.lavish/projets.html" <<'PYBROWSER'
+python3 - "$CHROME" "$TMP_ROOT" "$ROOT/bin/fm-projets-serve.py" <<'PYBROWSER'
 from pathlib import Path
-import os, signal, subprocess, sys
-chrome, root, page = sys.argv[1:]
+import os, signal, subprocess, sys, time
+chrome, root, server_path = sys.argv[1:]
 root = Path(root)
-with (root / "dom.html").open("w") as out, (root / "chrome.log").open("w") as err:
-    proc = subprocess.Popen([chrome, "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-features=GoogleUpdater", "--user-data-dir=" + str(root / "profile"), "--dump-dom", Path(page).as_uri()], stdout=out, stderr=err, start_new_session=True)
+env = dict(os.environ, FM_PROJETS_SERVE_BIND="127.0.0.1", FM_PROJETS_SERVE_PORT="0", FM_PROJETS_SERVE_LAVISH="/usr/bin/false")
+with (root / "server.log").open("w") as log:
+    server = subprocess.Popen([sys.executable, server_path], env=env, stdout=log, stderr=log)
     try:
-        proc.wait(timeout=20)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
+        for _ in range(100):
+            lines = (root / "server.log").read_text().splitlines()
+            if lines and lines[0].startswith("listening: "):
+                url = lines[0].removeprefix("listening: ") + "projets"
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("front door did not start")
+        with (root / "dom.html").open("w") as out, (root / "chrome.log").open("w") as err:
+            proc = subprocess.Popen([chrome, "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-features=GoogleUpdater", "--user-data-dir=" + str(root / "profile"), "--virtual-time-budget=1000", "--dump-dom", url], stdout=out, stderr=err, start_new_session=True)
+            try:
+                proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+    finally:
+        server.terminate()
+        server.wait(timeout=5)
 PYBROWSER
 python3 - "$TMP_ROOT/dom.html" <<'PY'
 from html.parser import HTMLParser
@@ -47,14 +66,17 @@ from pathlib import Path
 import sys
 class Result(HTMLParser):
     visible=False
+    marked=False
     def handle_starttag(self, tag, attrs):
         if tag == 'body':
             self.visible=dict(attrs).get('data-delivery-visible') == 'true'
+            self.marked=dict(attrs).get('data-fallback-marked') == 'true'
 r=Result()
 r.feed(Path(sys.argv[1]).read_text())
+assert r.marked, 'the fallback banner and unsent button marker were not rendered'
 assert r.visible, 'delivery refusal is not visible in Chrome: ' + Path(sys.argv[1]).read_text().split('<body', 1)[-1].split('<script', 1)[0]
 PY
-pass "Chrome displays delivery refusal without Lavish"
+pass "Chrome displays the stable-address fallback and marks buttons as unsent without Lavish"
 
 # --- phone layout: nothing covered, nothing overflowing, every button reachable ---
 cat > "$TMP_ROOT/filled.json" <<'DATA'
@@ -83,44 +105,70 @@ cat > "$TMP_ROOT/filled.json" <<'DATA'
  "unassigned":[],"table_missing":false}
 DATA
 "$ROOT/bin/fm-projets-board.sh" render "$TMP_ROOT/filled.json" >/dev/null
-python3 - "$FM_HOME/.lavish/projets.html" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-s = p.read_text()
-inspector = '''<script>
-setTimeout(function(){
-  if (location.hash.indexOf("open") !== -1) Array.prototype.forEach.call(document.querySelectorAll(".bloc .toggle"), function(b){ if (b.getAttribute("aria-expanded") === "false") b.click(); });
-  var w = document.documentElement.clientWidth, issues = [];
-  Array.prototype.forEach.call(document.querySelectorAll("body *"), function(e){
-    var r = e.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return;
-    var tag = e.tagName + "." + (e.className || "");
-    if (r.right > w + 1 || r.left < -1) issues.push("overflow " + tag);
-    var hasText = Array.prototype.some.call(e.childNodes, function(n){ return n.nodeType === 3 && n.textContent.trim(); });
-    if (!hasText && e.tagName !== "BUTTON" && e.tagName !== "A") return;
-    var y = r.top + Math.min(10, r.height / 2);
-    [[r.left + r.width / 2, y], [r.left + 3, y], [r.right - 3, y]].forEach(function(p){
-      if (p[1] < 0 || p[1] > window.innerHeight || p[0] < 0 || p[0] > w) return;
-      var hit = document.elementFromPoint(p[0], p[1]);
-      if (hit && hit !== e && !e.contains(hit) && !hit.contains(e)) issues.push("covered " + tag + " by " + hit.tagName + "." + (hit.className || ""));
-    });
-  });
-  document.body.dataset.layoutIssues = String(issues.length);
-  document.body.dataset.layoutDetail = issues.slice(0, 12).join(" | ");
-}, 150);
-</script></body>'''
-p.write_text(s.replace("</body>", inspector))
-PY
 for target in torre cerveau 'torre&open' 'cerveau&open'; do
-  python3 - "$CHROME" "$TMP_ROOT" "$FM_HOME/.lavish/projets.html#$target" <<'PYBROWSER'
+  python3 - "$FM_HOME/.lavish/projets.html" "$TMP_ROOT/host.html" "$target" <<'PYHOST'
+from pathlib import Path
+import html, json, sys
+source, host, target = sys.argv[1:]
+project, _, mode = target.partition("&")
+inspector = r'''<script>
+setTimeout(function(){
+  var wanted = __PROJECT__, unfold = __UNFOLD__;
+  var rail = document.querySelector('button[data-project="' + wanted + '"]');
+  if (rail) rail.click();
+  var card = document.querySelector('.card:not([hidden])');
+  var toggles = card ? Array.from(card.querySelectorAll('.bloc .toggle')) : [];
+  if (unfold) toggles.forEach(function(button){ if (button.getAttribute('aria-expanded') === 'false') button.click(); });
+  setTimeout(function(){
+    var w = document.documentElement.clientWidth, issues = [];
+    Array.prototype.forEach.call(document.querySelectorAll("body *"), function(e){
+      var r = e.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return;
+      var tag = e.tagName + "." + (e.className || "");
+      if (r.right > w + 1 || r.left < -1) issues.push("overflow " + tag);
+      var rects = [];
+      Array.from(e.childNodes).forEach(function(node){
+        if (node.nodeType !== 3 || !node.textContent.trim()) return;
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        rects = rects.concat(Array.from(range.getClientRects()));
+      });
+      if (e.tagName === "BUTTON" || e.tagName === "A") rects = rects.concat(Array.from(e.getClientRects()));
+      rects.forEach(function(rect){
+        var y = rect.top + Math.min(10, rect.height / 2), inset = Math.min(3, rect.width / 2);
+        [[rect.left + rect.width / 2, y], [rect.left + inset, y], [rect.right - inset, y]].forEach(function(p){
+          if (p[1] < 0 || p[1] > window.innerHeight || p[0] < 0 || p[0] > w) return;
+          var hit = document.elementFromPoint(p[0], p[1]);
+          if (hit && hit !== e && !e.contains(hit) && !hit.contains(e)) issues.push("covered " + tag + " (" + e.textContent.slice(0,60) + ") by " + hit.tagName + "." + (hit.className || ""));
+        });
+      });
+    });
+    parent.postMessage({issues:issues.length, detail:issues.slice(0,12).join(" | "), width:w,
+      viewport:window.innerWidth, card:card && card.dataset.project, blocks:toggles.length,
+      open:toggles.filter(function(button){return button.getAttribute('aria-expanded') === 'true';}).length}, '*');
+  }, 50);
+}, 100);
+</script></body>'''
+inspector = inspector.replace('__PROJECT__', json.dumps(project)).replace('__UNFOLD__', json.dumps(mode == 'open'))
+page = Path(source).read_text().replace('</body>', inspector)
+wrapper = '''<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0">
+<script>
+window.addEventListener('message', function(event){
+  if (event.source !== document.getElementById('phone').contentWindow) return;
+  Object.keys(event.data).forEach(function(key){ document.body.dataset[key] = String(event.data[key]); });
+});
+</script>
+<iframe id="phone" style="width:390px;height:10000px;border:0;display:block" srcdoc="__PAGE__"></iframe>
+</body></html>'''
+Path(host).write_text(wrapper.replace('__PAGE__', html.escape(page, quote=True)))
+PYHOST
+  python3 - "$CHROME" "$TMP_ROOT" "$TMP_ROOT/host.html" <<'PYBROWSER'
 from pathlib import Path
 import os, signal, subprocess, sys
 chrome, root, page = sys.argv[1:]
 root = Path(root)
-path, _, frag = page.partition("#")
 with (root / "layout.html").open("w") as out, (root / "chrome-layout.log").open("w") as err:
-    proc = subprocess.Popen([chrome, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-features=GoogleUpdater", "--user-data-dir=" + str(root / "profile-layout"), "--window-size=500,6000", "--virtual-time-budget=3000", "--dump-dom", Path(path).as_uri() + "#" + frag], stdout=out, stderr=err, start_new_session=True)
+    proc = subprocess.Popen([chrome, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-features=GoogleUpdater", "--user-data-dir=" + str(root / "profile-layout"), "--window-size=500,1000", "--virtual-time-budget=3000", "--dump-dom", Path(page).as_uri()], stdout=out, stderr=err, start_new_session=True)
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
@@ -132,13 +180,18 @@ from html.parser import HTMLParser
 from pathlib import Path
 import sys
 class Result(HTMLParser):
-    issues = None; detail = ""
+    data = {}
     def handle_starttag(self, tag, attrs):
         if tag == "body":
-            a = dict(attrs); self.issues = a.get("data-layout-issues"); self.detail = a.get("data-layout-detail", "")
+            self.data = dict(attrs)
 r = Result(); r.feed(Path(sys.argv[1]).read_text())
-assert r.issues is not None, "the layout inspector did not run for " + sys.argv[2]
-assert r.issues == "0", "phone layout issues for %s: %s: %s" % (sys.argv[2], r.issues, r.detail)
+a = r.data
+project, _, mode = sys.argv[2].partition('&')
+assert a.get('data-width') == '390' and a.get('data-viewport') == '390', a
+assert a.get('data-card') == project, a
+assert a.get('data-blocks') == '7', a
+assert a.get('data-open') == ('7' if mode == 'open' else '1'), a
+assert a.get('data-issues') == '0', "phone layout issues for %s: %s" % (sys.argv[2], a)
 PY
 done
-pass "Chrome finds nothing covered, overflowing or unreachable at phone width, folded and unfolded"
+pass "Chrome checks both selected cards at 390 px, folded and unfolded, without coverage or overflow"

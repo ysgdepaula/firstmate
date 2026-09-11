@@ -541,7 +541,7 @@ test_compose_brain_card_carries_unlinked_rows_articles_recommendations_and_quick
     and (.projects[] | select(.id == "cerveau")
       | .brain == true
       and (.unlinked | map(.id)) == ["sacem-relance"]
-      and (.missing_from_you | map(.key)) == ["reco__adopter-gbrain-comme-index", "reco__indexer-les-rapports", "article__doctrine-de-d-pense-des-mod-les"]
+      and (.missing_from_you | map(.key | sub("-[0-9a-f]{12}$"; ""))) == ["reco__adopter-gbrain-comme-index", "reco__indexer-les-rapports", "article__doctrine-de-d-pense-des-mod-les"]
       and (.missing_from_you | map(.kind)) == ["recommandation", "recommandation", "article"]
       and (.missing_from_you[1].question == "Indexer les rapports : ils dorment dans data")
       and (.missing_from_you[2] | .question == "Article à valider : Doctrine de dépense des modèles" and .url == "https://example.test/article"
@@ -569,7 +569,7 @@ test_compose_adds_recommendations_and_creations_to_a_project() {
   out=$(compose "$home") || fail "compose failed with recommendations and creations"
   printf '%s' "$out" | jq -e '
     (.projects[] | select(.id == "torre")
-      | (.missing_from_you | map(.key)) == ["torre-hebergement", "reco__brancher-meta-d-s-l-acc-s-de-bechir"]
+      | (.missing_from_you | map(.key | sub("-[0-9a-f]{12}$"; ""))) == ["torre-hebergement", "reco__brancher-meta-d-s-l-acc-s-de-bechir"]
       and (.missing_from_you[1] | .kind == "recommandation"
            and .question == "Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend"
            and (.options | map(.value)) == ["on-y-va", "pas-maintenant", "on-en-parle"])
@@ -611,3 +611,38 @@ test_compose_refuses_two_brain_cards
 
 test_review_inputs_survive_composition_and_render
 test_allowed_management_networks_and_refusals
+
+test_recommendation_and_article_identities() {
+  local home out before after
+  home=$(make_home identity)
+  write_table "$home/config/projets.json"
+  jq '.projects += [{id:"cerveau", name:"Cerveau", brain:true,
+       recommendations: [(("Une proposition très détaillée pour notre cerveau " * 3) + "première"),
+                         (("Une proposition très détaillée pour notre cerveau " * 3) + "seconde")],
+       articles: [{title:(("Une proposition très détaillée pour notre cerveau " * 3) + "première")},
+                  {title:(("Une proposition très détaillée pour notre cerveau " * 3) + "seconde")}]}]' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed with colliding title prefixes"
+  printf '%s' "$out" > "$home/payload.json"
+  printf '%s' "$out" | jq -e '.projects[] | select(.id == "cerveau") | .missing_from_you
+    | length == 4 and (map(.key) | unique | length) == 4
+      and (map(.local_id) | unique | length) == 4
+      and all(.[]; .key == .local_id and (.key | test("^(reco|article)__.+-[0-9a-f]{12}$")))' >/dev/null \
+    || fail "full titles did not receive distinct answer identities: $out"
+  before=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[].key]')
+  jq '(.projects[] | select(.id == "cerveau")) |= (.recommendations |= reverse | .articles |= reverse)' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed after title reordering"
+  after=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[1,0,3,2].key]')
+  [ "$before" = "$after" ] || fail "title identity changed when entries moved"
+  run_board "$home" render "$home/payload.json" >/dev/null || fail "distinct title identities did not render"
+  cp "$home/.lavish/projets.html" "$home/before.html"
+  jq '(.projects[] | select(.id == "cerveau") | .missing_from_you[1].key) =
+      (.projects[] | select(.id == "cerveau") | .missing_from_you[0].key)' "$home/payload.json" > "$home/duplicate.json"
+  if run_board "$home" render "$home/duplicate.json" >/dev/null 2>&1; then
+    fail "duplicate decision keys were accepted"
+  fi
+  cmp -s "$home/before.html" "$home/.lavish/projets.html" || fail "duplicate keys replaced the existing page"
+  pass "full titles retain distinct stable identities and duplicate keys refuse rendering"
+}
+test_recommendation_and_article_identities

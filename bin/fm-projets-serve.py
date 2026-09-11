@@ -8,9 +8,9 @@ Serves, on one fixed port bound to every interface so the MagicDNS name answers:
                     progress, the demos and folders declared in the table), each
                     with its address and a state measured by a real request at
                     render time, never assumed
-  /projets          the projets page, read from $FM_HOME/.lavish/projets.html at
-                    every request, so a rebuild in place changes the content
-                    while the address never moves
+  /projets          a no-store redirect to the open Lavish session for the page;
+                    without a session, reads $FM_HOME/.lavish/projets.html fresh
+                    with a visible warning that answers cannot be transmitted
   /fichiers/<id>/   the shared folders declared in the table, read-only, with a
                     plain listing; paths are confined to the declared folder
 
@@ -23,20 +23,26 @@ Environment (all optional): FM_HOME (home root, default: the parent of bin/),
 FM_CONFIG_OVERRIDE, FM_PROJETS_SERVE_BIND (default 0.0.0.0), FM_PROJETS_SERVE_PORT
 (overrides the table; 0 picks a free port and is meant for tests),
 FM_PROJETS_SERVE_PROBE_TIMEOUT (seconds per reachability probe, default 2),
+FM_PROJETS_SERVE_INDEX_BUDGET (seconds for listing and concurrent index probes,
+default 3; at most 8 probes run together, unfinished measurements are disclosed),
 FM_PROJETS_SERVE_LAVISH (the lavish-axi binary, default from PATH).
+Shared GET bodies are streamed; HEAD uses file metadata without reading the body.
 
 Usage: fm-projets-serve.py            (prints `listening: <url>` then serves)
 """
 from __future__ import annotations
 
+import concurrent.futures
 import html
 import json
 import os
 import posixpath
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from http import HTTPStatus
@@ -100,13 +106,13 @@ def slugify(text: str) -> str:
 
 
 def probe(url: str, timeout: float) -> bool:
-    """A real request decides: any HTTP answer below 500 counts as reachable."""
+    """A successful HTTP request decides whether the published content answers."""
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": "fm-projets-serve"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - operator-declared addresses
-            return resp.status < 500
-    except urllib.error.HTTPError as exc:
-        return exc.code < 500
+            return 200 <= resp.status < 400
+    except urllib.error.HTTPError:
+        return False
     except Exception:  # noqa: BLE001 - every transport failure is "does not answer"
         return False
 
@@ -117,7 +123,10 @@ def lavish_sessions(timeout: float) -> tuple[list, str | None]:
     if not binary:
         return [], "lavish-axi introuvable : revues Lavish non listées"
     try:
-        out = subprocess.run([binary], capture_output=True, text=True, timeout=timeout, check=False).stdout
+        result = subprocess.run([binary], capture_output=True, text=True, timeout=timeout, check=False)
+        if result.returncode:
+            return [], "lavish-axi ne répond pas : revues Lavish non listées"
+        out = result.stdout
     except (OSError, subprocess.TimeoutExpired):
         return [], "lavish-axi ne répond pas : revues Lavish non listées"
     rows = []
@@ -137,7 +146,7 @@ def lavish_sessions(timeout: float) -> tuple[list, str | None]:
             file, status, url = fields[0], fields[1], fields[2]
             if status in ("ended", "closed"):
                 continue
-            rows.append({"label": Path(file).stem, "url": url, "status": status})
+            rows.append({"file": file, "label": Path(file).stem, "url": url, "status": status})
     return rows, None
 
 
@@ -149,21 +158,53 @@ def h(text) -> str:
     return html.escape(str(text), quote=True)
 
 
-def render_index(cfg: dict, public_base: str) -> bytes:
+def page_session(sessions: list) -> str | None:
+    for session in sessions:
+        url = session["url"]
+        parsed = urllib.parse.urlsplit(url)
+        if (Path(session["file"]).resolve() == page_path().resolve()
+                and parsed.scheme in ("http", "https") and parsed.netloc
+                and "\r" not in url and "\n" not in url):
+            return url
+    return None
+
+
+def render_index(cfg: dict, public_base: str, probe_base: str) -> bytes:
     timeout = float(os.environ.get("FM_PROJETS_SERVE_PROBE_TIMEOUT", "2"))
-    lines = []
-    page = page_path()
-    lines.append(("La page projets", public_base + "/projets", page.exists(), "régénérée à chaque événement, l'adresse ne bouge pas"))
-    sessions, note = lavish_sessions(timeout)
-    for s in sessions:
-        lines.append(("Revue Lavish : " + s["label"], s["url"], probe(s["url"], timeout), "en cours, à annoter"))
-    for e in cfg["entries"]:
-        lines.append((e["label"], e["url"], probe(e["url"], timeout), "démo ou service déclaré"))
-    for f in cfg["folders"]:
-        lines.append(("Dossier : " + f["label"], public_base + "/fichiers/" + f["id"] + "/", Path(f["path"]).is_dir(), "fichiers partagés, lecture seule"))
+    budget = float(os.environ.get("FM_PROJETS_SERVE_INDEX_BUDGET", "3"))
+    deadline = time.monotonic() + budget
+    sessions, note = lavish_sessions(max(0.001, min(timeout, budget)))
+    hint = ("réponses transmises par Lavish" if page_session(sessions)
+            else "boutons non transmis : session Lavish absente ou indisponible")
+    lines = [("La page projets", public_base + "/projets", probe_base + "/projets", hint)]
+    for session in sessions:
+        lines.append(("Revue Lavish : " + session["label"], session["url"], session["url"], "en cours, à annoter"))
+    for entry in cfg["entries"]:
+        lines.append((entry["label"], entry["url"], entry["url"], "démo ou service déclaré"))
+    for folder in cfg["folders"]:
+        route = "/fichiers/" + folder["id"] + "/"
+        lines.append(("Dossier : " + folder["label"], public_base + route, probe_base + route, "fichiers partagés, lecture seule"))
+    results = {}
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    pending = {}
+    try:
+        for i, (_, _, url, _) in enumerate(lines):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            pending[executor.submit(probe, url, timeout)] = i
+        if pending:
+            done, _ = concurrent.futures.wait(pending, timeout=max(0, deadline - time.monotonic()))
+            for future in done:
+                results[pending[future]] = future.result()
+    finally:
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
     items = []
-    for label, url, ok, hint in lines:
-        state = "répond" if ok else "ne répond pas"
+    for i, (label, url, _, hint) in enumerate(lines):
+        ok = results.get(i)
+        state = "mesure inachevée" if ok is None else "répond" if ok else "ne répond pas"
         items.append(
             '<li class="%s"><span class="state">%s</span> <a href="%s">%s</a> <span class="addr">%s</span> <span class="hint">%s</span></li>'
             % ("ok" if ok else "ko", h(state), h(url), h(label), h(url), h(hint))
@@ -222,14 +263,51 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         path = urllib.parse.urlsplit(self.path).path
         if path in ("/", "/index.html"):
-            return self._send(HTTPStatus.OK, render_index(self.cfg, self.public_base))
+            return self._send(HTTPStatus.OK, render_index(self.cfg, self.public_base, "http://127.0.0.1:%d" % self.server.server_address[1]))
         if path in ("/projets", "/projets.html", "/projets/"):
             page = page_path()
-            if not page.is_file():
+            try:
+                body = page.read_bytes()
+            except FileNotFoundError:
                 return self._send(HTTPStatus.NOT_FOUND, "<p>La page projets n'a pas encore été générée.</p>".encode())
-            return self._send(HTTPStatus.OK, page.read_bytes())
+            except OSError:
+                return self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "<p>La page projets est illisible.</p>".encode())
+            sessions, _ = lavish_sessions(float(os.environ.get("FM_PROJETS_SERVE_PROBE_TIMEOUT", "2")))
+            url = page_session(sessions)
+            if url:
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", url)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            banner = ("<aside role=\"alert\" style=\"padding:16px;background:#fff3cd;color:#111\">"
+                      "Ici les boutons ne transmettent rien : ouvre la page dans Lavish pour répondre "
+                      "(session absente ou indisponible).</aside>").encode()
+            body_tag = re.search(rb"<body\b[^>]*>", body, re.IGNORECASE)
+            offset = body_tag.end() if body_tag else 0
+            body = body[:offset] + banner + body[offset:]
+            marker = b"""<script>
+function markUnsent() {
+  document.querySelectorAll('[data-choice]').forEach(function(button) {
+    button.dataset.transmitted = 'false';
+    button.title = 'non transmis : ouvre cette page dans Lavish';
+  });
+  document.querySelectorAll('.you .ok').forEach(function(status) {
+    status.textContent = 'non transmis : ouvre cette page dans Lavish';
+    status.style.display = 'block';
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', markUnsent);
+else markUnsent();
+</script>"""
+            body = re.sub(rb"</body\s*>", lambda match: marker + match.group(), body, count=1, flags=re.IGNORECASE) if body_tag else body + marker
+            return self._send(HTTPStatus.OK, body)
         if path.startswith("/fichiers/"):
-            return self._files(path)
+            try:
+                return self._files(path)
+            except OSError:
+                return self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "<p>Le dossier ou le fichier est illisible.</p>".encode())
         return self._send(HTTPStatus.NOT_FOUND, b"<p>Rien ici.</p>")
 
     def _files(self, path: str):
@@ -263,7 +341,16 @@ class Handler(BaseHTTPRequestHandler):
         if target.is_file():
             import mimetypes
             ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            return self._send(HTTPStatus.OK, target.read_bytes(), ctype)
+            with target.open("rb") as stream:
+                size = os.fstat(stream.fileno()).st_size
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                if self.command != "HEAD":
+                    shutil.copyfileobj(stream, self.wfile, length=64 * 1024)
+            return None
         return self._send(HTTPStatus.NOT_FOUND, b"<p>Fichier absent.</p>")
 
 

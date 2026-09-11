@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for the base's stable front door (bin/fm-projets-serve.py and
 # bin/fm-projets-serve.sh): the index measures every entry with a real request,
-# the projets page is read fresh at each request so a rebuild moves the content
-# and never the address, declared folders are served read-only and confined,
+# the projets page redirects to Lavish or warns that answers cannot be sent,
+# index probes share a deadline, shared GET streams and HEAD reports metadata,
 # and the launchd user agent is installed, started, stopped and removed through
 # the operator commands without touching the shared repository.
 set -u
@@ -19,11 +19,21 @@ command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; exit 0; 
 command -v curl >/dev/null 2>&1 || { echo "skip: curl not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
-PIDS=""
+touch "$TMP_ROOT/pids"
+stop_servers() {
+  local pid i
+  while IFS= read -r pid; do kill "$pid" 2>/dev/null || true; done < "$TMP_ROOT/pids"
+  while IFS= read -r pid; do
+    wait "$pid" 2>/dev/null || true
+    i=0
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+  done < "$TMP_ROOT/pids"
+}
 cleanup() {
-  local pid
-  for pid in $PIDS; do kill "$pid" 2>/dev/null || true; done
-  for pid in $PIDS; do wait "$pid" 2>/dev/null || true; done
+  stop_servers
   fm_test_cleanup
 }
 trap cleanup EXIT INT TERM
@@ -36,13 +46,11 @@ make_home() {  # <name>
   fakebin=$(fm_fakebin "$home")
   # lavish-axi's own listing: one review still open, one ended
   cat > "$fakebin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-cat <<'EOF'
-bin: /usr/local/bin/lavish-axi
+#!/bin/sh
+printf '%s\n' 'bin: /usr/local/bin/lavish-axi
 sessions[2]{file,status,url,pending_prompts}:
   /tmp/a/revue-alex.html,open,"http://127.0.0.1:9/session/aaaa",0
-  /tmp/b/finie.html,ended,"http://127.0.0.1:9/session/bbbb",0
-EOF
+  /tmp/b/finie.html,ended,"http://127.0.0.1:9/session/bbbb",0'
 SH
   chmod +x "$fakebin/lavish-axi"
   printf '%s\n' "$home"
@@ -51,8 +59,22 @@ SH
 # Start a plain static server on a free loopback port and print its port.
 start_dummy() {  # <home> <dir>
   local home=$1 dir=$2 i=0 port=""
-  python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$dir" > "$home/dummy.log" 2>&1 &
-  PIDS="$PIDS $!"
+  python3 -u - "$dir" > "$home/dummy.log" 2>&1 <<'PYDUMMY' &
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import sys, time
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=sys.argv[1], **kwargs)
+    def do_GET(self):
+        if self.path.startswith("/slow"):
+            print("probe-start", flush=True)
+            time.sleep(1)
+        super().do_GET()
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+print("port %d" % server.server_address[1], flush=True)
+server.serve_forever()
+PYDUMMY
+  printf '%s\n' "$!" >> "$TMP_ROOT/pids"
   while [ "$i" -lt 100 ]; do
     port=$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$home/dummy.log" | head -1)
     [ -n "$port" ] && break
@@ -67,8 +89,8 @@ start_dummy() {  # <home> <dir>
 start_front_door() {  # <home>
   local home=$1 i=0 url=""
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_PROJETS_SERVE_BIND=127.0.0.1 FM_PROJETS_SERVE_PORT=0 \
-    FM_PROJETS_SERVE_PROBE_TIMEOUT=1 python3 "$SERVER" > "$home/serve.log" 2>&1 &
-  PIDS="$PIDS $!"
+    FM_PROJETS_SERVE_PROBE_TIMEOUT=${FM_PROJETS_SERVE_PROBE_TIMEOUT:-1} python3 "$SERVER" > "$home/serve.log" 2>&1 &
+  printf '%s\n' "$!" >> "$TMP_ROOT/pids"
   while [ "$i" -lt 100 ]; do
     url=$(sed -n 's/^listening: \(http:\/\/[^ ]*\).*/\1/p' "$home/serve.log" | head -1)
     [ -n "$url" ] && break
@@ -147,6 +169,125 @@ EOF
   pass "declared folders are served read-only and confined to their directory"
 }
 
+test_lavish_redirect_and_fallback() {
+  local home base port out
+  home=$(make_home bridge)
+  port=$(start_dummy "$home" "$home/share")
+  printf '<!doctype html><html><body><button data-choice="oui">oui</button><ul class="you"><li><span class="ok"></span></li></ul></body></html>' > "$home/.lavish/projets.html"
+  cat > "$home/fakebin/lavish-axi" <<EOF
+#!/bin/sh
+printf '%s\\n' 'sessions[3]{file,status,url,pending_prompts}:
+  $home/.lavish/projets.html,ended,"http://127.0.0.1:9/ended",0
+  $home/other/projets.html,open,"http://127.0.0.1:9/wrong",0
+  $home/.lavish/projets.html,feedback,"http://127.0.0.1:$port/",1'
+EOF
+  base=$(start_front_door "$home")
+  python3 - "$base" "$port" <<'PYHTTP'
+import http.client, sys, urllib.parse
+base = urllib.parse.urlsplit(sys.argv[1])
+conn = http.client.HTTPConnection(base.hostname, base.port, timeout=3)
+conn.request("GET", "/projets")
+response = conn.getresponse()
+assert response.status == 302, response.status
+assert response.getheader("Location") == "http://127.0.0.1:%s/" % sys.argv[2]
+assert response.getheader("Cache-Control") == "no-store"
+assert response.read() == b""
+conn.close()
+PYHTTP
+  curl -fsS "$base" | grep -q 'réponses transmises par Lavish' || fail "the index lost the session state"
+  printf '#!/bin/sh\nexit 1\n' > "$home/fakebin/lavish-axi"
+  out=$(curl -fsS "${base}projets") || fail "the absent session did not fall back to the page"
+  assert_contains "$out" 'Ici les boutons ne transmettent rien' "the fallback warning is missing"
+  curl -fsS "$base" | grep -q 'boutons non transmis' || fail "the index did not disclose fallback"
+  pass "the stable page redirects only to its active Lavish session and discloses unavailable delivery"
+}
+
+test_unreadable_content_does_not_answer() {
+  local home base out code
+  home=$(make_home unreadable)
+  printf '<html><body>page</body></html>' > "$home/.lavish/projets.html"
+  printf '{"schema":"fm-projets-serve.v1","folders":[{"id":"docs","label":"Docs","path":"%s/share/docs"}]}' "$home" > "$home/config/projets-serve.json"
+  base=$(start_front_door "$home")
+  chmod 000 "$home/.lavish/projets.html" "$home/share/docs"
+  out=$(index_lines "$base")
+  code=$(curl -s -o /dev/null -w '%{http_code}' "${base}projets")
+  chmod 644 "$home/.lavish/projets.html"
+  chmod 755 "$home/share/docs"
+  [ "$code" = 500 ] || fail "the unreadable page did not answer 500: $code"
+  assert_contains "$out" 'ne répond pas | La page projets' "an unreadable page was reported as answering"
+  assert_contains "$out" 'ne répond pas | Dossier : Docs' "an unreadable folder was reported as answering"
+  pass "unreadable content produces HTTP errors and measured unavailable states"
+}
+
+test_index_probes_share_a_budget() {
+  local home port base count
+  home=$(make_home budget)
+  port=$(start_dummy "$home" "$home/share")
+  python3 - "$home" "$port" <<'PYCONFIG'
+import json, pathlib, sys
+home = pathlib.Path(sys.argv[1])
+entries = [{"label": "Démo lente %d" % i, "url": "http://127.0.0.1:%s/slow%d" % (sys.argv[2], i)} for i in range(12)]
+(home / "config/projets-serve.json").write_text(json.dumps({"schema": "fm-projets-serve.v1", "entries": entries}))
+PYCONFIG
+  base=$(FM_PROJETS_SERVE_LAVISH="$home/unavailable-lavish" FM_PROJETS_SERVE_INDEX_BUDGET=0.5 FM_PROJETS_SERVE_PROBE_TIMEOUT=2 start_front_door "$home")
+  python3 - "$base" <<'PYBUDGET'
+from html.parser import HTMLParser
+import sys, time, urllib.request
+class States(HTMLParser):
+    active = False
+    states = []
+    def handle_starttag(self, tag, attrs):
+        self.active = tag == "span" and dict(attrs).get("class") == "state"
+    def handle_data(self, data):
+        if self.active:
+            self.states.append(data)
+start = time.monotonic()
+with urllib.request.urlopen(sys.argv[1], timeout=2) as response:
+    page = response.read().decode()
+elapsed = time.monotonic() - start
+assert elapsed < 1, elapsed
+result = States()
+result.feed(page)
+assert "mesure inachevée" in result.states, result.states
+assert "répond" not in result.states, result.states
+PYBUDGET
+  count=$(grep -c '^probe-start$' "$home/dummy.log")
+  [ "$count" -gt 1 ] && [ "$count" -le 8 ] || fail "probe concurrency outside 2..8: $count"
+  pass "index probes run concurrently within one response budget and disclose unfinished measurements"
+}
+
+test_shared_file_head_and_stream() {
+  local home base
+  home=$(make_home stream)
+  printf '{"schema":"fm-projets-serve.v1","folders":[{"id":"docs","label":"Docs","path":"%s/share/docs"}]}' "$home" > "$home/config/projets-serve.json"
+  base=$(start_front_door "$home")
+  python3 - "$home" "$base" <<'PYSTREAM'
+import hashlib, http.client, pathlib, sys, urllib.parse
+path = pathlib.Path(sys.argv[1]) / "share/docs/film.bin"
+with path.open("wb") as stream:
+    stream.truncate(1024 ** 3)
+base = urllib.parse.urlsplit(sys.argv[2])
+conn = http.client.HTTPConnection(base.hostname, base.port, timeout=3)
+conn.request("HEAD", "/fichiers/docs/film.bin")
+response = conn.getresponse()
+assert response.status == 200, response.status
+assert int(response.getheader("Content-Length")) == path.stat().st_size
+assert response.getheader("Content-Type") == "application/octet-stream"
+assert response.read() == b""
+conn.close()
+content = bytes(range(256)) * 4096
+path.write_bytes(content)
+conn = http.client.HTTPConnection(base.hostname, base.port, timeout=3)
+conn.request("GET", "/fichiers/docs/film.bin")
+response = conn.getresponse()
+assert response.status == 200
+assert int(response.getheader("Content-Length")) == len(content)
+assert hashlib.sha256(response.read()).digest() == hashlib.sha256(content).digest()
+conn.close()
+PYSTREAM
+  pass "HEAD reports sparse-file metadata with an empty body and GET delivers full file bytes"
+}
+
 test_launchd_agent_is_installed_started_stopped_and_removed() {
   local home fakebin out plist link label
   home=$(make_home launchd)
@@ -221,3 +362,13 @@ test_index_measures_every_entry_with_a_real_request
 test_the_page_is_read_fresh_at_a_stable_address
 test_folders_are_served_read_only_and_confined
 test_launchd_agent_is_installed_started_stopped_and_removed
+test_lavish_redirect_and_fallback
+test_unreadable_content_does_not_answer
+test_index_probes_share_a_budget
+test_shared_file_head_and_stream
+stop_servers
+while IFS= read -r server_pid; do
+  if kill -0 "$server_pid" 2>/dev/null; then fail "test server survived cleanup: $server_pid"; fi
+done < "$TMP_ROOT/pids"
+: > "$TMP_ROOT/pids"
+pass "all test servers stop before the suite exits"

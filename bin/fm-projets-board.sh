@@ -72,7 +72,8 @@
 # schema=fm-projets-board.v1 and every renderer-consumed field must satisfy the
 # types and invariants below, including the captain-vocabulary filter on every
 # captain-facing string. Anything else refuses before the existing page is
-# touched.
+# touched; decision keys must be unique within each project.
+# Recommendation and article keys include a digest of the full source title.
 #
 # fm-projets-board.v1 (all strings are captain-facing French unless noted):
 #   schema, home, generated (iso8601), updated_label ("11/09 00h30")
@@ -169,7 +170,7 @@ quota_default() {  # prints quota-axi JSON or nothing
 command_compose() {
   local snapshot="" config="" quota="" no_quota=0 costs="" now="" agenda=""
   local agenda_json calendar_now calendar_timezone
-  local snap_json cfg_json quota_json costs_json
+  local snap_json cfg_json quota_json costs_json decision_hashes
   while [ $# -gt 0 ]; do
     case "$1" in
       --snapshot) shift; snapshot=${1:?--snapshot needs a file} ;;
@@ -214,6 +215,22 @@ command_compose() {
     cfg_json='null'
   fi
 
+  decision_hashes=$(printf '%s' "$cfg_json" | python3 -c '
+import hashlib, json, sys
+cfg = json.load(sys.stdin) or {}
+hashes = {}
+for project in cfg.get("projects", []):
+    for field, title in (("recommendations", "what"), ("articles", "title")):
+        for entry in project.get(field) or []:
+            text = entry.get(title) if isinstance(entry, dict) else entry
+            if isinstance(entry, dict) and (text is None or text is False):
+                text = ""
+            if not isinstance(text, str):
+                text = json.dumps(text, ensure_ascii=False, separators=(",", ":"))
+            hashes[text] = hashlib.sha256(text.encode()).hexdigest()[:12]
+print(json.dumps(hashes))
+') || fail "cannot identify project recommendations and articles"
+
   calendar_timezone=${FM_PROJETS_TIMEZONE:-$(printf '%s' "$cfg_json" | jq -r '.timezone // "Europe/Paris"')}
   calendar_now=$(python3 - "$now" "$calendar_timezone" <<'PYTIME'
 import datetime, sys
@@ -256,6 +273,7 @@ PYTIME
     --arg now "$now" --arg calendar_now "$calendar_now" \
     --arg internal_re "$INTERNAL_RE" \
     --argjson cfg "$cfg_json" \
+    --argjson decision_hashes "$decision_hashes" \
     --argjson quota "$quota_json" \
     --argjson costs "$costs_json" '
   include "fm-projets-data";
@@ -373,17 +391,21 @@ PYTIME
       # Recommendations are what firstmate proposes and the captain has not ruled
       # on yet: they wait on him exactly like a decision, as closed choices.
       | ([ ($pc.recommendations // [])[] | . as $rc
-           | ((if ($rc | type) == "object" then ($rc.what // "") else $rc end) | captain_text) as $w
+           | ((if ($rc | type) == "object" then ($rc.what // "") else $rc end) | tostring) as $text
+           | ($text | captain_text) as $w
+           | ("reco__" + ($w | slugify) + "-" + $decision_hashes[$text]) as $key
            | ((if ($rc | type) == "object" then ($rc.why // null) else null end) | if . == null then null else captain_text end) as $why
-           | {key: ("reco__" + ($w | slugify)), owner: "(main)", local_id: ($w | slugify),
+           | {key: $key, owner: "(main)", local_id: $key,
               question: (($w + (if $why != null then " : " + $why else "" end)) | trunc(200)),
               options: [{value: "on-y-va", label: "on y va"}, {value: "pas-maintenant", label: "pas maintenant"}, {value: "on-en-parle", label: "on en parle"}],
               kind: "recommandation", configured: true}
              + ((if ($rc | type) == "object" then ($rc.url // null) else null end) | project_link) ]) as $recommendations
       | (if $is_brain then
            [ ($pc.articles // [])[] | . as $ar
-             | ((if ($ar | type) == "object" then ($ar.title // "") else $ar end) | captain_text) as $t
-             | {key: ("article__" + ($t | slugify)), owner: "(main)", local_id: ($t | slugify),
+             | ((if ($ar | type) == "object" then ($ar.title // "") else $ar end) | tostring) as $text
+             | ($text | captain_text) as $t
+             | ("article__" + ($t | slugify) + "-" + $decision_hashes[$text]) as $key
+             | {key: $key, owner: "(main)", local_id: $key,
                 question: (("Article à valider : " + $t) | trunc(200)),
                 options: [{value: "valide", label: "validé"}, {value: "a-revoir", label: "à revoir"}, {value: "plus-tard", label: "plus tard"}],
                 kind: "article", configured: true}
@@ -502,7 +524,8 @@ validate_payload() {  # <data.json>
       and ((has("quick_wins") | not) or (.quick_wins | type == "array" and all(.[]; captain_string)))
       and ((has("meetings") | not) or (.meetings | type == "array" and all(.[]; . != null and meeting_item)))
       and (.doing | type == "array" and all(.[]; doing_item))
-      and (.missing_from_you | type == "array" and all(.[]; you_item))
+      and (.missing_from_you | type == "array" and all(.[]; you_item)
+           and (map(.key) | unique | length) == length)
       and (.missing_from_others | type == "array" and all(.[]; other_item))
       and (.pages | type == "array" and all(.[]; page_item))
       and (.costs | costs_item)
