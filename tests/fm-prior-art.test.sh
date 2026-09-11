@@ -426,7 +426,7 @@ MD
 
 
 check_query_separators() {
-  local case_home="$HOME_DIR/query-separators" out word grouped separate
+  local case_home="$HOME_DIR/query-separators" out word grouped separate curly_apostrophe
   mkdir -p "$case_home/data"
   cat > "$case_home/data/report.md" <<'MD'
 L'agent avance d'abord aujourd'hui avec l’agent.
@@ -434,7 +434,8 @@ La mémoire de chaque agent compte.
 Use C++ and agent[prod], agent\memoire or agent/memoire with foo&bar.
 MD
   printf 'lagent dabord aujourdhui memoireagent\n' > "$case_home/data/joined.md"
-  for word in "l'agent" "d'abord" "aujourd'hui" 'l’agent' 'C++' 'agent[prod]' 'agent\memoire' 'agent/memoire' 'foo&bar'; do
+  curly_apostrophe=$(printf 'l\342\200\231agent')
+  for word in "l'agent" "d'abord" "aujourd'hui" "$curly_apostrophe" 'C++' 'agent[prod]' 'agent\memoire' 'agent/memoire' 'foo&bar'; do
     out=$(case_run "$word") || fail "literal query failed: $out"
     assert_contains "$out" "source: data/report.md" "query separators must preserve literal matches"
     assert_not_contains "$out" "source: data/joined.md" "query separators must never disappear"
@@ -447,8 +448,9 @@ MD
   out=$(case_run $'mémoire\tagent\nl\x27agent') || fail "whitespace query failed: $out"
   assert_contains "$out" "ALREADY KNOWN ABOUT: memoire agent l'agent" "all ASCII whitespace must separate words"
   for word in '???' $'agent\001memoire'; do
-    out=$(case_run "$word")
-    [ "$?" -ne 0 ] || fail "unsupported query input must be refused: $out"
+    if out=$(case_run "$word"); then
+      fail "unsupported query input must be refused: $out"
+    fi
     assert_not_contains "$out" "FOUND NOWHERE" "unsupported input cannot establish absence"
   done
   pass "literal separators and multiword queries preserve indexed spelling"
@@ -482,8 +484,12 @@ check_uncertain_dates() {
         printf '# Note\n%s\n## Known 2026-08-01\nknownbeforeword\n\n' "$metadata"
         case "$variant" in
           html) printf '<div>\n## Example 1999-01-01\nambiguousword\n</div>\n' ;;
-          list) printf -- '- ```text\n  Date: 1999-01-01\n  ```\n  ambiguousword\n' ;;
-          quote) printf '> > ```\n> > Date: 1999-01-01\n> > ```\nambiguousword\n' ;;
+          list)
+            # shellcheck disable=SC2016 # Markdown fences are literal fixture text.
+            printf -- '- ```text\n  Date: 1999-01-01\n  ```\n  ambiguousword\n' ;;
+          quote)
+            # shellcheck disable=SC2016 # Markdown fences are literal fixture text.
+            printf '> > ```\n> > Date: 1999-01-01\n> > ```\nambiguousword\n' ;;
           directive) printf ':::example\n## Example 1999-01-01\nambiguousword\n:::\n' ;;
         esac
       } > "$case_home/data/report.md"
@@ -531,6 +537,7 @@ check_mixed_indentation() {
       done
     done
   done
+  # shellcheck disable=SC2016 # Markdown fences are literal fixture text.
   printf '# Note\n## Known 2026-08-01\n```\n \tExample 1999-01-01\n \t```\n---\n```\nfencedindentword\n' > "$case_home/data/report.md"
   out=$(case_run fencedindentword) || fail "fenced indentation lookup failed: $out"
   assert_contains "$out" "2026-08-01  (dated section)" "indentation inside a known fence must remain code"
