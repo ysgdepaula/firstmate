@@ -1,0 +1,17 @@
+{
+  "queued": [
+    {
+      "prompt": "Projets · Torre · Hébergement : chez toi ou chez Torre ? : chez toi",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-hebergement",
+        "choix": "chez-toi"
+      },
+      "tag": "choice"
+    }
+  ],
+  "calls": [
+    "queuePrompt",
+    "sendQueuedPrompts"
+  ]
+}

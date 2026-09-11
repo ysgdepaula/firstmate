@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>La base</title>
+<style>
+:root{--paper:#FAFAF8;--surround:#EFEEE9;--ink:#111;--muted:#8A8A87;--line:#DBDAD4}
+*{box-sizing:border-box;margin:0;padding:0}html,body{max-width:100%;overflow-x:hidden}
+body{background:var(--surround);color:var(--ink);font:15px/1.5 "Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:820px;margin:0 auto;padding:32px 20px 80px;min-width:0}
+h1{font-size:24px;font-weight:700;letter-spacing:-.02em}.meta{color:var(--muted);font-size:13px;margin:4px 0 20px}
+ul{list-style:none;background:var(--paper);border:1.6px solid var(--ink);border-radius:18px;padding:6px 18px}
+li{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--line);min-width:0}
+li:last-child{border-bottom:0}
+.state{font:11px/1.6 "SF Mono",ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--ink);border-radius:999px;padding:0 8px;flex:none}
+li.ko .state{border-style:dashed;border-color:var(--muted);color:var(--muted)}
+a{color:inherit;font-weight:700;overflow-wrap:anywhere}.addr,.hint{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.addr{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12px}
+.limit{margin-top:18px;color:var(--muted);font-size:13px;max-width:70ch}
+.note{margin-top:10px;color:var(--muted);font-size:13px}
+</style></head><body><div class="wrap">
+<h1>La base</h1>
+<div class="meta">ce qui est joignable sur la base, état mesuré à l'ouverture de cette page</div>
+<ul><li class="ok"><span class="state">répond</span> <a href="http://127.0.0.1:50020/projets">La page projets</a> <span class="addr">http://127.0.0.1:50020/projets</span> <span class="hint">boutons non transmis : session Lavish absente ou indisponible</span></li>
+<li class="ko"><span class="state">ne répond pas</span> <a href="http://127.0.0.1:9/">Démo indisponible</a> <span class="addr">http://127.0.0.1:9/</span> <span class="hint">démo ou service déclaré</span></li>
+<li class="ok"><span class="state">répond</span> <a href="http://127.0.0.1:50020/fichiers/documents/">Dossier : Documents du projet</a> <span class="addr">http://127.0.0.1:50020/fichiers/documents/</span> <span class="hint">fichiers partagés, lecture seule</span></li></ul>
+<p class="note">lavish-axi ne répond pas : revues Lavish non listées</p>
+<p class="limit">Cette adresse vit sur le réseau privé de Yan (tailnet) : seules ses machines la voient, un client extérieur n'y a pas accès. Les pages client passent par un sous-domaine dédié, chantier séparé.</p>
+</div></body></html>

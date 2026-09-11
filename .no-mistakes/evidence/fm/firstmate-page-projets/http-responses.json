@@ -1,0 +1,38 @@
+[
+  {
+    "request": "GET /",
+    "status": 200,
+    "headers": {
+      "Server": "fm-projets-serve/1 Python/3.14.7",
+      "Date": "Fri, 11 Sep 2026 08:45:53 GMT",
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": "2748",
+      "Cache-Control": "no-store"
+    },
+    "body_file": "base-index.html"
+  },
+  {
+    "request": "GET /projets",
+    "status": 200,
+    "headers": {
+      "Server": "fm-projets-serve/1 Python/3.14.7",
+      "Date": "Fri, 11 Sep 2026 08:45:53 GMT",
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": "41758",
+      "Cache-Control": "no-store"
+    },
+    "body_file": "projets-fallback.html"
+  },
+  {
+    "request": "GET /fichiers/documents/lisez-moi.txt",
+    "status": 200,
+    "headers": {
+      "Server": "fm-projets-serve/1 Python/3.14.7",
+      "Date": "Fri, 11 Sep 2026 08:45:53 GMT",
+      "Content-Type": "text/plain",
+      "Content-Length": "49",
+      "Cache-Control": "no-store"
+    },
+    "body_file": "shared-document.txt"
+  }
+]
