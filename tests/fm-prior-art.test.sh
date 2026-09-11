@@ -281,7 +281,7 @@ MD
     out=$(case_run indentedchildword) || fail "indented child lookup failed: $out"
     assert_contains "$out" "2026-09-02  (dated section)" "indented nested sections must inherit the applicable date"
     out=$(case_run protectedheadingword) || fail "non-heading lookup failed: $out"
-    assert_contains "$out" "2026-09-02  (dated section)" "four spaces or seven hashes must not change the section"
+    assert_contains "$out" "2025-07-10  (stated in the document)" "indented content must use conservative document provenance"
     out=$(case_run emptyheadingword) || fail "empty heading lookup failed: $out"
     assert_contains "$out" "2025-07-10  (stated in the document)" "empty indented headings must also end a sibling section"
   done
@@ -503,6 +503,40 @@ check_uncertain_dates() {
   pass "uncertain block context consistently weakens date provenance"
 }
 
+
+check_mixed_indentation() {
+  local case_home="$HOME_DIR/mixed-indentation" out indent metadata location
+  mkdir -p "$case_home/data"
+  for metadata in 'Date: 2025-07-10' ''; do
+    for indent in $' \t' $'  \t' $'   \t' $'\t ' $'\t\t' '    '; do
+      for location in title underline; do
+        {
+          printf '# Note\n%s\n\n## Earlier 2026-08-01\n\n' "$metadata"
+          if [ "$location" = title ]; then
+            printf '%sExample 1999-01-01\n---\n' "$indent"
+          else
+            printf 'Example 1999-01-01\n%s---\n' "$indent"
+          fi
+          printf 'mixedindentword\n'
+        } > "$case_home/data/report.md"
+        touch -t 202407101200 "$case_home/data/report.md"
+        out=$(case_run mixedindentword) || fail "mixed indentation lookup failed: $out"
+        if [ -n "$metadata" ]; then
+          assert_contains "$out" "2025-07-10  (stated in the document)" "mixed indentation must fall back to the trusted document date"
+        else
+          assert_contains "$out" "2024-07-10  (file last changed" "mixed indentation without metadata must use the file date"
+        fi
+        assert_not_contains "$out" "1999-01-01" "indented examples must not supply dates"
+        assert_not_contains "$out" "dated section" "uncertain indentation must not claim a section date"
+      done
+    done
+  done
+  printf '# Note\n## Known 2026-08-01\n```\n \tExample 1999-01-01\n \t```\n---\n```\nfencedindentword\n' > "$case_home/data/report.md"
+  out=$(case_run fencedindentword) || fail "fenced indentation lookup failed: $out"
+  assert_contains "$out" "2026-08-01  (dated section)" "indentation inside a known fence must remain code"
+  pass "space and tab indentation cannot manufacture section dates"
+}
+
 if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
   case "$FM_PRIOR_ART_TEST_CASE" in
     search-options) check_search_options ;;
@@ -519,6 +553,7 @@ if [ -n "${FM_PRIOR_ART_TEST_CASE:-}" ]; then
     query-separators) check_query_separators ;;
     container-dates) check_container_dates ;;
     uncertain-dates) check_uncertain_dates ;;
+    mixed-indentation) check_mixed_indentation ;;
     *) fail "unknown focused test case: $FM_PRIOR_ART_TEST_CASE" ;;
   esac
   exit 0
@@ -874,3 +909,5 @@ check_setext_dates
 check_query_separators
 check_container_dates
 check_uncertain_dates
+
+check_mixed_indentation

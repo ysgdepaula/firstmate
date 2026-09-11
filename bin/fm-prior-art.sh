@@ -490,9 +490,27 @@ describe() {  # <path> <best line number> <fallback year>
     if (astext && !insection && hdrdate == "") hdrdate = paragraphdate
     paragraph = ""; paragraphdate = ""; firstline = 0
   }
+  function indentation(s,   i, c, columns) {
+    columns = 0
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (c == " ") columns++
+      else if (c == "\t") columns += 4 - columns % 4
+      else break
+    }
+    return columns
+  }
   function markdown(s, n,   prefix, rest, level, title) {
     sub(/\r$/, "", s)
     if (uncertain_at) return
+    if (s !~ /^[ \t]*$/ && indentation(s) >= 4) {
+      if (fencechar == "") {
+        endparagraph(1)
+        uncertain_at = n
+      }
+      return
+    }
+    sub(/^[ \t]*/, "", s)
     if (fencechar == "" &&
         (s ~ /^ ? ? ?(>|[-+*]([ \t]+|$)|[0-9]+[.)][ \t]+)/ ||
          s ~ /^ ? ? ?(<|\[|!\[|:::+|\\)/ ||
@@ -535,7 +553,6 @@ describe() {  # <path> <best line number> <fallback year>
       endparagraph(0)
       return
     }
-    if (!firstline && (s ~ /^    / || s ~ /^\t/)) return
     prefix = s; gsub(/[ \t]/, "", prefix)
     if (s ~ /^[ \t]*$/ || prefix ~ /^---+$/ || prefix ~ /^\*\*\*+$/ || prefix ~ /^___+$/) {
       endparagraph(1)
