@@ -1,0 +1,152 @@
+Prior-art CLI demonstration on 462 synthetic local records (not private fleet data).
+Every CLI command is run with macOS sandbox-exec denying network access.
+Corpus size: 4290051 bytes.
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh '--limit' '3' 'memoire' 'contexte' 'enquete' 'rapports' 'locale'
+ALREADY KNOWN ABOUT: memoire contexte enquete rapports locale
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. memoire-scout - an investigation
+   2026-09-01  (stated in the document)
+   source: data/memoire-scout/report.md, line 4
+   found: memoire (2), contexte (1), enquete (1), rapports (1), locale (1)   covers 5 of 5 words
+   under: Mémoire des agents
+   > Nous avons déjà évalué la mémoire locale pour retrouver le contexte avant une enquête.
+
+2. memoire-scout - instructions that were given
+   2026-08-31  (stated in the document)
+   source: data/memoire-scout/brief.md, line 4
+   found: memoire (1), contexte (1), enquete (1), locale (1)   covers 4 of 5 words
+   under: Instructions
+   > Évaluer le contexte et la mémoire locale avant toute nouvelle enquête.
+
+3. backlog - the work queue
+   2026-09-11  (stated in the document)
+   source: data/backlog.md, line 4
+   found: enquete (1), rapports (1)   covers 2 of 5 words
+   under: Work queue
+   > Rendre les rapports accessibles avant une enquête.
+
+3 more documents matched and are not shown. Raise --limit to see them.
+
+Looked through 462 documents in 1s (index rebuilt in 1s). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 3.639s
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'budgetneedle'
+ALREADY KNOWN ABOUT: budgetneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. budget - an investigation
+   2026-09-02  (stated in the document)
+   source: data/budget/report.md, line 4
+   found: budgetneedle (1)   covers 1 of 1 words
+   under: Budget
+   > -10% marge nette pour budgetneedle
+
+Looked through 462 documents in 0s (index reused). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 1.063s
+
+Counterfactual: the same source and query on the commit immediately before the quotation fix:
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'budgetneedle'
+ALREADY KNOWN ABOUT: budgetneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. budget - an investigation
+   2026-09-02  (stated in the document)
+   source: data/budget/report.md, line 4
+   found: budgetneedle (1)   covers 1 of 1 words
+   under: Budget
+   > 10% marge nette pour budgetneedle
+
+Looked through 462 documents in 0s (index reused). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 1.088s
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh "l'agent"
+ALREADY KNOWN ABOUT: l'agent
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. french - an investigation
+   2026-09-03  (stated in the document)
+   source: data/french/report.md, line 4
+   found: l'agent (1)   covers 1 of 1 words
+   under: Note
+   > L'agent consulte d'abord la mémoire aujourd'hui.
+
+Looked through 462 documents in 1s (index reused). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 1.313s
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'uncertainneedle'
+ALREADY KNOWN ABOUT: uncertainneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. archive - a note
+   2025-07-10  (stated in the document)
+   source: data/archive.md, line 8
+   found: uncertainneedle (1)   covers 1 of 1 words
+   > uncertainneedle
+
+Looked through 462 documents in 1s (index reused). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 1.431s
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'unexploredneedle'
+ALREADY KNOWN ABOUT: unexploredneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+FOUND NOWHERE: unexploredneedle
+  No document in this home mentions it. On that word this is new ground.
+
+NOTHING FOUND.
+  No document in this home covers this subject. Nothing is being guessed
+  at and nothing adjacent is being offered instead: as far as these
+  records go, this has not been looked into.
+
+Looked through 462 documents in 0s (index reused). No model was called.
+
+Exit: 0; elapsed: 1.297s
+
+Verified: all original record bytes, modes and modification times are unchanged after lookup.
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'freshnessneedle'
+ALREADY KNOWN ABOUT: freshnessneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. memoire-scout - an investigation
+   2026-09-01  (stated in the document)
+   source: data/memoire-scout/report.md, line 7
+   found: freshnessneedle (1)   covers 1 of 1 words
+   under: Mémoire des agents
+   > Une nouvelle conclusion: freshnessneedle.
+
+Looked through 462 documents in 0s (index rebuilt in 1s). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 2.240s
+
+$ FM_HOME=<fixture> bin/fm-prior-art.sh 'freshnessneedle'
+ALREADY KNOWN ABOUT: freshnessneedle
+Looked through 462 documents in this home. Nothing was sent anywhere.
+
+1. memoire-scout - an investigation
+   2026-09-01  (stated in the document)
+   source: data/memoire-scout/report.md, line 7
+   found: freshnessneedle (1)   covers 1 of 1 words
+   under: Mémoire des agents
+   > Une nouvelle conclusion: freshnessneedle.
+
+Looked through 462 documents in 1s (index reused). No model was called.
+Read what is above before commissioning new work on this subject.
+
+Exit: 0; elapsed: 1.161s
+
+Persisted cache permissions verified: directories 0700; every cached file 0600. Records remain 0600.
+A deliberately permissive cache was repaired on reuse to the same private modes.
+No generated files exist outside state/prior-art in the fixture home. All lookups completed with network access denied.

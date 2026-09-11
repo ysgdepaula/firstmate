@@ -1,0 +1,51 @@
+{
+  "corpus": "462 synthetic Markdown records, 4.29 MB; end-to-end wall time, three interleaved samples; same machine and corpus, no sandbox launcher overhead",
+  "samples_seconds": {
+    "before_quotation_fix": {
+      "one_word": [
+        2.417,
+        1.327,
+        1.357
+      ],
+      "five_words": [
+        2.46,
+        2.343,
+        2.014
+      ],
+      "rebuild_only": [
+        3.519,
+        1.77,
+        1.897
+      ]
+    },
+    "target": {
+      "one_word": [
+        1.274,
+        1.44,
+        1.344
+      ],
+      "five_words": [
+        2.482,
+        1.947,
+        4.514
+      ],
+      "rebuild_only": [
+        1.905,
+        1.799,
+        1.855
+      ]
+    }
+  },
+  "median_seconds": {
+    "before_quotation_fix": {
+      "one_word": 1.357,
+      "five_words": 2.343,
+      "rebuild_only": 1.897
+    },
+    "target": {
+      "one_word": 1.344,
+      "five_words": 2.482,
+      "rebuild_only": 1.855
+    }
+  }
+}
