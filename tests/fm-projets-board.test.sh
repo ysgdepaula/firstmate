@@ -646,3 +646,34 @@ test_recommendation_and_article_identities() {
   pass "full titles retain distinct stable identities and duplicate keys refuse rendering"
 }
 test_recommendation_and_article_identities
+
+test_optional_text_preserves_entries() {
+  local home out
+  home=$(make_home optional-text)
+  write_table "$home/config/projets.json"
+  jq '.projects += [{id:"cerveau", name:"Cerveau", brain:true,
+      recommendations: [{what:"Indexer les rapports", why:""},
+                        {what:"Relier les notes", why:"   "},
+                        {what:"Classer les sources", why:"harness"},
+                        {what:"Lire les articles", why:null},
+                        {what:"Préparer la revue"},
+                        {what:"Publier la synthèse", why:"  pour demain  "},
+                        {what:"", why:"raison valable"},
+                        {what:"harness", why:"raison valable"}],
+      creations: [{label:"Rapport", kind:""}, {label:"Notes", kind:"   "},
+                  {label:"Sources", kind:"harness"}, {label:"Articles", kind:null},
+                  {label:"Revue"}, {label:"Synthèse", kind:"  page  "},
+                  {label:"", kind:"page"}, {label:"harness", kind:"page"}],
+      articles: [{title:"Doctrine"}, {title:""}, {title:"harness"}]}]' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed with empty optional text"
+  printf '%s' "$out" | jq -e '.projects[] | select(.id == "cerveau")
+    | [.missing_from_you[].question] == ["Indexer les rapports", "Relier les notes", "Classer les sources", "Lire les articles", "Préparer la revue", "Publier la synthèse : pour demain", "Article à valider : Doctrine"]
+      and [.creations[].label] == ["Rapport", "Notes", "Sources", "Articles", "Revue", "Synthèse"]
+      and [.creations[].kind] == [null, null, null, null, null, "page"]' >/dev/null \
+    || fail "optional text removed an entry or invalid primary text survived: $out"
+  printf '%s' "$out" > "$home/payload.json"
+  run_board "$home" render "$home/payload.json" >/dev/null || fail "normalized optional text did not render"
+  pass "empty or rejected optional text preserves entries while invalid primary text excludes them"
+}
+test_optional_text_preserves_entries

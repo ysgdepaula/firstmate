@@ -303,6 +303,7 @@ PYTIME
   def fallback($pfx): . as $id | (local_id | id_words($pfx)) | if safe and length > 0 then . else ($id | if safe and length > 0 then . else "travail en cours" end) end;
   def slugify: ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "") | .[:60] | if length == 0 then "x" else . end;
   def captain_text: tostring | clean | select(length > 0 and safe);
+  def optional_captain_text: if . == null then null else (captain_text // null) end;
   # A title that opens with the project name or its id prefix ("Torre : ...",
   # "chef: ...") repeats the card heading, so the card drops that label.
   def strip_label($name; $prefixes):
@@ -394,7 +395,7 @@ PYTIME
            | ((if ($rc | type) == "object" then ($rc.what // "") else $rc end) | tostring) as $text
            | ($text | captain_text) as $w
            | ("reco__" + ($w | slugify) + "-" + $decision_hashes[$text]) as $key
-           | ((if ($rc | type) == "object" then ($rc.why // null) else null end) | if . == null then null else captain_text end) as $why
+           | ((if ($rc | type) == "object" then ($rc.why // null) else null end) | optional_captain_text) as $why
            | {key: $key, owner: "(main)", local_id: $key,
               question: (($w + (if $why != null then " : " + $why else "" end)) | trunc(200)),
               options: [{value: "on-y-va", label: "on y va"}, {value: "pas-maintenant", label: "pas maintenant"}, {value: "on-en-parle", label: "on en parle"}],
@@ -414,7 +415,7 @@ PYTIME
       | ($decisions_you + $recommendations + $articles) as $missing_you
       | ([ ($pc.creations // [])[] | . as $cr
            | ((if ($cr | type) == "object" then ($cr.label // "") else $cr end) | captain_text) as $l
-           | {label: $l, kind: ((if ($cr | type) == "object" then ($cr.kind // null) else null end) | if . == null then null else captain_text end)}
+           | {label: $l, kind: ((if ($cr | type) == "object" then ($cr.kind // null) else null end) | optional_captain_text)}
              + ((if ($cr | type) == "object" then ($cr.url // null) else null end) | project_link) ]) as $creations
       | (if $is_brain then [ ($pc.quick_wins // [])[] | captain_text ] else [] end) as $quick_wins
       | ([ ($pc.missing_from_others // [])[] | {who: (.who // "?"), what: (.what // "?"), tag: (.tag // null)} ]) as $missing_others

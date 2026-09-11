@@ -115,13 +115,16 @@ test_index_measures_every_entry_with_a_real_request() {
   dport=$(start_dummy "$home" "$home/share")
   cat > "$home/config/projets-serve.json" <<EOF
 {"schema": "fm-projets-serve.v1", "port": 4390, "host": "base.test",
- "entries": [{"label": "Démo qui répond", "url": "http://127.0.0.1:$dport/"}, {"label": "Démo éteinte", "url": "http://127.0.0.1:9/"}],
+ "entries": [{"label": "Démo qui répond", "url": "http://127.0.0.1:$dport/"}, {"label": "Démo éteinte", "url": "http://127.0.0.1:9/"}, {"label": "Adresse vide", "url": ""}, {"label": "Adresse sans schéma", "url": "127.0.0.1:$dport/"}, {"label": "Adresse malformée", "url": "http://[invalide"}],
  "folders": [{"label": "Docs partagés", "path": "$home/share/docs"}, {"label": "Dossier disparu", "path": "$home/share/absent"}]}
 EOF
   base=$(start_front_door "$home")
   out=$(index_lines "$base")
   assert_contains "$out" "ne répond pas | La page projets | http://127.0.0.1:" "the page line is not measured before the page exists: $out"
   assert_contains "$out" "ne répond pas | Revue Lavish : revue-alex | http://127.0.0.1:9/session/aaaa" "an open Lavish review with a dead address is not reported as such: $out"
+  assert_contains "$out" "ne répond pas | Adresse vide | " "an empty URL interrupted the index: $out"
+  assert_contains "$out" "ne répond pas | Adresse sans schéma | " "a schemeless URL interrupted the index: $out"
+  assert_contains "$out" "ne répond pas | Adresse malformée | " "a malformed URL interrupted the index: $out"
   assert_not_contains "$out" "finie" "an ended Lavish review was listed: $out"
   assert_contains "$out" "répond | Démo qui répond | http://127.0.0.1:$dport/" "a live declared service is not measured as answering: $out"
   assert_contains "$out" "ne répond pas | Démo éteinte | http://127.0.0.1:9/" "a dead declared service is not measured as silent: $out"
@@ -289,7 +292,7 @@ PYSTREAM
 }
 
 test_launchd_agent_is_installed_started_stopped_and_removed() {
-  local home fakebin out plist link label
+  local home fakebin out plist link label subcommand argument rc
   home=$(make_home launchd)
   fakebin="$home/fakebin"
   printf '{"schema": "fm-projets-serve.v1", "port": 4391, "host": "base.test"}\n' > "$home/config/projets-serve.json"
@@ -341,6 +344,28 @@ PY
   out=$(run status) || fail "status failed"
   assert_contains "$out" "agent: loaded" "status does not report the loaded agent: $out"
   assert_contains "$out" "index: ne repond pas (http://base.test:4391/)" "status did not measure the index with a real request: $out"
+
+  cp "$home/launchctl.calls" "$home/calls-before-arguments"
+  cp "$plist" "$home/plist-before-arguments"
+  for subcommand in run install uninstall start stop status url; do
+    for argument in -h --help; do
+      out=$(run "$subcommand" "$argument") || fail "$subcommand $argument failed: $out"
+      assert_contains "$out" 'Usage:' "$subcommand $argument did not print usage"
+    done
+    for argument in --unknown unexpected; do
+      rc=0
+      out=$(run "$subcommand" "$argument" 2>&1) || rc=$?
+      [ "$rc" -eq 2 ] || fail "$subcommand $argument returned $rc instead of 2"
+    done
+    rc=0
+    out=$(run "$subcommand" --help unexpected 2>&1) || rc=$?
+    [ "$rc" -eq 2 ] || fail "$subcommand accepted an extra argument alongside help"
+    cmp -s "$home/calls-before-arguments" "$home/launchctl.calls" || fail "$subcommand help or invalid arguments called launchctl"
+    cmp -s "$home/plist-before-arguments" "$plist" || fail "$subcommand help or invalid arguments changed the plist"
+    [ -L "$link" ] && [ "$(readlink "$link")" = "$plist" ] || fail "$subcommand help or invalid arguments changed the service link"
+    [ -e "$home/launchctl.loaded" ] || fail "$subcommand help or invalid arguments stopped the service"
+  done
+  pass "every service subcommand handles help and rejects extra arguments before service access"
 
   out=$(run stop) || fail "stop failed"
   assert_contains "$out" "stopped: " "stop did not report: $out"

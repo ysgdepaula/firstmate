@@ -107,8 +107,8 @@ def slugify(text: str) -> str:
 
 def probe(url: str, timeout: float) -> bool:
     """A successful HTTP request decides whether the published content answers."""
-    req = urllib.request.Request(url, method="GET", headers={"User-Agent": "fm-projets-serve"})
     try:
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "fm-projets-serve"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - operator-declared addresses
             return 200 <= resp.status < 400
     except urllib.error.HTTPError:

@@ -18,6 +18,7 @@
 #   fm-projets-serve.sh start|stop          load or unload the agent without touching the plist
 #   fm-projets-serve.sh status              launchd state plus one real request to the index
 #   fm-projets-serve.sh url                 print the stable base URL (index) and the page URL
+# Each subcommand accepts -h/--help; other arguments exit 2 before service access.
 #
 # The port and the published host name come from config/projets-serve.json
 # (schema fm-projets-serve.v1, owned by docs/configuration.md "Stable page
@@ -215,7 +216,23 @@ command_url() {
   printf 'page: %sprojets\n' "$(base_url)"
 }
 
-case "${1-}" in
+serve_command=${1-}
+case "$serve_command" in
+  run|install|uninstall|start|stop|status|url|-h|--help|help) ;;
+  *) usage >&2; exit 2 ;;
+esac
+shift
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -eq 1 ] && { [ "$1" = -h ] || [ "$1" = --help ]; }; then
+    usage
+    exit 0
+  fi
+  printf 'error: unexpected argument: %s\n' "$1" >&2
+  usage >&2
+  exit 2
+fi
+
+case "$serve_command" in
   run) command_run ;;
   install) command_install ;;
   uninstall) command_uninstall ;;
