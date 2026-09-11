@@ -130,21 +130,11 @@ jobs:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Cap is a hang tripwire, not the expected healthy end of the lane.
-    # Measured on green run 34581246327, the five shards run 12.3, 13.6, 14.9,
-    # 15.3 and 15.9 minutes, so a shard is about 15 minutes at nominal pace.
-    # A runner 1.42x slower than that was observed here and cancelled a shard
-    # twice at the former 20 minute cap; at that pace those same shards need
-    # 17.5, 19.3, 21.2, 21.8 and 22.6 minutes, so three of five exceed a 20
-    # minute cap and a fourth lands within a minute of it.
-    # An exhausted timeout-minutes is reported as a cancellation carrying no
-    # verdict, so a cap set near the healthy duration does not report a slow
-    # lane, it removes that lane's verdict entirely.
-    # 40 minutes is about 2.5x the slowest nominal shard and about 1.8x the
-    # slowest pace actually observed, and stays far below the 75 minute lane so
-    # a genuine hang is still caught.
-    # Raising the cap is a stopgap, not the fix: no shard should sit this close
-    # to its own cap, and rebalancing the serial shards is tracked as its own
-    # separate work.
+    # Measured on green run 34581246327, the five shards run 12.3, 13.6, 14.9, 15.3 and 15.9 minutes, so a shard is about 15 minutes at nominal pace.
+    # A runner 1.42x slower than that was observed here and cancelled a shard twice at the former 20 minute cap; at that pace those same shards need 17.5, 19.3, 21.2, 21.8 and 22.6 minutes, so three of five exceed a 20 minute cap and a fourth lands within a minute of it.
+    # An exhausted timeout-minutes is reported as a cancellation carrying no verdict, so a cap set near the healthy duration does not report a slow lane, it removes that lane's verdict entirely.
+    # 40 minutes is about 2.5x the slowest nominal shard and about 1.8x the slowest pace actually observed, and stays far below the 75 minute lane so a genuine hang is still caught.
+    # Raising the cap is a stopgap, not the fix: no shard should sit this close to its own cap, and rebalancing the serial shards is tracked as its own separate work.
     timeout-minutes: 40
     strategy:
       # Every shard reports so one failure never hides another shard's result.
