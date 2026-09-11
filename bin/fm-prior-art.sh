@@ -94,6 +94,7 @@ die() { printf 'fm-prior-art: %s\n' "$*" >&2; exit 1; }
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e 's/^# \{0,1\}//' -e '$d'; }
 
+ARGS=("$@")
 TERMS_RAW=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -183,9 +184,10 @@ open(my $list, "<", $ARGV[0]) or die "cannot read the document list: $!\n";
 my $id = 0;
 while (my $path = <$list>) {
   chomp $path;
-  $id++;                       # incremented even when a file cannot be opened,
-  open(my $fh, "<", $path) or next;   # so an id always means the same line of
-  my $n = 0;                          # the list this index was built from.
+  $id++;
+  open(my $fh, "<", $path) or die "Not read: $path: $!\n";
+  my $n = 0;
+  $! = 0;
   while (my $line = <$fh>) {
     $n++;
     $line =~ s/\t/ /g;
@@ -194,27 +196,49 @@ while (my $path = <$list>) {
     chomp $line;
     print "$id\t$n\t$line\n";
   }
-  close $fh;
+  die "Not read completely: $path: $!\n" if $!;
+  close $fh or die "Not read completely: $path: $!\n";
 }
 PL
 }
 
-TMPDIR_RUN=$(mktemp -d)
+if [ "${FM_PRIOR_ART_LOCK_OWNER:-}" != "$$" ]; then
+  mkdir -p "$CACHE"
+  exec perl -MFcntl=:flock,F_SETFD -e '
+    open(my $lock, ">>", shift @ARGV) or die "Cannot prepare the local search: $!\n";
+    flock($lock, LOCK_EX) or die "Cannot wait for the local search: $!\n";
+    fcntl($lock, F_SETFD, 0) or die "Cannot keep the local search protected: $!\n";
+    $ENV{FM_PRIOR_ART_LOCK_OWNER} = $$;
+    exec "bash", @ARGV;
+    die "Cannot start the local search: $!\n";
+  ' "$CACHE/lock" "${BASH_SOURCE[0]}" "${ARGS[@]}"
+fi
+
+STAT_STYLE=bsd
+case "$(stat --version 2>/dev/null || true)" in *GNU*) STAT_STYLE=gnu ;; esac
+DATE_STYLE=bsd
+case "$(date --version 2>/dev/null || true)" in *GNU*) DATE_STYLE=gnu ;; esac
+
+TMPDIR_RUN=$(mktemp -d "$CACHE/run.XXXXXX")
 cleanup() { rm -rf "$TMPDIR_RUN"; }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 CORPUS="$TMPDIR_RUN/corpus"
 WANT="$TMPDIR_RUN/manifest"
 HITS="$TMPDIR_RUN/hits"
 RANKED="$TMPDIR_RUN/ranked"
 TOP="$TMPDIR_RUN/top"
-SKIPPED="$TMPDIR_RUN/skipped"
 
-# A tab in a path would break the manifest, and a newline would break the file
-# list, so such a document is set aside out loud rather than silently mixed in.
-find "$DATA" -type f -name '*.md' -print > "$TMPDIR_RUN/all" 2>/dev/null || true
-grep "$TAB" "$TMPDIR_RUN/all" > "$SKIPPED" 2>/dev/null || true
-grep -v "$TAB" "$TMPDIR_RUN/all" 2>/dev/null | sort > "$CORPUS" || true
+find "$DATA" -type f -name '*.md' -print0 > "$TMPDIR_RUN/all" \
+  || die "not all records could be listed under $DATA; coverage is incomplete"
+perl -0ne '
+  chomp;
+  die "Not read, ambiguous source name: $_\n" if /[\t\r\n]/;
+  die "Not read: $_: permission denied\n" unless -r $_;
+  print "$_\n";
+' "$TMPDIR_RUN/all" | sort > "$CORPUS"
 
 NDOCS=$(wc -l < "$CORPUS" | tr -d ' ')
 [ "$NDOCS" -gt 0 ] || die "no records to read: found no documents under $DATA"
@@ -222,20 +246,16 @@ NDOCS=$(wc -l < "$CORPUS" | tr -d ' ')
 # The freshness test: what is on disk now, against what the index was built
 # from. Cheap enough to run every time, which is what keeps the index honest
 # without anyone having to remember to refresh it.
-if [ -s "$CORPUS" ]; then
-  tr '\n' '\0' < "$CORPUS" \
-    | xargs -0 stat -f '%m%t%z%t%N' 2>/dev/null \
-    || tr '\n' '\0' < "$CORPUS" | xargs -0 stat -c '%Y%t%s%t%n' 2>/dev/null \
-    || die "cannot read the modification times under $DATA"
-fi | sort > "$WANT"
+if [ "$STAT_STYLE" = gnu ]; then
+  tr '\n' '\0' < "$CORPUS" | xargs -0 stat -c '%y %z %s %i %a %n'
+else
+  tr '\n' '\0' < "$CORPUS" | xargs -0 stat -f '%.9Fm %.9Fc %z %i %p %N'
+fi > "$WANT"
 
 build_index() {
   mkdir -p "$CACHE"
   fold_program > "$TMPDIR_RUN/fold.pl"
   perl "$TMPDIR_RUN/fold.pl" "$CORPUS" > "$TMPDIR_RUN/index.new"
-  # The document map and the index land before the manifest that vouches for
-  # them, so a reader can never be told the index is current while a file it
-  # depends on is still half written.
   cp -f "$CORPUS" "$TMPDIR_RUN/docs.new"
   mv -f "$TMPDIR_RUN/docs.new" "$DOCS"
   mv -f "$TMPDIR_RUN/index.new" "$INDEX"
@@ -318,22 +338,18 @@ BEGIN {
 {
   path = docpath[$1 + 0]; lno = $2 + 0; text = $3
   if (path == "") next
-  here = 0; dense = 0
+  here = 0
   for (i = 1; i <= nt; i++) {
     c = count_matches(text, RE[i])
     if (c > 0) {
       tf[path, i] += c
       if (!((path, i) in seen)) { seen[path, i] = 1; df[i]++ }
-      here++; dense += c
+      here++; linecount[NR, i] = c
     }
   }
   if (here == 0) next
   files[path] = 1
-  # The passage shown is the one covering most of the subject, and among those
-  # the one that says most about it.
-  if (here > bestn[path] || (here == bestn[path] && dense > bestd[path])) {
-    bestn[path] = here; bestd[path] = dense; bestline[path] = lno
-  }
+  linepath[NR] = path; linenumber[NR] = lno
 }
 END {
   anyused = 0
@@ -347,6 +363,19 @@ END {
   if (!anyused)
     for (i = 1; i <= nt; i++) if (state[i] == "common") { state[i] = "used-weak"; anyused = 1 }
   for (i = 1; i <= nt; i++) printf "T\t%s\t%d\t%s\n", TN[i], df[i] + 0, state[i]
+  for (ln = 1; ln <= NR; ln++) {
+    path = linepath[ln]
+    if (path == "") continue
+    here = 0; dense = 0
+    for (i = 1; i <= nt; i++) {
+      if (state[i] != "used" && state[i] != "used-weak") continue
+      c = linecount[ln, i] + 0
+      if (c > 0) { here++; dense += c }
+    }
+    if (here > bestn[path] || (here == bestn[path] && dense > bestd[path])) {
+      bestn[path] = here; bestd[path] = dense; bestline[path] = linenumber[ln]
+    }
+  }
   for (path in files) {
     s = 0; cov = 0; sum = ""
     for (i = 1; i <= nt; i++) {
@@ -396,16 +425,26 @@ describe() {  # <path> <best line number> <fallback year>
   NR > BEST && NR > 15 { exit }
   {
     if (NR == BEST) quote = $0
-    # A dated heading only dates the passage if it comes at or above it.
-    if (NR <= BEST && match($0, /^#+ /)) {
-      heading = substr($0, RLENGTH + 1)
-      d = finddate($0, 1)
-      if (d != "") hdate = d
+    isheading = match($0, /^#+[ \t]+/)
+    if (isheading) {
+      prefix = substr($0, 1, RLENGTH)
+      sub(/[ \t]+$/, "", prefix)
+      level = length(prefix)
+      headings++
+      if (level > 1 || headings > 1) insection = 1
+      if (NR <= BEST) {
+        heading = substr($0, RLENGTH + 1)
+        for (depth in dates) if (depth >= level) delete dates[depth]
+        dates[level] = finddate($0, 1)
+        hdate = ""
+        for (depth = 1; depth <= level; depth++)
+          if (dates[depth] != "") hdate = dates[depth]
+      }
     }
     # The document header dates the document wherever the passage happens to
     # be, so this scan is NOT gated on the passage line: a passage in the first
     # lines must still pick up a date written below it.
-    if (NR <= 15 && hdrdate == "") {
+    if (NR <= 15 && hdrdate == "" && !isheading && !insection) {
       d = finddate($0, 0)
       if (d != "") hdrdate = d
     }
@@ -418,8 +457,12 @@ describe() {  # <path> <best line number> <fallback year>
   ' "$1"
 }
 
-mtime_epoch() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || printf '0'; }
-epoch_date() { date -r "$1" "+$2" 2>/dev/null || date -d "@$1" "+$2" 2>/dev/null || printf 'unknown'; }
+mtime_epoch() {
+  if [ "$STAT_STYLE" = gnu ]; then stat -c '%Y' "$1"; else stat -f '%m' "$1"; fi
+}
+epoch_date() {
+  if [ "$DATE_STYLE" = gnu ]; then date -d "@$1" "+$2"; else date -r "$1" "+$2"; fi
+}
 
 kind_of() {  # <path relative to data/>
   case "$1" in
@@ -445,10 +488,6 @@ subject_of() {  # <path relative to data/>
 printf 'ALREADY KNOWN ABOUT: %s\n' "${NAMES[*]}"
 printf 'Looked through %s documents in this home. Nothing was sent anywhere.\n' "$NDOCS"
 
-if [ -s "$SKIPPED" ]; then
-  printf '\nNot read, the file name would make the source ambiguous:\n'
-  sed 's|^|  |' "$SKIPPED"
-fi
 if [ ${#DROPPED_EMPTY[@]} -gt 0 ]; then
   printf '\nIgnored, nothing searchable in it: %s\n' "${DROPPED_EMPTY[*]}"
 fi

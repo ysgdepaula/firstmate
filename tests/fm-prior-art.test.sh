@@ -113,6 +113,8 @@ cat > "$DATA/zzpathonly/report.md" <<'MD'
 Rien ici ne reprend le nom du dossier. Chantier courant.
 MD
 
+touch -t 202407101200 "$DATA/learnings.md" "$DATA/beta-sujet/report.md"
+
 run() { FM_HOME="$HOME_DIR" "$TOOL" "$@" 2>&1; }
 
 # --- dates ------------------------------------------------------------------
@@ -126,7 +128,7 @@ assert_contains "$out" "dated section" "a section date must be labelled as such"
 
 # The yearless "(06/09)" heading must be completed from the file and labelled.
 assert_contains "$out" "year inferred" "a yearless section date must say the year was inferred"
-year=$(date +%Y)
+year=2024
 assert_contains "$out" "$year-09-06" "a yearless section date must be completed to a real date"
 
 # Every result carries a date: no result line may be left undated.
@@ -140,6 +142,7 @@ dated=$(printf '%s\n' "$out" | grep -cE '^   [0-9]{4}-[0-9]{2}-[0-9]{2}  \(')
 out_beta=$(run --limit 3 betaterme) || fail "lookup failed: $out_beta"
 assert_contains "$out_beta" "file last changed, NOT an authored date" \
   "a modification-time date must be labelled as not authored"
+assert_contains "$out_beta" "2024-07-10" "modification-time fallback must use the file date"
 pass "every result carries a date, and the date says where it came from"
 
 # --- accents and case -------------------------------------------------------
@@ -200,3 +203,164 @@ pass "an edited document is picked up on the next question"
 reused=$(run --limit 1 memoire) || fail "lookup failed: $reused"
 assert_contains "$reused" "index reused" "an unchanged corpus must reuse the index"
 pass "an unchanged corpus is not re-indexed"
+
+case_home="$HOME_DIR/cases"
+mkdir -p "$case_home/data"
+case_run() { FM_HOME="$case_home" "$TOOL" "$@" 2>&1; }
+printf 'alpha\n' > "$case_home/data/fresh.md"
+perl -MTime::HiRes=utime -e 'utime 1700000000.1, 1700000000.1, $ARGV[0] or die $!' "$case_home/data/fresh.md"
+initial=$(case_run alpha) || fail "initial same-size lookup failed: $initial"
+assert_contains "$initial" "source: data/fresh.md" "the original word must be found"
+printf 'omega\n' > "$case_home/data/fresh.md"
+perl -MTime::HiRes=utime -e 'utime 1700000000.8, 1700000000.8, $ARGV[0] or die $!' "$case_home/data/fresh.md"
+fresh=$(case_run omega) || fail "same-size lookup failed: $fresh"
+assert_contains "$fresh" "source: data/fresh.md" "same-size edits within one second must be found"
+assert_contains "$(case_run alpha)" "FOUND NOWHERE: alpha" "replaced text must stop matching"
+pass "same-size subsecond edits invalidate the saved search"
+
+cat > "$case_home/data/sections.md" <<'MD'
+# Notes
+Date: 2025-07-10
+## Alpha 2026-08-01
+firstdatedword
+### Nested
+nesteddateword
+### Nested dated 2026-08-02
+childdatedword
+### Nested sibling
+parentsiblingword
+## Beta
+siblingdateword
+### Deeper
+siblingchildword
+# New root
+rootdateword
+MD
+for word in firstdatedword nesteddateword parentsiblingword; do
+  out=$(case_run "$word") || fail "section lookup failed: $out"
+  assert_contains "$out" "2026-08-01  (dated section)" "a date must reach its nested sections"
+done
+out=$(case_run childdatedword) || fail "child section lookup failed: $out"
+assert_contains "$out" "2026-08-02  (dated section)" "a nested date must override its ancestor"
+for word in siblingdateword siblingchildword rootdateword; do
+  out=$(case_run "$word") || fail "sibling section lookup failed: $out"
+  assert_contains "$out" "2025-07-10  (stated in the document)" "a sibling must fall back to document metadata"
+  assert_not_contains "$out" "dated section" "an expired heading must not date a sibling"
+done
+cat > "$case_home/data/no-header.md" <<'MD'
+# Notes
+## Alpha 2026-08-01
+unrelatedword
+## Beta
+unparentedword
+MD
+touch -t 202407101200 "$case_home/data/no-header.md"
+out=$(case_run unparentedword) || fail "undated sibling lookup failed: $out"
+assert_contains "$out" "2024-07-10  (file last changed" "an unrelated section date must not become a document date"
+pass "dated sections end at siblings and preserve applicable ancestor dates"
+
+case_home="$HOME_DIR/passages"
+mkdir -p "$case_home/data"
+cat > "$case_home/data/report.md" <<'MD'
+# Report
+## 2026-08-01
+chantier chantier chantier chantier
+## 2026-09-02
+La mémoire est reconstruite a chaque tour.
+MD
+for n in 1 2 3; do printf 'chantier courant\n' > "$case_home/data/brief$n.md"; done
+out=$(case_run chantier memoire) || fail "passage lookup failed: $out"
+assert_contains "$out" "TOO COMMON TO RANK ON" "the boilerplate must be excluded"
+assert_contains "$out" "> La mémoire est reconstruite" "the quotation must use the remaining subject"
+assert_contains "$out" "2026-09-02  (dated section)" "the date must belong to the selected quotation"
+assert_not_contains "$out" "> chantier" "excluded boilerplate must not select the quotation"
+pass "excerpts and dates follow the terms retained for ranking"
+
+case_home="$HOME_DIR/coverage"
+mkdir -p "$case_home/data/hidden"
+printf 'secretword\n' > "$case_home/data/hidden/report.md"
+printf 'publicword\n' > "$case_home/data/public.md"
+case_run secretword >/dev/null || fail "coverage setup failed"
+chmod 000 "$case_home/data/hidden/report.md"
+if [ ! -r "$case_home/data/hidden/report.md" ]; then
+  out=$(case_run secretword)
+  rc=$?
+  chmod 644 "$case_home/data/hidden/report.md"
+  [ "$rc" -ne 0 ] || fail "an unreadable record must fail the lookup: $out"
+  assert_contains "$out" "Not read:" "unreadable records must be identified"
+  assert_contains "$out" "hidden/report.md" "the unreadable source must be named"
+  assert_not_contains "$out" "FOUND NOWHERE" "incomplete coverage must not claim absence"
+  out=$(case_run secretword) || fail "restored permission lookup failed: $out"
+  assert_contains "$out" "source: data/hidden/report.md" "restored read access must be retried"
+  chmod 000 "$case_home/data/hidden"
+  out=$(case_run secretword)
+  rc=$?
+  chmod 755 "$case_home/data/hidden"
+  [ "$rc" -ne 0 ] || fail "a traversal failure must fail the lookup: $out"
+  assert_contains "$out" "hidden" "the unsearched directory must be named"
+  assert_not_contains "$out" "FOUND NOWHERE" "failed traversal must not claim absence"
+  pass "unreadable records and traversal failures are explicit and recoverable"
+else
+  chmod 644 "$case_home/data/hidden/report.md"
+  pass "permission checks skipped because this user can read mode-000 files"
+fi
+
+ambiguous="$case_home/data/ambiguous"$'\n'"name.md"
+printf 'hiddenword\n' > "$ambiguous"
+out=$(case_run hiddenword)
+rc=$?
+rm "$ambiguous"
+[ "$rc" -ne 0 ] || fail "an ambiguous source must fail the lookup"
+assert_contains "$out" "ambiguous source name" "an unrepresentable source must be reported"
+assert_not_contains "$out" "FOUND NOWHERE" "skipped source names must not imply new ground"
+pass "unrepresentable source names cannot produce false absence"
+
+case_home="$HOME_DIR/concurrent"
+mkdir -p "$case_home/data" "$case_home/bin"
+printf 'uniqueneedle\n' > "$case_home/data/z-original.md"
+case_run uniqueneedle >/dev/null || fail "concurrent setup failed"
+real_grep=$(command -v grep)
+cat > "$case_home/bin/grep" <<'SH'
+#!/usr/bin/env bash
+"$PRIOR_ART_REAL_GREP" "$@"
+rc=$?
+if [ "${1:-}" = -E ] && [ "${2:-}" = uniqueneedle ]; then
+  : > "$PRIOR_ART_SYNC/ready"
+  for (( i=0; i<500; i++ )); do
+    [ -e "$PRIOR_ART_SYNC/release" ] && break
+    sleep 0.01
+  done
+fi
+exit "$rc"
+SH
+chmod +x "$case_home/bin/grep"
+PATH="$case_home/bin:$PATH" PRIOR_ART_REAL_GREP="$real_grep" PRIOR_ART_SYNC="$case_home" \
+  FM_HOME="$case_home" "$TOOL" uniqueneedle > "$case_home/reader.out" 2>&1 &
+reader=$!
+for (( i=0; i<500; i++ )); do
+  [ -e "$case_home/ready" ] && break
+  sleep 0.01
+done
+[ -e "$case_home/ready" ] || fail "reader never reached the synchronization point"
+printf 'unrelated document\n' > "$case_home/data/a-inserted.md"
+(case_run --rebuild > "$case_home/writer.out"; result=$?; : > "$case_home/writer.done"; exit "$result") &
+writer=$!
+for (( i=0; i<100; i++ )); do
+  [ -e "$case_home/writer.done" ] && break
+  sleep 0.01
+done
+: > "$case_home/release"
+wait "$reader" || fail "concurrent reader failed: $(cat "$case_home/reader.out")"
+wait "$writer" || fail "concurrent rebuild failed: $(cat "$case_home/writer.out")"
+out=$(cat "$case_home/reader.out")
+assert_contains "$out" "source: data/z-original.md" "in-flight hits must retain their original source"
+assert_contains "$out" "> uniqueneedle" "the quotation must come from the matched source"
+assert_not_contains "$out" "source: data/a-inserted.md" "a rebuild must not reassign document IDs under readers"
+out=$(case_run uniqueneedle) || fail "lookup after concurrent rebuild failed: $out"
+assert_contains "$out" "source: data/z-original.md" "the next reader must use the completed rebuild"
+pass "concurrent rebuilds cannot mix a reader's document map and hits"
+
+mkdir -p "$case_home/unused-temp"
+out=$(TMPDIR="$case_home/unused-temp" case_run uniqueneedle) || fail "local scratch lookup failed: $out"
+[ -z "$(find "$case_home/unused-temp" -mindepth 1 -print)" ] || fail "search scratch must stay inside its own index"
+pass "search scratch stays under the tool's own state directory"
