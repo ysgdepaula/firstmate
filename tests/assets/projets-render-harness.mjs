@@ -2,12 +2,13 @@
 // and print what the renderer actually produced, so page behavior is asserted
 // through the real template rather than by reading its source.
 //
-// Usage: node projets-render-harness.mjs <built-page.html> [click=<project-id>/<decision-key>/<choice-value>] [width=<px>]
+// Usage: node projets-render-harness.mjs <built-page.html> [click=<project-id>/<decision-key>/<choice-value>] [toggle=<project-id>/<bloc-number>] [width=<px>] [lavish=absent|queue-only|reject]
 // Prints one JSON document:
 //   { error, meta, notice, badges:[{kind,value,label,soft}],
 //     rail:[{id,name,count,on}],
-//     cards:[{id,name,hidden,headline,blocs:[{num,title,open,empty,doing,decisions,items,cells,more}],gaps:[...]}],
-//     queued:[{prompt,data,tag}] }
+//     cards:[{id,name,brain,hidden,headline,deadline,team,
+//             blocs:[{num,title,open,empty,doing,scouts,decisions,items,creations,unlinked,cells,labels,more}],gaps:[...]}],
+//     queued:[{prompt,data,tag}], calls:[...] }
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -32,10 +33,9 @@ class Node {
     this.href = "";
     this.listeners = {};
   }
+  // Like the DOM, text set before children were appended stays in front of them.
   get textContent() {
-    return this.children.length
-      ? this.children.map((c) => c.textContent).join("")
-      : this._text;
+    return this._text + this.children.map((c) => c.textContent).join("");
   }
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
@@ -102,6 +102,13 @@ const rail = nav.children.filter((c) => c.tagName === "BUTTON").map((b) => ({
   on: b.className.split(/\s+/).includes("on"),
 }));
 
+if (opts.toggle) {
+  const [pid, num] = opts.toggle.split("/");
+  const card = main.byAttr("data-project", pid)[0];
+  const bloc = card && card.byAttr("data-bloc", num)[0];
+  const btn = bloc && bloc.byClass("toggle")[0];
+  if (btn) btn.click();
+}
 if (opts.click) {
   const [pid, key, value] = opts.click.split("/");
   const card = main.byAttr("data-project", pid)[0];
@@ -113,6 +120,7 @@ if (opts.click) {
 await Promise.resolve();
 const cards = main.children.filter((c) => c.className.split(/\s+/).includes("card")).map((card) => ({
   id: card.attributes["data-project"],
+  brain: card.attributes["data-brain"] === "true",
   name: card.byClass("head")[0]?.children.find((c) => c.tagName === "H2")?.textContent ?? "",
   headline: card.byClass("headline")[0]?.textContent ?? null,
   hidden: card.hidden,
@@ -125,18 +133,24 @@ const cards = main.children.filter((c) => c.className.split(/\s+/).includes("car
       links: body.all().filter((c) => c.tagName === "A").map((c) => c.href),
       num: Number(b.attributes["data-bloc"]),
       title: b.all().find((c) => c.tagName === "H3")?.textContent ?? "",
-      open: b.open,
+      open: b.attributes["data-open"] === "true" && !body.hidden,
       empty: body.byClass("empty")[0]?.textContent ?? null,
       doing: body.all().filter((c) => c.attributes["data-doing"]).map((tr) => ({ id: tr.attributes["data-doing"], hidden: tr.hidden })),
+      scouts: body.all().filter((c) => c.attributes["data-scout"]).map((li) => ({ id: li.attributes["data-scout"], text: li.textContent })),
+      creations: body.all().filter((c) => c.attributes["data-creation"]).map((li) => ({ label: li.attributes["data-creation"], text: li.textContent })),
+      unlinked: body.all().filter((c) => c.attributes["data-unlinked"]).map((li) => li.attributes["data-unlinked"]),
       decisions: body.all().filter((c) => c.attributes["data-decision"]).map((li) => ({
         key: li.attributes["data-decision"],
+        kind: li.attributes["data-kind"] ?? null,
         choices: li.all().filter((c) => c.attributes["data-choice"]).map((c) => c.attributes["data-choice"]),
         message: li.byClass("ok")[0]?.textContent ?? "",
         refused: li.className.split(/\s+/).includes("refused"),
         sent: li.className.split(/\s+/).includes("sent"),
       })),
       items: body.byClass("tl").flatMap((ul) => ul.children.map((li) => li.textContent)),
-      cells: body.all().filter((c) => c.tagName === "TD").map((td) => td.textContent),
+      // a cell carries its column label first, then its value
+      cells: body.all().filter((c) => c.tagName === "TD").map((td) => td.children.length ? td.children[td.children.length - 1].textContent : td.textContent),
+      labels: body.all().filter((c) => c.tagName === "TD").map((td) => td.attributes["data-label"] ?? null),
       more: body.byClass("more")[0]?.textContent ?? null,
     };
   }),

@@ -274,7 +274,7 @@ TMUXCHILD
   parent_run "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/titled-bearings.json"
   jq -e '.in_flight[] | select(.id == "mate/torre-42") | .title == "Préparer la démonstration"' "$TMP_ROOT/titled-bearings.json" >/dev/null || fail "parent bearings lost the child title"
   parent_run "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$TMP_ROOT/titled-bearings.json" --no-quota > "$TMP_ROOT/titled-page.json"
-  jq -e '.projects[] | select(.id == "torre") | any(.doing[]; .result == "Préparer la démonstration")' "$TMP_ROOT/titled-page.json" >/dev/null || fail "project result lost the child title"
+  jq -e '.projects[] | select(.id == "torre") | any((.doing + .scouts)[]; .result == "Préparer la démonstration")' "$TMP_ROOT/titled-page.json" >/dev/null || fail "project result lost the child title"
   pass "the real home-summary producer carries child titles through bearings to projects"
   mv "$FM_DATA_OVERRIDE/done-archive.md" "$TMP_ROOT/saved-archive.md"
   ln -s "$TMP_ROOT/missing-archive.md" "$FM_DATA_OVERRIDE/done-archive.md"

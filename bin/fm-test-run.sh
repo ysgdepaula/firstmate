@@ -620,6 +620,7 @@ tests/fm-procevent.test.sh 69715
 tests/fm-project-origin.test.sh 137
 tests/fm-projets-board-render.test.sh 7838
 tests/fm-projets-board.test.sh 18711
+tests/fm-projets-serve.test.sh 6000
 tests/fm-public-followup.test.sh 196745
 tests/fm-quota-array-dispatch-live-e2e.test.sh 21
 tests/fm-quota-choose.test.sh 1461
@@ -1304,6 +1305,9 @@ families_for_changed_path() {
       ;;
     bin/fm-projets-couts.sh|bin/fm-projets-couts.py)
       printf '%s\n' __script__:fm-projets-couts.test.sh
+      ;;
+    bin/fm-projets-serve.sh|bin/fm-projets-serve.py)
+      printf '%s\n' __script__:fm-projets-serve.test.sh
       ;;
     bin/fm-projets-board.sh|bin/fm-projets-data.jq|.agents/skills/projets/assets/*)
       printf '%s\n' __script__:fm-projets-board.test.sh __script__:fm-projets-board-render.test.sh __script__:fm-projets-board-chrome.test.sh

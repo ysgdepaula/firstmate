@@ -20,7 +20,8 @@
 #   fm-projets-board.sh build <payload.json>
 #   fm-projets-board.sh path
 #
-# init       Copy the shipped six-project seed to config/projets.json; preserve
+# init       Copy the shipped seven-project seed (six projects plus the captain's
+#            brain card, flagged `brain: true`) to config/projets.json; preserve
 #            an existing table unless --force is supplied.
 # compose    Print a mechanically composed fm-projets-board.v1 payload on stdout.
 #            The ONLY fleet-state reader is bin/fm-bearings-snapshot.sh (run with
@@ -45,7 +46,10 @@
 #            how many decisions wait on the captain, most first, then by name.
 # render     Validate the payload and inject it into a fresh copy of the shipped
 #            template at the stable page path. No Lavish call, no registration:
-#            this is what tests and screenshot captures use. Prints `board: <path>`.
+#            this is what tests and screenshot captures use. Prints `board: <path>`,
+#            then `stable: <url>` when config/projets-serve.json exists, because
+#            bin/fm-projets-serve.sh serves that same file at a fixed tailnet
+#            address that a rebuild in place never moves.
 # build      render, then establish or resume the Lavish session on the page,
 #            then arm it as a process-event source (arm-if-absent). Output:
 #              board: <path>
@@ -73,9 +77,14 @@
 # fm-projets-board.v1 (all strings are captain-facing French unless noted):
 #   schema, home, generated (iso8601), updated_label ("11/09 00h30")
 #   badges: {workers:int, decisions:int, subscriptions:string|null}
-#   projects[]: {id:slug, name, headline:string|null, team:string|null, deadline:{label,date}|null,
+#   projects[]: {id:slug, name, brain:bool, headline:string|null, team:string|null, deadline:{label,date}|null,
 #     doing[]: {id, owner, local_id, result, status, next:string|null, url:allowed|null, url_refused?:string},
-#     missing_from_you[]: {key:slug, owner, local_id, question, options[]: {value:slug, label}, url:allowed|null, url_refused?:string},
+#     scouts[]: same shape as doing, the investigations running for this project's brain,
+#     missing_from_you[]: {key:slug, owner, local_id, question, options[]: {value:slug, label}, kind?:string,
+#       url:allowed|null, url_refused?:string} (kind "recommandation" or "article" marks a table-born entry),
+#     creations[]: {label, kind:string|null, url:allowed|null, url_refused?:string},
+#     unlinked[]: {id, what} (brain card only: rows that match no project),
+#     quick_wins[]: string (brain card only),
 #     missing_from_others[]: {who, what, tag:string|null},
 #     pages[]: {label, url:allowed|null, url_refused?:string, state:string|null},
 #     costs: {period, tokens_api:string|null, subscription_share:string|null, source},
@@ -83,9 +92,13 @@
 #     meeting: null | {title, date:YYYY-MM-DD, time:string|null, source, with:string|null, bring[], decide[]},
 #     meetings[]: same meeting shape, meeting_warning:string|null, agenda_available:bool, partial:bool,
 #     gaps[]: string}
-#   unassigned[]: {id, what}
+#   unassigned[]: {id, what} (empty when a brain card carries them as `unlinked`)
 #   table_missing: bool, warnings[]: captain-facing collection limitations
-# Allowed links: HTTPS, or HTTP on loopback, RFC1918 IPv4, and .ts.net hosts.
+# The brain card (the table's single `brain: true` project) swaps two blocks: "pas
+# encore rattache a un projet" replaces "il manque des autres", and "quick wins du
+# cerveau" replaces the meeting; its articles to validate and every project's
+# recommendations join "il manque de toi" as closed choices sent to firstmate.
+# Allowed links: HTTPS, or HTTP on loopback, RFC1918 IPv4, the Tailscale range 100.64/10, and .ts.net hosts.
 # Refused links retain url_refused and render an explicit refusal.
 # bin/fm-projets-data.jq owns this shared composition/validation policy.
 #
@@ -192,8 +205,10 @@ command_compose() {
             and (.name | type == "string" and length > 0)
             and ((has("prefixes") | not) or (.prefixes | type == "array" and all(.[]; type == "string" and length > 0)))
             and ((has("repos") | not) or (.repos | type == "array" and all(.[]; type == "string" and length > 0)))
+            and ((has("brain") | not) or (.brain | type == "boolean"))
            ] | all)
       and ([.projects[].id] | unique | length) == (.projects | length)
+      and ([.projects[] | select(.brain == true)] | length) <= 1
     ' >/dev/null 2>&1 || fail "the project table does not satisfy $CONFIG_SCHEMA: $config"
   else
     cfg_json='null'
@@ -268,6 +283,8 @@ PYTIME
     | (if $p == null then $id else ($id | ltrimstr($p)) end)
     | gsub("[-_]+"; " ") | clean;
   def fallback($pfx): . as $id | (local_id | id_words($pfx)) | if safe and length > 0 then . else ($id | if safe and length > 0 then . else "travail en cours" end) end;
+  def slugify: ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "") | .[:60] | if length == 0 then "x" else . end;
+  def captain_text: tostring | clean | select(length > 0 and safe);
   # A title that opens with the project name or its id prefix ("Torre : ...",
   # "chef: ...") repeats the card heading, so the card drops that label.
   def strip_label($name; $prefixes):
@@ -281,6 +298,7 @@ PYTIME
 
   ($cfg.projects // []) as $projects
   | ($projects | length > 0) as $has_table
+  | ([ $projects[] | select(.brain == true) | .id ] | .[0] // null) as $brain_id
   | ($calendar_now[:10]) as $today
   | def prefix_match($id):
       ([ $projects[] | . as $p | ($p.prefixes // [])[] | . as $pre | select($id | local_id | startswith($pre)) | {id: $p.id, n: ($pre | length)} ]
@@ -313,7 +331,11 @@ PYTIME
        | "\($p | (.[:1] | ascii_upcase) + .[1:]) \(100 - ($left | floor)) %" ]
      | if length == 0 then null else join(" · ") end) as $subscriptions
   | (if $costs.period == $now[:7] then ($costs.projects // {}) else {} end) as $cost_map
+  | ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | select(.project == null)
+       | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
+     | unique_by(.id)) as $unassigned
   | [ $project_list[] | . as $proj
+      | ($proj.id == $brain_id) as $is_brain
       | (prefixes_of($proj.id)) as $pfx
       | (project_cfg($proj.id)) as $pc
       | ([ $doing_rows[] | select(.project == $proj.id)
@@ -325,7 +347,7 @@ PYTIME
            # detail of every other state is machinery and stays off the page.
            | (($r.state == "paused" or $r.state == "blocked" or $r.state == "failed")
               and ($detail | length) > 0 and ($detail | safe)) as $keep_detail
-           | {id: $r.id,
+           | {id: $r.id, kind: ($r.kind // "ship"),
               result: (($r.title // null) as $t
                        | if $t != null and ($t | clean | length) > 0 and ($t | safe)
                          then ($t | strip_label($proj.name; $pfx) | trunc(110))
@@ -335,7 +357,9 @@ PYTIME
                      elif $r.state == "parked" then "ta réponse débloque la suite"
                      elif $r.state == "blocked" then "firstmate doit débloquer"
                      else null end),
-              url: null} + ($r | identity) + ($url | project_link) ]) as $doing
+              url: null} + ($r | identity) + ($url | project_link) ]) as $doing_all
+      | ([ $doing_all[] | select(.kind != "scout") | del(.kind) ]) as $doing
+      | ([ $doing_all[] | select(.kind == "scout") | del(.kind) ]) as $scouts
       | ([ $decision_rows[] | select(.project == $proj.id)
            | . as $d
            | (($pc.decisions // {})[$d.id] // ($pc.decisions // {})[($d.id | local_id)] // {}) as $dc
@@ -345,7 +369,32 @@ PYTIME
               options: (if (($dc.options // []) | length) > 0 then [ $dc.options[] | {value, label} ]
                         else [{value: "fait", label: "c\u2019est fait"}, {value: "on-en-parle", label: "on en parle"}, {value: "plus-tard", label: "plus tard"}] end),
               url: null,
-              configured: ((($dc.options // []) | length) > 0)} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $missing_you
+              configured: ((($dc.options // []) | length) > 0)} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $decisions_you
+      # Recommendations are what firstmate proposes and the captain has not ruled
+      # on yet: they wait on him exactly like a decision, as closed choices.
+      | ([ ($pc.recommendations // [])[] | . as $rc
+           | ((if ($rc | type) == "object" then ($rc.what // "") else $rc end) | captain_text) as $w
+           | ((if ($rc | type) == "object" then ($rc.why // null) else null end) | if . == null then null else captain_text end) as $why
+           | {key: ("reco__" + ($w | slugify)), owner: "(main)", local_id: ($w | slugify),
+              question: (($w + (if $why != null then " : " + $why else "" end)) | trunc(200)),
+              options: [{value: "on-y-va", label: "on y va"}, {value: "pas-maintenant", label: "pas maintenant"}, {value: "on-en-parle", label: "on en parle"}],
+              kind: "recommandation", configured: true}
+             + ((if ($rc | type) == "object" then ($rc.url // null) else null end) | project_link) ]) as $recommendations
+      | (if $is_brain then
+           [ ($pc.articles // [])[] | . as $ar
+             | ((if ($ar | type) == "object" then ($ar.title // "") else $ar end) | captain_text) as $t
+             | {key: ("article__" + ($t | slugify)), owner: "(main)", local_id: ($t | slugify),
+                question: (("Article à valider : " + $t) | trunc(200)),
+                options: [{value: "valide", label: "validé"}, {value: "a-revoir", label: "à revoir"}, {value: "plus-tard", label: "plus tard"}],
+                kind: "article", configured: true}
+               + ((if ($ar | type) == "object" then ($ar.url // null) else null end) | project_link) ]
+         else [] end) as $articles
+      | ($decisions_you + $recommendations + $articles) as $missing_you
+      | ([ ($pc.creations // [])[] | . as $cr
+           | ((if ($cr | type) == "object" then ($cr.label // "") else $cr end) | captain_text) as $l
+           | {label: $l, kind: ((if ($cr | type) == "object" then ($cr.kind // null) else null end) | if . == null then null else captain_text end)}
+             + ((if ($cr | type) == "object" then ($cr.url // null) else null end) | project_link) ]) as $creations
+      | (if $is_brain then [ ($pc.quick_wins // [])[] | captain_text ] else [] end) as $quick_wins
       | ([ ($pc.missing_from_others // [])[] | {who: (.who // "?"), what: (.what // "?"), tag: (.tag // null)} ]) as $missing_others
       | ([ ($pc.pages // [])[] | {label:(.label // "?"),state:(.state // null)} + (.url | project_link) ]) as $pages
       | ([ $event_rows[] | select(.project == $proj.id)
@@ -371,35 +420,37 @@ PYTIME
       | (if ($meetings | length) > 1 then "l\u2019agenda et le chat ne disent pas la même chose"
          elif ($agenda_fresh | not) then "Agenda non lu : fichier absent ou vieux de plus d\u2019un jour" else null end) as $meeting_warning
       | ([ $deferred_rows[] | select(.project == $proj.id) ] | length) as $deferred_n
-      | ([ (if ($pc.deadline // null) == null then "prochaine échéance non enregistrée" else empty end),
-           (if ($pc.team // null) == null then "équipe non enregistrée" else empty end),
-           (if ($pages | length) == 0 then "aucune page de gestion enregistrée" else empty end),
-           (if ($missing_others | length) == 0 then "aucune attente des autres enregistrée" else empty end),
-           (if $meeting == null then (if $agenda_fresh then "aucune prochaine réunion enregistrée" else "aucune réunion enregistrée, agenda non connecté" end) else empty end),
+      | ([ (if ($is_brain | not) and ($pc.deadline // null) == null then "prochaine échéance non enregistrée" else empty end),
+           (if ($is_brain | not) and ($pc.team // null) == null then "équipe non enregistrée" else empty end),
+           (if ($pages | length) == 0 then (if $is_brain then "aucune page du cerveau enregistrée" else "aucune page de gestion enregistrée" end) else empty end),
+           (if ($is_brain | not) and ($missing_others | length) == 0 then "aucune attente des autres enregistrée" else empty end),
+           (if $is_brain and ($recommendations | length) == 0 then "aucune recommandation enregistrée pour le cerveau" else empty end),
+           (if $is_brain and ($quick_wins | length) == 0 then "aucun quick win enregistré pour le cerveau" else empty end),
+           (if ($is_brain | not) and $meeting == null then (if $agenda_fresh then "aucune prochaine réunion enregistrée" else "aucune réunion enregistrée, agenda non connecté" end) else empty end),
            (if $cost == null then "coûts à mesurer" else empty end),
            (([ $missing_you[] | select(.configured | not) ] | length) as $n
             | if $n > 0 then "\($n) décision\(if $n > 1 then "s" else "" end) sans choix fermés, boutons génériques" else empty end),
            (if $deferred_n > 0 then "\($deferred_n) décision\(if $deferred_n > 1 then "s" else "" end) mise\(if $deferred_n > 1 then "s" else "" end) de côté, datée\(if $deferred_n > 1 then "s" else "" end) ou ancienne\(if $deferred_n > 1 then "s" else "" end)" else empty end) ]) as $gaps
-      | {id: $proj.id, name: $proj.name,
+      | {id: $proj.id, name: $proj.name, brain: $is_brain,
          headline: (($pc.headline // null) | if . == null then null else clean end),
          team:($pc.team // null), deadline:($pc.deadline // null), partial:($warnings | length > 0),
          meetings:$meetings, agenda_available:$agenda_fresh, meeting_warning:$meeting_warning,
-         doing: $doing,
+         doing: $doing, scouts: $scouts,
          missing_from_you: ($missing_you | map(del(.configured))),
          missing_from_others: $missing_others,
-         pages: $pages, costs: $costs_block, journal: $journal, meeting: $meeting, gaps: $gaps}
+         pages: $pages, creations: $creations,
+         unlinked: (if $is_brain then $unassigned else [] end), quick_wins: $quick_wins,
+         costs: $costs_block, journal: $journal, meeting: $meeting, gaps: $gaps}
     ] as $composed
   | ($composed | sort_by([-(.missing_from_you | length), .name])) as $sorted
-  | ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | select(.project == null)
-       | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
-     | unique_by(.id)) as $unassigned
   | {schema: "fm-projets-board.v1",
      home: .home, generated: $now, updated_label: updated_label,
      badges: {workers: ([ $doing_rows[] | select(.state == "working") ] | length),
-              decisions: (($decision_rows | length) + (([ $sorted[] | (.missing_from_others | length) ] | add) // 0)),
+              decisions: (($decision_rows | length)
+                          + (([ $sorted[] | (.missing_from_others | length) + ([ .missing_from_you[] | select(.kind != null) ] | length) ] | add) // 0)),
               subscriptions: $subscriptions},
      projects: $sorted,
-     unassigned: $unassigned,
+     unassigned: (if $brain_id != null then [] else $unassigned end),
      warnings:$warnings,
      table_missing: ($has_table | not)}
   ' || fail "composition failed"
@@ -422,7 +473,10 @@ validate_payload() {  # <data.json>
     def option_item: type == "object" and (.value | slug(128)) and (.label | captain_string);
     def you_item: type == "object" and (.key | slug(128)) and (.question | captain_string)
       and (.options | type == "array" and length > 0 and all(.[]; option_item))
+      and optional_captain("kind")
       and link_item;
+    def creation_item: type == "object" and (.label | captain_string) and optional_captain("kind") and link_item;
+    def unlinked_item: type == "object" and (.id | nonempty_string) and (.what | captain_string);
     def other_item: type == "object" and (.who | captain_string) and (.what | captain_string)
       and optional_captain("tag");
     def page_item: type == "object" and (.label | captain_string) and link_item
@@ -441,6 +495,11 @@ validate_payload() {  # <data.json>
       and ((has("deadline") | not) or .deadline == null or (.deadline | type == "object" and (.label | captain_string) and (.date | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))))
       and ((has("agenda_available") | not) or (.agenda_available | type == "boolean"))
       and ((has("partial") | not) or (.partial | type == "boolean"))
+      and ((has("brain") | not) or (.brain | type == "boolean"))
+      and ((has("scouts") | not) or (.scouts | type == "array" and all(.[]; doing_item)))
+      and ((has("creations") | not) or (.creations | type == "array" and all(.[]; creation_item)))
+      and ((has("unlinked") | not) or (.unlinked | type == "array" and all(.[]; unlinked_item)))
+      and ((has("quick_wins") | not) or (.quick_wins | type == "array" and all(.[]; captain_string)))
       and ((has("meetings") | not) or (.meetings | type == "array" and all(.[]; . != null and meeting_item)))
       and (.doing | type == "array" and all(.[]; doing_item))
       and (.missing_from_you | type == "array" and all(.[]; you_item))
@@ -460,6 +519,7 @@ validate_payload() {  # <data.json>
          and (has("subscriptions") and (.subscriptions == null or (.subscriptions | captain_string))))
     and (.projects | type == "array" and all(.[]; project_item))
     and ([.projects[].id] | unique | length) == (.projects | length)
+    and ([.projects[] | select(.brain == true)] | length) <= 1
     and (.unassigned | type == "array" and all(.[]; type == "object" and (.id | nonempty_string) and (.what | captain_string)))
     and ((has("warnings") | not) or (.warnings | type == "array" and all(.[]; captain_string)))
     and (.table_missing | type == "boolean")
@@ -512,6 +572,12 @@ render_page() {  # <data.json> -> prints board: <path>
     fail "cannot publish the page"
   fi
   printf 'board: %s\n' "$board"
+  # The front door (bin/fm-projets-serve.sh) serves this file at a stable
+  # tailnet address; say it whenever its table exists so the captain never
+  # has to look for a session id.
+  if [ -f "$CONFIG/projets-serve.json" ]; then
+    printf 'stable: %s\n' "$("$SCRIPT_DIR/fm-projets-serve.sh" url | awk '/^page:/ { print $2 }')"
+  fi
 }
 
 command_render() {

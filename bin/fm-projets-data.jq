@@ -1,3 +1,5 @@
+# Allowed links: HTTPS anywhere; HTTP only on loopback, RFC 1918 private ranges,
+# the 100.64/10 shared range the captain's Tailscale network uses, and .ts.net hosts.
 def project_url:
   . as $url
   | if type != "string" then false
@@ -13,7 +15,8 @@ def project_url:
           | ($parts | map(tonumber)) as $ip
           | all($parts[]; . == "0" or (startswith("0") | not))
             and all($ip[]; . >= 0 and . <= 255)
-            and ($ip[0] == 127 or $ip[0] == 10 or ($ip[0] == 172 and $ip[1] >= 16 and $ip[1] <= 31) or ($ip[0] == 192 and $ip[1] == 168))
+            and ($ip[0] == 127 or $ip[0] == 10 or ($ip[0] == 172 and $ip[1] >= 16 and $ip[1] <= 31) or ($ip[0] == 192 and $ip[1] == 168)
+                 or ($ip[0] == 100 and $ip[1] >= 64 and $ip[1] <= 127))
         else false end
       end
     end;

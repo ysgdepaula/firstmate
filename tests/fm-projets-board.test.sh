@@ -179,8 +179,10 @@ test_compose_groups_rows_by_project_prefix_then_repo() {
   out=$(compose "$home") || fail "compose failed with a table present"
   printf '%s' "$out" | jq -e '
     .schema == "fm-projets-board.v1" and .table_missing == false
-    and ([.projects[] | select(.id == "torre") | .doing[].id] == ["torre-interfaces", "torre-audit", "torre-site", "torre-hermes"])
-    and ([.projects[] | select(.id == "club") | .doing[].id] == ["chef-parcours"])
+    and ([.projects[] | select(.id == "torre") | .doing[].id] == ["torre-interfaces", "torre-site", "torre-hermes"])
+    and ([.projects[] | select(.id == "torre") | .scouts[].id] == ["torre-audit"])
+    and ([.projects[] | select(.id == "club") | .doing[].id] == [])
+    and ([.projects[] | select(.id == "club") | .scouts[].id] == ["chef-parcours"])
     and ([.projects[] | select(.id == "ydeep") | .doing[].id] == ["core-sync"])
     and ([.projects[] | select(.id == "torre") | .missing_from_you[].key] == ["torre-hebergement"])
     and ([.projects[] | select(.id == "club") | .missing_from_you[].key] == ["chef-domaine", "chef-rose"])
@@ -188,7 +190,7 @@ test_compose_groups_rows_by_project_prefix_then_repo() {
     and ([.projects[] | select(.id == "solos") | (.doing + .missing_from_you + .journal) | length] == [0])
     and ([.unassigned[].id] == ["sacem-relance"])
   ' >/dev/null || fail "rows were not grouped by id prefix first, then repo: $out"
-  pass "compose groups every row by id prefix first, then by repo, and keeps the rest as unassigned"
+  pass "compose groups every row by id prefix first, then by repo, splits scouts out, and keeps the rest as unassigned"
 }
 
 test_compose_orders_the_rail_by_decisions_waiting_on_the_captain() {
@@ -210,13 +212,13 @@ test_compose_translates_states_and_keeps_internal_wording_off_the_page() {
   write_table "$home/config/projets.json"
   out=$(compose "$home") || fail "compose failed"
   printf '%s' "$out" | jq -e '
-    (.projects[] | select(.id == "torre") | .doing) as $d
+    (.projects[] | select(.id == "torre") | .doing + .scouts) as $d
     | ($d[] | select(.id == "torre-interfaces") | .result == "interfaces v0 pour la direction" and .status == "livré"
         and .next == "fusion à confirmer" and .url == "https://github.com/acme/agent-platform/pull/58")
     and ($d[] | select(.id == "torre-audit") | .status == "en cours" and .next == null and .url == null)
     and ($d[] | select(.id == "torre-site") | .status == "en pause, attente extérieure · en attente du numero Meta de Bechir")
     and ($d[] | select(.id == "torre-hermes") | .result == "hermes")
-    and (.projects[] | select(.id == "club") | .doing[0] | .status == "bloqué" and .next == "firstmate doit débloquer")
+    and (.projects[] | select(.id == "club") | .scouts[0] | .status == "bloqué" and .next == "firstmate doit débloquer")
     and (.projects[] | select(.id == "torre") | .missing_from_you[0]
          | .question == "Hébergement : chez toi ou chez Torre ?" and [.options[].value] == ["chez-toi", "chez-torre"])
     and (.projects[] | select(.id == "club") | .missing_from_you[0]
@@ -440,7 +442,8 @@ test_review_inputs_survive_composition_and_render() {
   home=$(make_home review)
   run_board "$home" init >/dev/null || fail "init failed"
   initial=$(cat "$home/config/projets.json")
-  jq -e '[.projects[].name] == ["Torre","Solos","Club Julien Dumas","CRIA","YDEEP","Firstmate"]' "$home/config/projets.json" >/dev/null || fail "seed missing projects"
+  jq -e '[.projects[].name] == ["Torre","Solos","Club Julien Dumas","CRIA","YDEEP","Firstmate","Cerveau"]
+         and ([.projects[] | select(.brain == true) | .id] == ["cerveau"])' "$home/config/projets.json" >/dev/null || fail "seed missing projects or the brain card"
   printf 'preserve me\n' > "$home/config/projets.json"
   run_board "$home" init >/dev/null || fail "init did not preserve table"
   [ "$(cat "$home/config/projets.json")" = "preserve me" ] || fail "init overwrote table"
@@ -457,7 +460,7 @@ EOF
   out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --config "$home/table.json" --no-quota --now 2026-09-11T12:00:00Z) || fail "review composition failed"
   printf '%s' "$out" > "$home/payload.json"
   jq -e '
-    (.projects | length) == 6 and .badges.decisions == 2 and (.warnings | length) > 0
+    (.projects | length) == 7 and .badges.decisions == 2 and (.warnings | length) > 0
     and (all(.projects[]; .partial))
     and (.projects[] | select(.id == "torre") |
       .team == "Eli et Yan" and .deadline.label == "Pilote"
@@ -522,6 +525,74 @@ EOF
 }
 test_meetings_use_calendar_time
 
+test_compose_brain_card_carries_unlinked_rows_articles_recommendations_and_quick_wins() {
+  local home out
+  home=$(make_home brain)
+  write_table "$home/config/projets.json"
+  jq '.projects += [{"id": "cerveau", "name": "Cerveau", "brain": true, "prefixes": ["cerveau-"],
+        "articles": [{"title": "Doctrine de dépense des modèles", "url": "https://example.test/article"}],
+        "recommendations": ["Adopter gbrain comme index", {"what": "Indexer les rapports", "why": "ils dorment dans data"}],
+        "quick_wins": ["Relier les scouts au cerveau"],
+        "pages": [{"label": "Index du cerveau", "url": "https://example.test/brain", "state": "à jour 10/09"}]}]' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed with a brain card"
+  printf '%s' "$out" | jq -e '
+    (.unassigned == [])
+    and (.projects[] | select(.id == "cerveau")
+      | .brain == true
+      and (.unlinked | map(.id)) == ["sacem-relance"]
+      and (.missing_from_you | map(.key)) == ["reco__adopter-gbrain-comme-index", "reco__indexer-les-rapports", "article__doctrine-de-d-pense-des-mod-les"]
+      and (.missing_from_you | map(.kind)) == ["recommandation", "recommandation", "article"]
+      and (.missing_from_you[1].question == "Indexer les rapports : ils dorment dans data")
+      and (.missing_from_you[2] | .question == "Article à valider : Doctrine de dépense des modèles" and .url == "https://example.test/article"
+           and (.options | map(.value)) == ["valide", "a-revoir", "plus-tard"])
+      and .quick_wins == ["Relier les scouts au cerveau"]
+      and (.pages | map(.label)) == ["Index du cerveau"]
+      and ((.gaps | index("aucune attente des autres enregistrée")) == null)
+      and ((.gaps | index("équipe non enregistrée")) == null)
+      and ((.gaps | index("aucune réunion enregistrée, agenda non connecté")) == null))
+    and (.projects[] | select(.id == "torre") | .brain == false and .unlinked == [] and .quick_wins == [])
+    and (.badges.decisions == 9)
+  ' >/dev/null || fail "the brain card was not composed from the table and the unassigned rows: $out"
+  pass "compose gives the brain card the unlinked rows, the articles and recommendations as closed choices, and its quick wins"
+}
+
+test_compose_adds_recommendations_and_creations_to_a_project() {
+  local home out
+  home=$(make_home extras)
+  write_table "$home/config/projets.json"
+  jq '(.projects[] | select(.id == "torre")) += {
+        "recommendations": [{"what": "Brancher Meta dès l accès de Bechir", "why": "le pilote du 14/09 en dépend"}],
+        "creations": [{"label": "Démo de l interface", "url": "http://100.64.0.1:4387/session/demo", "kind": "page"},
+                      {"label": "Film Torre", "url": "ftp://example.test/film", "kind": "film"}]}' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed with recommendations and creations"
+  printf '%s' "$out" | jq -e '
+    (.projects[] | select(.id == "torre")
+      | (.missing_from_you | map(.key)) == ["torre-hebergement", "reco__brancher-meta-d-s-l-acc-s-de-bechir"]
+      and (.missing_from_you[1] | .kind == "recommandation"
+           and .question == "Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend"
+           and (.options | map(.value)) == ["on-y-va", "pas-maintenant", "on-en-parle"])
+      and (.creations | length) == 2
+      and (.creations[0] | .label == "Démo de l interface" and .kind == "page" and .url == "http://100.64.0.1:4387/session/demo")
+      and (.creations[1] | .url == null and .url_refused == "ftp://example.test/film"))
+    and ([.projects[].id] | index("torre")) == 1
+  ' >/dev/null || fail "recommendations and creations were not added to the project: $out"
+  pass "compose adds a project's recommendations as closed choices and its creations with the link policy"
+}
+
+test_compose_refuses_two_brain_cards() {
+  local home out rc
+  home=$(make_home two-brains)
+  write_table "$home/config/projets.json"
+  jq '.projects += [{"id": "a", "name": "A", "brain": true, "prefixes": ["a-"]}, {"id": "b", "name": "B", "brain": true, "prefixes": ["b-"]}]' \
+    "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
+  set +e; out=$(compose "$home" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a table with two brain cards was accepted"
+  assert_contains "$out" "fm-projets-config.v1" "the refusal did not name the contract: $out"
+  pass "compose refuses a table that declares two brain cards"
+}
+
 test_path_is_stable_and_home_scoped
 test_compose_groups_rows_by_project_prefix_then_repo
 test_compose_orders_the_rail_by_decisions_waiting_on_the_captain
@@ -534,6 +605,9 @@ test_render_round_trips_the_payload_and_neutralises_script_closers
 test_build_serves_then_arms_and_never_binds
 test_build_does_not_arm_when_session_start_fails
 test_render_refuses_a_template_without_exactly_one_slot
+test_compose_brain_card_carries_unlinked_rows_articles_recommendations_and_quick_wins
+test_compose_adds_recommendations_and_creations_to_a_project
+test_compose_refuses_two_brain_cards
 
 test_review_inputs_survive_composition_and_render
 test_allowed_management_networks_and_refusals

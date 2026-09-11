@@ -41,8 +41,7 @@
       "id": "ydeep",
       "name": "YDEEP",
       "prefixes": [
-        "ydeep-",
-        "cerveau-"
+        "ydeep-"
       ],
       "repos": [
         "x-deep-core"
@@ -59,6 +58,19 @@
       "repos": [
         "firstmate"
       ]
+    },
+    {
+      "id": "cerveau",
+      "name": "Cerveau",
+      "brain": true,
+      "prefixes": [
+        "cerveau-",
+        "brain-",
+        "gbrain-",
+        "knowledge-",
+        "memoire-"
+      ],
+      "headline": "Le cerveau de Papaye : ce qui n'est rattaché à aucun projet, les recommandations, les quick wins, les articles à valider."
     }
   ]
 }

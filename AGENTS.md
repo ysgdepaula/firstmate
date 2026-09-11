@@ -85,6 +85,7 @@ config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCA
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 config/projets.json  optional per-project correspondence table for the /projets Lavish page; LOCAL, gitignored, firstmate-maintained but human-editable, and not inherited; see docs/configuration.md "Projects page"
+config/projets-serve.json  optional table of the base's stable tailnet front door (port, published host, declared demos and folders) plus the launchd plist bin/fm-projets-serve.sh writes beside it; LOCAL, gitignored, not inherited; see docs/configuration.md "Stable page address"
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update

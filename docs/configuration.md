@@ -533,9 +533,9 @@ A budget that is not a whole number from 1 to 120 is still refused outright.
 ## Projects page (config/projets.json, data/projets-couts.json, data/projets-agenda.json)
 
 `config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page.
-[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the page's "sans projet" entry.
+[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the brain card, or to the page's "sans projet" entry when no brain card is configured.
 Without the table every repo becomes its own project and the page says the table is missing.
-Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP and Firstmate; an existing table is preserved unless `--force` is passed.
+Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP, Firstmate and the brain card Cerveau; an existing table is preserved unless `--force` is passed.
 All configured projects remain visible, including those without activity.
 The shared `agent-platform` repository is deliberately absent from the seed: project prefixes distinguish its work.
 Secondmate routing uses the local task id after the slash, preserving the owner independently; ambiguous repository matches remain unassigned.
@@ -556,17 +556,29 @@ This section is the single owner of these configuration schemas; the script head
       "missing_from_others": [{"who": "<person>", "what": "<what is expected>", "tag": "<optional date or state>"}],
       "pages": [{"label": "<page name>", "url": "<optional allowed URL>", "state": "<optional state such as à jour 10/09>"}],
       "meeting": {"title": "<title>", "date": "YYYY-MM-DD", "with": "<optional attendees>", "bring": ["..."], "decide": ["..."]},
-      "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}}
+      "decisions": {"<task-id>": {"question": "<closed question>", "options": [{"value": "<slug>", "label": "<button label>"}]}},
+      "recommendations": [{"what": "<what firstmate proposes>", "why": "<optional reason>", "url": "<optional allowed URL>"}],
+      "creations": [{"label": "<page, film or product material>", "url": "<optional allowed URL>", "kind": "<optional kind>"}],
+      "brain": false,
+      "articles": [{"title": "<article to validate, brain card only>", "url": "<optional allowed URL>"}],
+      "quick_wins": ["<brain card only>"]
     }
   ]
 }
 ```
 
+At most one project carries `brain: true`: it is the captain's brain card, seeded as `cerveau`.
+That card swaps two blocks: "pas encore rattaché à un projet" lists every fleet row that matches no project (the page then has no separate "sans projet" entry), and "quick wins du cerveau" replaces the meeting block.
+Its `articles` become closed choices "validé / à revoir / plus tard" in "il manque de toi", and its `pages` are the brain's pages.
+Every project may carry `recommendations`, which become closed choices "on y va / pas maintenant / on en parle" tagged `recommandation` in "il manque de toi" because they wait on the captain, and `creations`, listed under the management pages.
+A recommendation or creation may be a plain string or an object; `what`, `why`, `label`, `kind` and `title` are captain-facing French.
+Investigations running for a project (scout work) leave the "on est en train de" table for their own list under it, so results being built and knowledge being gathered stay apart.
+
 `id`, `name`, and at least one of `prefixes` or `repos` are what routing needs; every other field only fills a page block.
 A decision entry replaces the generic "c'est fait / on en parle / plus tard" buttons for that task; the page counts decisions without an entry as a brain gap.
 The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
 Missing `team` or `deadline` becomes a visible knowledge gap.
-Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16 and hosts ending in .ts.net.
+Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, the Tailscale range 100.64/10 and hosts ending in .ts.net.
 Refused links are preserved as `url: null` with `url_refused` in the page payload, and visibly labeled in management pages, work, decisions and journal entries.
 Every string is captain-facing French and must pass the script's internal-vocabulary filter, or `render` refuses the page.
 
@@ -614,6 +626,29 @@ A date without a time remains eligible throughout that local day.
 A fresh empty reading says there are no upcoming meetings; an unavailable reading says the agenda has not been read.
 Bidirectional calendar synchronization is a following task, disclosed in block 7.
 These files are not inherited by secondmate homes.
+
+## Stable page address (config/projets-serve.json)
+
+`config/projets-serve.json` is the optional local, gitignored table of the base's stable HTTP front door on the tailnet, served by [`bin/fm-projets-serve.py`](../bin/fm-projets-serve.py) and operated by [`bin/fm-projets-serve.sh`](../bin/fm-projets-serve.sh).
+The captain wanted one address that never changes for the projets page, reachable from every one of his machines by the MagicDNS name, so the server binds every interface on one reserved port and reads `.lavish/projets.html` at each request: a rebuild in place changes the content, never the address.
+Its index at `/` is the page the captain bookmarks: one line per thing reachable on the base, with its address and a state measured by a real request when the index is opened, never assumed.
+It lists the projets page, the Lavish reviews still open (from `lavish-axi`'s own listing), and the demos and shared folders declared in the table; declared folders are served read-only under `/fichiers/<id>/` and confined to their directory.
+This section is the single owner of the table schema; the script headers own the routes, the launchd mechanics and the operator commands.
+
+```json
+{
+  "schema": "fm-projets-serve.v1",
+  "port": 4390,
+  "host": "<MagicDNS name used in printed addresses, default: this machine's hostname>",
+  "entries": [{"label": "<demo or service>", "url": "<address to measure and link>"}],
+  "folders": [{"id": "<optional slug>", "label": "<shared folder>", "path": "<absolute directory>"}]
+}
+```
+
+The reserved port is 4390 by default, beside Lavish on 4387; change it in the table before installing.
+`bin/fm-projets-serve.sh install` writes a launchd user agent (label `co.firstmate.projets-serve.<home-hash>`) as a plist under the home's private `config/`, links it from `~/Library/LaunchAgents/`, loads it and starts it, so the server comes back at login and after a crash (`KeepAlive`); `stop`, `start`, `status` (launchd state plus one real request to the index), `url` and `uninstall` complete the set, and nothing is written into the shared repository.
+The tailnet only covers the captain's own machines: the front door is never a client-facing surface, the index and the page say so, and client pages go through a paid subdomain in a separate piece of work.
+The table and the plist are not inherited by secondmate homes.
 
 ## Relay (.env)
 

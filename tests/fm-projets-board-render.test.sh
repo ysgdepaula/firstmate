@@ -4,8 +4,9 @@
 # `fm-projets-board.sh render` and then executed under the minimal DOM shim in
 # tests/assets/projets-render-harness.mjs. The assertions are on what the page
 # renders - the three badges, the rail order, the seven blocks and their empty
-# states, the three-line cap, the unassigned card, and what a choice button
-# queues for firstmate - never on the template's source text.
+# states, the three-line cap, the unassigned card, the brain card, the phone
+# layout (stacked cells, folded blocks that keep no box), and what a choice
+# button queues for firstmate - never on the template's source text.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -197,6 +198,90 @@ test_fresh_empty_calendar() {
   pass "a fresh empty calendar is distinguished from an unread calendar"
 }
 test_fresh_empty_calendar
+
+test_the_brain_card_swaps_its_blocks_and_carries_unlinked_rows() {
+  local home out projects
+  home=$(make_home brain)
+  projects=$(jq -n --argjson a "$(empty_project torre Torre)" --argjson b "$(empty_project cerveau Cerveau)" '
+    [ $a,
+      ($b | .brain = true
+          | .missing_from_you = [
+              {key: "cerveau-index", question: "Adopter gbrain en index ?", options: [{value: "oui", label: "oui"}], url: null},
+              {key: "reco__gbrain", question: "Adopter gbrain comme index", kind: "recommandation", options: [{value: "on-y-va", label: "on y va"}], url: null},
+              {key: "article__doctrine", question: "Article à valider : Doctrine de dépense", kind: "article", options: [{value: "valide", label: "validé"}], url: null}]
+          | .unlinked = [{id: "sacem-relance", what: "SACEM : relancer Sabine"}]
+          | .pages = [{label: "Index du cerveau", url: "https://example.test/brain", state: "à jour 10/09"}]
+          | .quick_wins = ["Indexer les rapports"]) ]')
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":3,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '
+    (.rail | map(.id)) == ["torre", "cerveau"] and .rail[1].count == 3
+    and (.cards[1].brain == true)
+    and (.cards[1].blocs | map(.title)) == ["1. On est en train de", "2. Il manque de toi", "3. Pas encore rattaché à un projet", "4. Pages du cerveau", "5. Coûts du mois (septembre)", "6. Journal, les 5 derniers événements", "7. Quick wins du cerveau"]
+    and (.cards[1].blocs[1].decisions | map(.kind)) == [null, "recommandation", "article"]
+    and (.cards[1].blocs[2].unlinked == ["sacem-relance"])
+    and (.cards[1].blocs[3].items[0] | contains("Index du cerveau"))
+    and (.cards[1].blocs[6].items == ["Indexer les rapports"])
+    and (.cards[0].brain == false)
+    and (.cards[0].blocs | map(.title))[2] == "3. Il manque des autres"
+  ' >/dev/null || fail "the brain card did not swap its blocks or carry the unlinked rows: $out"
+  pass "the brain card swaps two blocks, tags recommendations and articles, and carries what no project owns"
+}
+
+test_unassigned_rows_join_the_brain_card_instead_of_a_synthetic_entry() {
+  local home out projects
+  home=$(make_home brain-unassigned)
+  projects=$(jq -n --argjson b "$(empty_project cerveau Cerveau)" '[ ($b | .brain = true | .unlinked = [{id: "x", what: "Un élément"}]) ]')
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":0,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '(.rail | map(.id)) == ["cerveau"] and (.cards | length) == 1 and (.cards[0].blocs[2].unlinked == ["x"])' >/dev/null \
+    || fail "a brain card still produced a synthetic sans-projet entry: $out"
+  pass "with a brain card, nothing renders as a separate sans-projet entry"
+}
+
+test_scouts_and_creations_render_as_extra_entries() {
+  local home out projects
+  home=$(make_home extras)
+  projects=$(jq -n --argjson p "$(empty_project torre Torre)" '
+    [ ($p | .doing = [{id: "torre-site", result: "site click and collect", status: "en cours", next: null, url: null}]
+         | .scouts = [{id: "torre-audit", result: "audit Shopify contre Stripe", status: "en cours", next: null, url: null}]
+         | .creations = [{label: "Démo de l interface", url: "https://example.test/demo", kind: "page"}]) ]')
+  out=$(render "$home" "$projects" '{"workers":2,"decisions":0,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '
+    (.cards[0].blocs[0].doing | map(.id)) == ["torre-site"]
+    and (.cards[0].blocs[0].scouts | map(.id)) == ["torre-audit"]
+    and (.cards[0].blocs[0].scouts[0].text | contains("audit Shopify") and contains("en cours"))
+    and (.cards[0].blocs[3].creations | map(.label)) == ["Démo de l interface"]
+    and (.cards[0].blocs[3].links == ["https://example.test/demo"])
+  ' >/dev/null || fail "scouts and creations did not render as extra entries: $out"
+  pass "scouts for the brain and creations render as extra entries of blocks 1 and 4"
+}
+
+test_cells_carry_their_column_label_for_the_stacked_phone_layout() {
+  local home out projects
+  home=$(make_home labels)
+  projects=$(jq -n --argjson p "$(empty_project torre Torre)" '
+    [ ($p | .doing = [{id: "torre-site", result: "site", status: "en cours", next: "fusion à confirmer", url: null}]) ]')
+  out=$(render "$home" "$projects" '{"workers":1,"decisions":0,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '
+    (.cards[0].blocs[0].labels == ["Résultat", "Où ça en est", "Ensuite"])
+    and (.cards[0].blocs[0].cells == ["site", "en cours", "fusion à confirmer"])
+    and (.cards[0].blocs[4].labels == ["Jetons, valeur API", "Part de tes abonnements"])
+  ' >/dev/null || fail "table cells do not carry their column label: $out"
+  pass "every table cell carries its column label so the phone layout can stack it"
+}
+
+test_a_folded_block_keeps_no_body_until_its_toggle_is_clicked() {
+  local home out
+  home=$(make_home toggle)
+  out=$(render "$home" "[$(empty_project torre Torre)]" '{"workers":0,"decisions":0,"subscriptions":null}' '[]' width=390 toggle=torre/1)
+  printf '%s' "$out" | jq -e '(.cards[0].blocs | map(.open)) == [true, true, false, false, false, false, false]' >/dev/null \
+    || fail "clicking a folded block did not open it, or opened others: $out"
+  pass "a folded block opens on its toggle and folded bodies stay hidden"
+}
+test_the_brain_card_swaps_its_blocks_and_carries_unlinked_rows
+test_unassigned_rows_join_the_brain_card_instead_of_a_synthetic_entry
+test_scouts_and_creations_render_as_extra_entries
+test_cells_carry_their_column_label_for_the_stacked_phone_layout
+test_a_folded_block_keeps_no_body_until_its_toggle_is_clicked
 
 test_an_empty_project_renders_all_seven_blocks_with_empty_states
 test_the_rail_keeps_payload_order_and_shows_one_project_at_a_time

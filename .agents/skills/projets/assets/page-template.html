@@ -10,6 +10,9 @@
    inlinee pour que la page s'ouvre en file:// sans reseau ni webfont.
    Hierarchie par la taille, le poids et le blanc ; jamais par la couleur.
    Trois traits, trois roles : 1px filet, 1.6px structure, pointille = optionnel.
+   Sur telephone rien ne defile en largeur : les tableaux deviennent des listes
+   empilees, le rail devient un nuage de puces qui se replie, chaque groupe de
+   boutons reste dans le flux et atteignable.
    ============================================================ */
 :root {
   --paper: #FAFAF8; --surround: #EFEEE9; --ink: #111111; --muted: #8A8A87;
@@ -21,22 +24,23 @@
   --r: 18px; --r-sm: 10px; --pad: 22px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { max-width: 100%; overflow-x: hidden; }
 body { background: var(--surround); color: var(--ink); font-family: var(--f-sans); font-size: 15px;
        line-height: 1.5; -webkit-font-smoothing: antialiased; }
 a { color: inherit; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 96px; min-width: 0; }
-:where(p, h1, h2, h3, li, td, th, span) { overflow-wrap: anywhere; }
+:where(p, h1, h2, h3, h4, li, td, th, span, a, button) { overflow-wrap: anywhere; }
 
 /* --- barre du haut : titre, mise a jour, trois badges ---------------------- */
 .top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
        margin-bottom: 20px; }
 .top h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
 .top .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
-.badges { display: flex; gap: 10px; flex-wrap: wrap; }
+.badges { display: flex; gap: 10px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .badge { display: flex; align-items: center; gap: 10px; background: var(--paper);
          border: var(--struct) solid var(--ink); border-radius: 999px; padding: 8px 16px 8px 12px;
-         box-shadow: var(--sh-card); min-width: 0; }
+         box-shadow: var(--sh-card); min-width: 0; max-width: 100%; }
 .badge svg { width: 20px; height: 20px; flex: none; stroke: var(--ink); fill: none;
              stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .badge b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -65,34 +69,39 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px 24px; flex-wrap: wrap;
         border-bottom: var(--hair) solid var(--line); padding-bottom: 14px; margin-bottom: 8px; }
 .head h2 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
-.head .headline { color: var(--muted); font-size: 14px; max-width: 62ch; }
+.head .meta { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 14px; max-width: 62ch; min-width: 0; }
+.head .deadline b { color: var(--ink); font-weight: 700; }
 
 .bloc { border-top: var(--hair) dashed var(--line); padding: 18px 0 6px; }
 .bloc:first-of-type { border-top: 0; }
-.bloc summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; }
-.bloc summary::-webkit-details-marker { display: none; }
-.bloc summary::before { content: ""; width: 8px; height: 8px; border-right: var(--struct) solid var(--ink);
+/* Un bloc se replie par un bouton qui masque vraiment son corps (display none) :
+   rien de replie ne garde de boite, donc rien ne peut passer sous un autre element. */
+.bloc .toggle { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; padding: 0; }
+.bloc .toggle::before { content: ""; flex: none; width: 8px; height: 8px; margin-top: 6px; border-right: var(--struct) solid var(--ink);
                         border-bottom: var(--struct) solid var(--ink); transform: rotate(45deg) translate(-2px, -2px); transition: transform .2s; }
-.bloc:not([open]) summary::before { transform: rotate(-45deg) translate(-1px, 1px); }
+.bloc:not(.is-open) .toggle::before { transform: rotate(-45deg) translate(-1px, 1px); }
 .bloc h3 { font-family: var(--f-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
-           color: var(--muted); font-weight: 400; }
+           color: var(--muted); font-weight: 400; line-height: 1.5; }
 .bloc h3 b { color: var(--ink); font-weight: 700; }
 .bloc .body { margin-top: 14px; }
 .empty { color: var(--muted); font-style: italic; font-size: 14px; }
+.sub { margin-top: 14px; }
+.sub h4 { font-family: var(--f-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+          color: var(--muted); font-weight: 400; margin-bottom: 6px; }
 
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: var(--hair) solid var(--line); vertical-align: top; }
 th { font-family: var(--f-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
 tr:last-child td { border-bottom: 0; }
 table.doing th:nth-child(1) { width: 52%; } table.doing th:nth-child(2) { width: 26%; } table.doing th:nth-child(3) { width: 22%; }
-.scrollx { overflow-x: auto; max-width: 100%; }
+td .cell-label { display: none; }
 td.dim { color: var(--muted); }
 
 .tl { list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .tl li { padding-left: 18px; position: relative; font-size: 15px; }
 .tl li::before { content: ""; position: absolute; left: 0; top: .8em; width: 10px; height: 1px; background: var(--faint); }
 .tag { display: inline-block; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; border: var(--hair) solid var(--line);
-       border-radius: 4px; padding: 0 6px; margin-left: 8px; color: var(--muted); vertical-align: 1px; white-space: nowrap; }
+       border-radius: 4px; padding: 0 6px; margin-left: 8px; color: var(--muted); vertical-align: 1px; }
 .tag.ok { border-color: var(--ink); color: var(--ink); }
 .src { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .more { margin-top: 10px; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; color: var(--muted); }
@@ -103,8 +112,9 @@ td.dim { color: var(--muted); }
 .you li { border: var(--struct) solid var(--ink); border-radius: var(--r-sm); padding: 10px 12px;
           display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .you .q { flex: 1 1 260px; min-width: 0; }
-.you .btns { display: flex; gap: 6px; flex-wrap: wrap; }
-.btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; white-space: nowrap; background: var(--paper); }
+.you .btns { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--paper);
+       text-align: left; max-width: 100%; }
 .btn:hover { background: var(--ink); color: var(--paper); }
 .you li.sent { border-style: dashed; }
 .you li.sent .btn { border-color: var(--line); color: var(--muted); }
@@ -116,20 +126,34 @@ td.dim { color: var(--muted); }
 .gaps h3 { font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 400; margin-bottom: 8px; }
 .gaps .tl li { color: var(--muted); font-size: 14px; }
 
+.limit { margin-top: 22px; color: var(--muted); font-size: 13px; max-width: 78ch; }
 .err { border: var(--struct) solid var(--ink); border-radius: var(--r); padding: var(--pad); background: var(--paper); }
 .err h2 { font-size: 20px; margin-bottom: 8px; }
 
-/* --- telephone : le rail devient une barre, chaque bloc se replie ---------- */
+/* --- telephone : puces qui se replient, tableaux en listes, blocs replies --- */
 @media (max-width: 720px) {
   .wrap { padding: 16px 12px 64px; }
+  .top { align-items: flex-start; }
   .top h1 { font-size: 20px; }
   .badge { padding: 6px 12px 6px 10px; } .badge b { font-size: 17px; }
-  .rail { grid-template-columns: 1fr; gap: 12px; }
-  .nav { position: static; flex-direction: row; overflow-x: auto; gap: 6px; padding: 6px; }
-  .nav button { width: auto; flex: none; padding: 8px 10px; }
+  .rail { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 6px; }
+  .nav button { width: auto; flex: 0 1 auto; padding: 8px 10px; }
   .nav .foot { display: none; }
   .card { padding: 16px; border-radius: 14px; }
+  .head { flex-direction: column; align-items: stretch; gap: 6px; }
   .head h2 { font-size: 22px; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
+  table.stack thead { display: none; }
+  table.stack tr { padding: 8px 0; border-bottom: var(--hair) solid var(--line); }
+  table.stack tr:last-child { border-bottom: 0; }
+  table.stack tr[hidden] { display: none; }
+  table.stack td { padding: 3px 0; border-bottom: 0; }
+  table.stack td .cell-label { display: block; font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em;
+                                text-transform: uppercase; color: var(--muted); margin-bottom: 1px; }
+  .tag { display: inline-block; margin: 4px 6px 0 0; }
+  .you li { align-items: stretch; }
+  .you .q, .you .btns, .you .ok { flex-basis: 100%; }
 }
 </style>
 </head>
@@ -147,6 +171,7 @@ td.dim { color: var(--muted); }
     <nav class="nav" id="pj-nav" aria-label="Projets"></nav>
     <main id="pj-main"></main>
   </div>
+  <footer class="limit">Cette page vit sur le réseau privé de Yan (tailnet) : seules ses machines la voient, un client extérieur n'y a pas accès. Les pages client passent par un sous-domaine dédié, chantier séparé.</footer>
 </div>
 
 <script id="projets-data" type="application/json">
@@ -182,6 +207,21 @@ __FM_PROJETS_BOARD_DATA__
   }
   function tag(text, ok) {
     return el("span", "tag" + (ok ? " ok" : ""), text);
+  }
+  /* Une cellule porte son en-tete de colonne : sur telephone le tableau
+     devient une liste empilee et l'en-tete s'affiche au-dessus de la valeur. */
+  function cell(label, text, cls) {
+    var td = el("td", cls || "");
+    td.setAttribute("data-label", label);
+    td.appendChild(el("span", "cell-label", label));
+    if (typeof text === "string") td.appendChild(el("span", "", text)); else td.appendChild(text);
+    return td;
+  }
+  function sub(body, title) {
+    var s = el("div", "sub");
+    s.appendChild(el("h4", "", title));
+    body.appendChild(s);
+    return s;
   }
   function utf8ByteLength(s) {
     return typeof TextEncoder === "function" ? new TextEncoder().encode(s).length : s.length;
@@ -235,16 +275,16 @@ __FM_PROJETS_BOARD_DATA__
     notice.hidden = false;
     notice.textContent = "La table des projets n'est pas encore écrite : un projet par dépôt en attendant. Demande à firstmate de la remplir.";
   }
-
-  /* --- rail : ordre du payload (le composeur trie : le plus de « il manque de toi » en haut) --- */
   if (data.warnings && data.warnings.length) {
     notice.hidden = false;
     notice.textContent += (notice.textContent ? " · " : "") + data.warnings.join(" · ");
   }
 
+  /* --- rail : ordre du payload (le composeur trie : le plus de « il manque de toi » en haut) --- */
   var projects = data.projects.slice();
   var unassigned = Array.isArray(data.unassigned) ? data.unassigned : [];
-  if (unassigned.length) {
+  var hasBrain = projects.some(function (p) { return p.brain === true; });
+  if (unassigned.length && !hasBrain) {
     projects.push({ id: "sans-projet", name: "Sans projet", synthetic: true, items: unassigned,
       doing: [], missing_from_you: [], missing_from_others: [], pages: [], journal: [], meeting: null, gaps: [],
       costs: null });
@@ -267,41 +307,51 @@ __FM_PROJETS_BOARD_DATA__
 
   /* --- une carte par projet, sept blocs -------------------------------------- */
   function bloc(num, title, open) {
-    var d = el("details", "bloc");
+    var d = el("section", "bloc" + (open ? " is-open" : ""));
     d.setAttribute("data-bloc", String(num));
-    if (open) d.open = true;
-    var s = el("summary", "");
+    d.setAttribute("data-open", open ? "true" : "false");
+    var s = el("button", "toggle");
+    s.type = "button";
+    s.setAttribute("aria-expanded", open ? "true" : "false");
     var h = el("h3", "");
     h.appendChild(el("b", "", num + ". "));
     h.appendChild(el("span", "", title));
     s.appendChild(h);
     d.appendChild(s);
     var body = el("div", "body");
+    body.hidden = !open;
     d.appendChild(body);
+    s.addEventListener("click", function () {
+      var opening = body.hidden;
+      body.hidden = !opening;
+      d.className = "bloc" + (opening ? " is-open" : "");
+      d.setAttribute("data-open", opening ? "true" : "false");
+      s.setAttribute("aria-expanded", opening ? "true" : "false");
+    });
     return { node: d, body: body };
   }
 
   function renderDoing(body, rows, partial) {
     if (!rows.length) { body.appendChild(el("p", "empty", partial ? "État partiel : activité non confirmée." : "Rien en cours sur ce projet.")); return; }
-    var wrap = el("div", "scrollx");
-    var t = el("table", "doing");
-    var thead = el("tr", "");
-    ["Résultat", "Où ça en est", "Ensuite"].forEach(function (h) { thead.appendChild(el("th", "", h)); });
+    var t = el("table", "doing stack");
+    var thead = el("thead", "");
+    var hr = el("tr", "");
+    ["Résultat", "Où ça en est", "Ensuite"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+    thead.appendChild(hr);
     t.appendChild(thead);
+    var tbody = el("tbody", "");
     var hiddenRows = [];
     rows.forEach(function (r, i) {
       var tr = el("tr", "");
       tr.setAttribute("data-doing", r.id);
-      var td1 = el("td", "");
-      td1.appendChild(link(r.result, r.url, "", r.url_refused));
-      tr.appendChild(td1);
-      tr.appendChild(el("td", "", r.status));
-      tr.appendChild(el("td", r.next ? "" : "dim", r.next || "rien de ton côté"));
+      tr.appendChild(cell("Résultat", link(r.result, r.url, "", r.url_refused)));
+      tr.appendChild(cell("Où ça en est", r.status));
+      tr.appendChild(cell("Ensuite", r.next || "rien de ton côté", r.next ? "" : "dim"));
       if (i >= 3) { tr.hidden = true; hiddenRows.push(tr); }
-      t.appendChild(tr);
+      tbody.appendChild(tr);
     });
-    wrap.appendChild(t);
-    body.appendChild(wrap);
+    t.appendChild(tbody);
+    body.appendChild(t);
     if (hiddenRows.length) {
       var more = el("button", "more", "voir tout (" + rows.length + ")");
       more.type = "button";
@@ -315,6 +365,22 @@ __FM_PROJETS_BOARD_DATA__
     }
   }
 
+  /* Les eclaireurs (scouts) enquetent pour le cerveau du projet : une liste
+     a part, sous les resultats en cours. */
+  function renderScouts(body, rows) {
+    if (!rows || !rows.length) return;
+    var s = sub(body, "Éclaireurs en cours pour le cerveau");
+    var ul = el("ul", "tl");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      li.setAttribute("data-scout", r.id);
+      li.appendChild(link(r.result, r.url, "", r.url_refused));
+      li.appendChild(tag(r.status));
+      ul.appendChild(li);
+    });
+    s.appendChild(ul);
+  }
+
   function renderYou(body, project) {
     var rows = project.missing_from_you;
     if (!rows.length) { body.appendChild(el("p", "empty", project.partial ? "État partiel : décisions non confirmées." : "Rien ne manque de toi sur ce projet.")); return; }
@@ -322,8 +388,10 @@ __FM_PROJETS_BOARD_DATA__
     rows.forEach(function (r) {
       var li = el("li", "");
       li.setAttribute("data-decision", r.key);
+      if (r.kind) li.setAttribute("data-kind", r.kind);
       var q = el("span", "q");
       q.appendChild(link(r.question, r.url, "", r.url_refused));
+      if (r.kind) q.appendChild(tag(r.kind));
       li.appendChild(q);
       var btns = el("div", "btns");
       var ok = el("span", "ok");
@@ -360,7 +428,6 @@ __FM_PROJETS_BOARD_DATA__
             if (result && typeof result.then === "function") result.then(function (value) { if (value === false) failed(); else sent(); }, failed);
             else if (result === false) failed(); else sent();
           } catch (e) { failed(); }
-
         });
         btns.appendChild(b);
       });
@@ -384,8 +451,8 @@ __FM_PROJETS_BOARD_DATA__
     body.appendChild(ul);
   }
 
-  function renderPages(body, rows) {
-    if (!rows.length) { body.appendChild(el("p", "empty", "Aucune page de gestion n'est enregistrée.")); return; }
+  function renderPages(body, rows, brain) {
+    if (!rows.length) { body.appendChild(el("p", "empty", brain ? "Aucune page du cerveau n'est enregistrée." : "Aucune page de gestion n'est enregistrée.")); return; }
     var ul = el("ul", "tl");
     rows.forEach(function (r) {
       var li = el("li", "");
@@ -396,19 +463,37 @@ __FM_PROJETS_BOARD_DATA__
     body.appendChild(ul);
   }
 
+  /* Les creations (pages, films, supports produits) : ce que le projet a
+     fabrique et qui se montre. */
+  function renderCreations(body, rows) {
+    if (!rows || !rows.length) return;
+    var s = sub(body, "Créations");
+    var ul = el("ul", "tl");
+    rows.forEach(function (r) {
+      var li = el("li", "");
+      li.setAttribute("data-creation", r.label);
+      li.appendChild(link(r.label, r.url, "", r.url_refused));
+      if (r.kind) li.appendChild(tag(r.kind));
+      ul.appendChild(li);
+    });
+    s.appendChild(ul);
+  }
+
   function renderCosts(body, costs) {
     var c = costs || { period: "ce mois", tokens_api: null, subscription_share: null, source: "" };
-    var wrap = el("div", "scrollx");
-    var t = el("table", "");
-    var thead = el("tr", "");
-    ["Jetons, valeur API", "Part de tes abonnements"].forEach(function (h) { thead.appendChild(el("th", "", h)); });
+    var t = el("table", "stack");
+    var thead = el("thead", "");
+    var hr = el("tr", "");
+    ["Jetons, valeur API", "Part de tes abonnements"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+    thead.appendChild(hr);
     t.appendChild(thead);
+    var tbody = el("tbody", "");
     var tr = el("tr", "");
-    tr.appendChild(el("td", c.tokens_api ? "" : "dim", c.tokens_api || "à mesurer"));
-    tr.appendChild(el("td", c.subscription_share ? "" : "dim", c.subscription_share || "à mesurer"));
-    t.appendChild(tr);
-    wrap.appendChild(t);
-    body.appendChild(wrap);
+    tr.appendChild(cell("Jetons, valeur API", c.tokens_api || "à mesurer", c.tokens_api ? "" : "dim"));
+    tr.appendChild(cell("Part de tes abonnements", c.subscription_share || "à mesurer", c.subscription_share ? "" : "dim"));
+    tbody.appendChild(tr);
+    t.appendChild(tbody);
+    body.appendChild(t);
     if (c.source) body.appendChild(el("div", "src", c.source));
   }
 
@@ -442,40 +527,72 @@ __FM_PROJETS_BOARD_DATA__
     body.appendChild(ul);
   }
 
-  function renderUnassigned(body, items) {
+  function renderUnassigned(body, items, brain) {
+    if (!items.length) { body.appendChild(el("p", "empty", "Tout est rattaché à un projet.")); return; }
     var ul = el("ul", "tl");
-    items.forEach(function (it) { ul.appendChild(el("li", "", it.what)); });
+    items.forEach(function (it) {
+      var li = el("li", "", it.what);
+      li.setAttribute("data-unlinked", it.id);
+      ul.appendChild(li);
+    });
     body.appendChild(ul);
-    body.appendChild(el("div", "src", plural(items.length, "élément à rattacher", "éléments à rattacher") + " à un projet : c'est ce que le cerveau ne sait pas encore ranger."));
+    body.appendChild(el("div", "src", plural(items.length, "élément à rattacher", "éléments à rattacher") + " à un projet : c'est ce que le cerveau ne sait pas encore ranger" + (brain ? ", firstmate te proposera un rangement" : "") + "."));
+  }
+
+  function renderQuickWins(body, items) {
+    if (!items || !items.length) { body.appendChild(el("p", "empty", "Aucun quick win enregistré pour le cerveau.")); return; }
+    var ul = el("ul", "tl");
+    items.forEach(function (s) { ul.appendChild(el("li", "", s)); });
+    body.appendChild(ul);
   }
 
   function card(p) {
     var c = el("section", "card");
     c.setAttribute("data-project", p.id);
+    if (p.brain) c.setAttribute("data-brain", "true");
     var head = el("div", "head");
     head.appendChild(el("h2", "", p.name));
-    if (p.deadline) head.appendChild(el("div", "deadline", "Prochaine échéance : " + p.deadline.label + ", " + frDate(p.deadline.date)));
-    if (p.team) head.appendChild(el("div", "team", p.team));
-    if (p.headline) head.appendChild(el("div", "headline", p.headline));
+    var meta = el("div", "meta");
+    if (p.deadline) {
+      var d = el("div", "deadline", "Prochaine échéance : ");
+      d.appendChild(el("b", "", p.deadline.label + ", " + frDate(p.deadline.date)));
+      meta.appendChild(d);
+    }
+    if (p.team) meta.appendChild(el("div", "team", p.team));
+    if (p.headline) meta.appendChild(el("div", "headline", p.headline));
+    if (meta.children.length) head.appendChild(meta);
     c.appendChild(head);
 
     if (p.synthetic) {
       var b0 = bloc(0, "sans projet", true);
-      renderUnassigned(b0.body, p.items);
+      renderUnassigned(b0.body, p.items, false);
       c.appendChild(b0.node);
       return c;
     }
 
     var narrow = typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 720;
-    var b1 = bloc(1, "On est en train de", !narrow); renderDoing(b1.body, p.doing, p.partial); c.appendChild(b1.node);
+    var b1 = bloc(1, "On est en train de", !narrow); renderDoing(b1.body, p.doing, p.partial); renderScouts(b1.body, p.scouts); c.appendChild(b1.node);
     var b2 = bloc(2, "Il manque de toi", true); renderYou(b2.body, p); c.appendChild(b2.node);
-    var b3 = bloc(3, "Il manque des autres", !narrow); renderOthers(b3.body, p.missing_from_others); c.appendChild(b3.node);
-    var b4 = bloc(4, "Pages de gestion", !narrow); renderPages(b4.body, p.pages); c.appendChild(b4.node);
+    if (p.brain) {
+      var b3b = bloc(3, "Pas encore rattaché à un projet", !narrow); renderUnassigned(b3b.body, p.unlinked || [], true); c.appendChild(b3b.node);
+      var b4b = bloc(4, "Pages du cerveau", !narrow); renderPages(b4b.body, p.pages, true); renderCreations(b4b.body, p.creations); c.appendChild(b4b.node);
+    } else {
+      var b3 = bloc(3, "Il manque des autres", !narrow); renderOthers(b3.body, p.missing_from_others); c.appendChild(b3.node);
+      var b4 = bloc(4, "Pages de gestion", !narrow); renderPages(b4.body, p.pages, false); renderCreations(b4.body, p.creations); c.appendChild(b4.node);
+    }
     var b5 = bloc(5, "Coûts du mois (" + ((p.costs && p.costs.period) || "ce mois") + ")", !narrow); renderCosts(b5.body, p.costs); c.appendChild(b5.node);
     var b6 = bloc(6, "Journal, les 5 derniers événements", !narrow); renderJournal(b6.body, p.journal); c.appendChild(b6.node);
-    var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow); (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m, p.agenda_available); });
-    if (p.meeting_warning) b7.body.appendChild(el("p", "", p.meeting_warning));
-    b7.body.appendChild(el("p", "src", "La prochaine reunion est lue depuis ton agenda ; ce qui n'y est pas n'y entre pas encore.")); c.appendChild(b7.node);
+    if (p.brain) {
+      var b7b = bloc(7, "Quick wins du cerveau", !narrow); renderQuickWins(b7b.body, p.quick_wins); c.appendChild(b7b.node);
+    } else {
+      var b7 = bloc(7, "Prochaine réunion et sa préparation", !narrow);
+      (p.meetings && p.meetings.length ? p.meetings : [p.meeting]).forEach(function (m) { renderMeeting(b7.body, m, p.agenda_available); });
+      /* l'etat vide dit deja qu'aucun agenda n'a ete lu ; l'avertissement ne
+         se repete que lorsqu'une reunion est affichee */
+      if (p.meeting_warning && p.meetings && p.meetings.length) b7.body.appendChild(el("p", "src", p.meeting_warning));
+      b7.body.appendChild(el("p", "src", "La prochaine reunion est lue depuis ton agenda ; ce qui n'y est pas n'y entre pas encore."));
+      c.appendChild(b7.node);
+    }
 
     if (p.gaps && p.gaps.length) {
       var g = el("div", "gaps");
