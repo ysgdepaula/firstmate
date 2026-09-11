@@ -52,3 +52,61 @@ jq -e --slurpfile before "$TMP_ROOT/before.json" '.events == $before[0].events a
 "$ROOT/bin/fm-projets-board.sh" render "$TMP_ROOT/payload.json" >/dev/null
 jq -e '.badges.decisions == 0 and (.projects[] | select(.id == "torre") | (.journal | length) == 4 and .missing_from_you == [] and any(.gaps[]; contains("mise de côté")))' "$TMP_ROOT/payload.json" >/dev/null || fail "journal or actionable decision filtering failed"
 pass "producer clocks survive cleanup and deferred decisions remain outside the badge"
+
+"$ROOT/bin/fm-captain-hold.sh" hold torre-reprise --title 'Livrer après accord' --reason 'Accord' --repo agent-platform >/dev/null
+"$ROOT/bin/fm-captain-hold.sh" answer torre-reprise --decision-file "$TMP_ROOT/answer.txt" --release >/dev/null
+(cd "$FM_HOME" && tasks-axi "done" torre-reprise >/dev/null)
+"$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/released.json"
+jq -e '[.events[] | select(.id == "torre-reprise") | .kind] | sort == ["decision","landed"]' "$TMP_ROOT/released.json" >/dev/null || fail "released work lost its decision or delivery"
+pass "a released and completed task retains its decision and delivery"
+
+python3 - "$FM_DATA_OVERRIDE" <<'PYEVENTS'
+import datetime as dt
+import json, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+day=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=1)).strftime("%Y-%m-%d")
+def row(i):
+    return {"schema":"fm-task-events.v1","key":str(i),"kind":"decision","at":f"{day}T00:{i:02}:00Z","what":"é"*4096,"url":None,"repo":"agent-platform"}
+for task, indices in [("torre-a-history",range(50))] + [(f"torre-z-{i:02}",[i]) for i in range(30)]:
+    folder=root/task
+    folder.mkdir()
+    (folder/"events.jsonl").write_text("".join(json.dumps(row(i),ensure_ascii=False)+"\n" for i in indices))
+bad=root/"torre-middle"
+bad.mkdir()
+(bad/"events.jsonl").write_text(json.dumps(row(0))+"\n{bad JSON\n")
+PYEVENTS
+"$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/large-events.json"
+jq -e '([.events[] | select(.id == "torre-a-history")] | length) == 50
+  and ([.events[] | select(.id | startswith("torre-z-"))] | length) == 30
+  and all(.events[]; .id != "torre-middle")
+  and any(.omitted[]; .surface == "events_unreadable" and .id == "torre-middle")' "$TMP_ROOT/large-events.json" >/dev/null || fail "large or malformed journals broke complete collection"
+"$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null
+jq -e '(.events | length) == 20 and ([.events[] | select(.id == "torre-a-history")] | length) == 5
+  and any(.omitted[]; .surface == "events_truncated" and .count > 0)
+  and any(.omitted[]; .surface == "events_unreadable" and .id == "torre-middle")' "$FM_STATE_OVERRIDE/home-summary.json" >/dev/null || fail "default event bounds or omissions lost"
+[ "$(wc -c < "$FM_STATE_OVERRIDE/home-summary.json")" -lt 262144 ] || fail "event projection exceeds parent ledger limit"
+FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK=2 FM_SNAPSHOT_SECONDMATE_EVENTS=3 "$ROOT/bin/fm-fleet-snapshot.sh" --secondmate-home-summary > "$TMP_ROOT/bounded.json"
+jq -e '(.events | length)==3 and ([.events[] | select(.id=="torre-a-history")] | length)==2' "$TMP_ROOT/bounded.json" >/dev/null || fail "event bound overrides ignored"
+
+mkdir -p "$FM_HOME/bin"
+printf 'mate\n' > "$FM_HOME/.fm-secondmate-home"
+printf '# Fixture home\n' > "$FM_HOME/AGENTS.md"
+parent="$TMP_ROOT/parent"
+mkdir -p "$parent/state" "$parent/data" "$parent/config" "$parent/projects"
+printf '%s\n' '## In flight' '' '## Queued' '' '## Done' > "$parent/data/backlog.md"
+printf -- '- mate - fixture (home: %s; scope: fixture work; projects: agent-platform; added 2026-09-11)\n' "$FM_HOME" > "$parent/data/secondmates.md"
+fm_write_secondmate_meta "$parent/state/mate.meta" "$FM_HOME" "fmtest:fm-mate" agent-platform claude
+parent_run() {
+  FM_HOME="$parent" FM_STATE_OVERRIDE="$parent/state" FM_DATA_OVERRIDE="$parent/data" FM_CONFIG_OVERRIDE="$parent/config" "$@"
+}
+parent_run "$ROOT/bin/fm-bearings-snapshot.sh" --json > "$TMP_ROOT/parent-bearings.json"
+jq -e 'any(.omitted[]; .surface == "events_truncated" and .owner == "mate") and any(.omitted[]; .surface == "events_unreadable" and .id == "torre-middle")' "$TMP_ROOT/parent-bearings.json" >/dev/null || fail "parent bearings lost home journal disclosures"
+parent_run "$ROOT/bin/fm-projets-board.sh" init >/dev/null
+parent_run "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$TMP_ROOT/parent-bearings.json" --no-quota > "$TMP_ROOT/parent-page.json"
+jq -e '(.warnings | length) > 0' "$TMP_ROOT/parent-page.json" >/dev/null || fail "page hid partial event collection"
+jq 'del(.events)' "$FM_STATE_OVERRIDE/home-summary.json" > "$TMP_ROOT/legacy.json"
+mv "$TMP_ROOT/legacy.json" "$FM_STATE_OVERRIDE/home-summary.json"
+parent_run "$ROOT/bin/fm-fleet-snapshot.sh" --json > "$TMP_ROOT/legacy-parent.json"
+jq -e 'any(.events[]; .id == "mate/torre-livraison" and .kind == "landed" and .at == "2026-09-10")' "$TMP_ROOT/legacy-parent.json" >/dev/null || fail "legacy home summary lost landed history"
+pass "large journal transport, bounded publication, partial disclosure and legacy summaries work through real consumers"

@@ -100,6 +100,12 @@
 # Compatibility: JSON is the primary machine-readable surface.
 # events[] preserves recorded PRs, merge notifications, terminal receipts and
 # answered captain holds with their available event clock, never observation time.
+# Events use temporary JSON files for transport, independently of argv limits.
+# Malformed or unreadable task journals are skipped atomically and named in omitted[].
+# Home summaries export at most FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK (default 5)
+# recent events per task, FM_SNAPSHOT_SECONDMATE_EVENTS (default 20) overall,
+# and 32768 compact JSON bytes, with 240-character text excerpts and omitted[] disclosure.
+# Older v1 summaries without events derive day-dated landed events from landed rows.
 # The event reader includes data/<id>/events.jsonl even after metadata removal;
 # fm-task-events-lib.sh owns that durable format.
 # bin/fm-fleet-events.jq owns their projection for this home and home summaries.
@@ -146,6 +152,8 @@ FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=${FM_SNAPSHOT_LOCAL_READ_CONCURRENCY:-8}
 FM_SNAPSHOT_BUDGET=${FM_SNAPSHOT_BUDGET:-5}
 FM_SNAPSHOT_CACHE_DIR=${FM_SNAPSHOT_CACHE_DIR:-$STATE/secondmate-summary-cache}
 FM_SNAPSHOT_SECONDMATE_MAX_BYTES=${FM_SNAPSHOT_SECONDMATE_MAX_BYTES:-262144}
+FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK=${FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK:-5}
+FM_SNAPSHOT_SECONDMATE_EVENTS=${FM_SNAPSHOT_SECONDMATE_EVENTS:-20}
 FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN:-20}
 FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED:-20}
 FM_SNAPSHOT_SECONDMATE_DECISIONS=${FM_SNAPSHOT_SECONDMATE_DECISIONS:-20}
@@ -178,6 +186,8 @@ validate_positive_bound FM_SNAPSHOT_CREW_STATE_TIMEOUT "$FM_SNAPSHOT_CREW_STATE_
 validate_positive_bound FM_SNAPSHOT_LOCAL_READ_CONCURRENCY "$FM_SNAPSHOT_LOCAL_READ_CONCURRENCY"
 validate_positive_bound FM_SNAPSHOT_BUDGET "$FM_SNAPSHOT_BUDGET"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_MAX_BYTES "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES"
+validate_positive_bound FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK "$FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK"
+validate_positive_bound FM_SNAPSHOT_SECONDMATE_EVENTS "$FM_SNAPSHOT_SECONDMATE_EVENTS"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_CHILDREN "$FM_SNAPSHOT_SECONDMATE_CHILDREN"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_QUEUED "$FM_SNAPSHOT_SECONDMATE_QUEUED"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_DECISIONS "$FM_SNAPSHOT_SECONDMATE_DECISIONS"
@@ -692,14 +702,26 @@ prefetch_task_current_states() {
   fi
 }
 
-event_evidence_json() {
+event_evidence_json() (
+  set -o pipefail
   local file version provider host path number epoch id
+  local stage="$JSON_TRANSPORT_DIR/event-stage.jsonl" omissions="$JSON_TRANSPORT_DIR/event-omissions.jsonl"
+  : > "$omissions" || return 1
   {
     for file in "$DATA"/*/events.jsonl; do
-      [ -f "$file" ] && [ ! -L "$file" ] || continue
+      [ -e "$file" ] || [ -L "$file" ] || continue
       id=${file%/events.jsonl}
       id=${id##*/}
-      jq -c --arg id "$id" 'select(.schema == "fm-task-events.v1") | . + {id:$id,recorded:true}' "$file" || return 1
+      if [ -f "$file" ] && [ -r "$file" ] && [ ! -L "$file" ] && jq -sc --arg id "$id" '
+        if all(.[]; type == "object" and .schema == "fm-task-events.v1"
+          and (.at | type == "string") and (.kind | IN("pr","merge","decision","landed"))
+          and (.what | type == "string") and (.url == null or (.url | type == "string")))
+        then .[] | . + {id:$id,recorded:true} else error("invalid task events") end
+      ' "$file" > "$stage" 2>/dev/null; then
+        cat "$stage" || return 1
+      else
+        jq -nc --arg id "$id" '{surface:"events_unreadable",id:$id,count:1,reveal:"inspect the durable task journal"}' >> "$omissions" || return 1
+      fi
     done
     for file in "$STATE"/*.pr-poll-merge-notified; do
       [ -f "$file" ] && [ ! -L "$file" ] || continue
@@ -717,8 +739,9 @@ event_evidence_json() {
         | select(.schema == "fm-terminal-outcome.v1" and .state == "done")
         | {id:.task_id,kind:"landed",url:(.pr | if . == "" then null else . end),at:(try (.created_epoch | tonumber | todateiso8601) catch null)}' < "$file"
     done
-  } | jq -s .
-}
+  } > "$JSON_TRANSPORT_DIR/events.jsonl" || return 1
+  jq -s --slurpfile omitted "$omissions" '{events:.,omitted:$omitted}' "$JSON_TRANSPORT_DIR/events.jsonl"
+)
 
 task_json_lines() {
   local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
@@ -946,10 +969,12 @@ main_inventory_json() {  # <backlog-json-file> <tasks-json-file>
 # nested secondmates.
 secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
   jq -L "$SCRIPT_DIR" -n \
-    --argjson event_evidence "$EVENT_EVIDENCE_JSON" \
+    --slurpfile event_collection "$EVENT_EVIDENCE_JSON_FILE" \
     --arg generated "$SNAPSHOT_NOW" \
     --argjson generated_epoch "$SNAPSHOT_EPOCH" \
     --arg home "$FM_HOME" \
+    --argjson event_per_task "$FM_SNAPSHOT_SECONDMATE_EVENTS_PER_TASK" \
+    --argjson event_n "$FM_SNAPSHOT_SECONDMATE_EVENTS" \
     --argjson child_n "$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
     --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
@@ -957,7 +982,8 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     --slurpfile backlog "$1" \
     --slurpfile tasks "$2" '
     include "fm-fleet-events";
-    ($backlog[0]) as $backlog
+    ($event_collection[0]) as $event_collection
+   | ($backlog[0]) as $backlog
     | ($tasks[0]) as $tasks
     | def trunc($n):
       tostring | gsub("\\s+"; " ")
@@ -1064,6 +1090,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
        elif ($active_all | length) > 0 then "active_child_work"
        elif ($holds_all | length) > 0 then "externally_held"
        else "no_active_work" end) as $state
+    | fleet_event_projection(fleet_events($backlog; $tasks; $event_collection.events); $event_per_task; $event_n) as $event_projection
     | {
         schema:"fm-secondmate-home-summary.v1",
         hold_classifier_schema:"fm-captain-hold-buckets.v1",
@@ -1074,7 +1101,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
         reason:$reason,
         invalidity:$invalidity,
         state:$state,
-        events:fleet_events($backlog; $tasks; $event_evidence),
+        events:$event_projection.events,
         active_children:$active_all[:$child_n],
         decisions_open:$decisions_all[:$decisions_n],
         holds:$holds_all[:$queued_n],
@@ -1102,13 +1129,13 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           landed:($landed_all | length),
           endpoints:($tasks | length)
         },
-        omitted:[
+        omitted:($event_collection.omitted + $event_projection.omitted + [
           (if ($active_all | length) > $child_n then {surface:"active_children",count:(($active_all | length) - $child_n)} else empty end),
           (if ($decisions_all | length) > $decisions_n then {surface:"decisions_open",count:(($decisions_all | length) - $decisions_n)} else empty end),
           (if ($queued_all | length) > $queued_n then {surface:"queued",count:(($queued_all | length) - $queued_n)} else empty end),
           (if ($tasks | length) > $child_n then {surface:"endpoints",count:(($tasks | length) - $child_n)} else empty end),
           (if $landed_n > 0 and ($landed_all | length) > $landed_n then {surface:"landed",count:(($landed_all | length) - $landed_n)} else empty end)
-        ]
+        ])
       }'
 }
 
@@ -1848,7 +1875,7 @@ secondmate_current_json() {  # <parent-tasks-json-file> <output-file>
          freshness:{status:$summary_freshness,observed_at:$observed,age_seconds:$summary_age},
          active_children:$summary.active_children,
          decisions_open:$summary.decisions_open,holds:$summary.holds,queued:$summary.queued,
-         events:($summary.events // []),
+         events:(if ($summary.events | type) == "array" then $summary.events else [$summary.landed[]? | {id,repo:(.repo // null),kind:"landed",what:.title,url:(.pr_url // null),at:(.completion.date // null)}] end),
          landed:$summary.landed,endpoints:$summary.endpoints,counts:$summary.counts,omitted:$summary.omitted,
          parent_event:{raw:$event_raw,note:$event_note,age_seconds:$event_age,open_activities:$activities,open_decisions:$decisions,activity_scan:$activity_scan,reconciliation:$reconciliation},
          terminal_evidence:$terminal,contradiction:$contradiction}' >> "$records_file" || return 1
@@ -1933,13 +1960,14 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
-EVENT_EVIDENCE_JSON=$(event_evidence_json) || exit 1
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
 JSON_TRANSPORT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-snapshot.XXXXXX") \
   || { echo "fm-fleet-snapshot: temporary transport directory creation failed" >&2; exit 1; }
+EVENT_EVIDENCE_JSON_FILE="$JSON_TRANSPORT_DIR/event-evidence.json"
+event_evidence_json > "$EVENT_EVIDENCE_JSON_FILE" || { echo "fm-fleet-snapshot: event collection failed" >&2; exit 1; }
 BACKLOG_JSON_FILE="$JSON_TRANSPORT_DIR/backlog.json"
 TASKS_JSON_FILE="$JSON_TRANSPORT_DIR/tasks.json"
 MAIN_INVENTORY_JSON_FILE="$JSON_TRANSPORT_DIR/main-inventory.json"
@@ -1967,7 +1995,7 @@ secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON_FILE" "$SECONDMATE
   || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
 
 jq -L "$SCRIPT_DIR" -n \
-  --argjson event_evidence "$EVENT_EVIDENCE_JSON" \
+  --slurpfile event_collection "$EVENT_EVIDENCE_JSON_FILE" \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
@@ -1982,7 +2010,8 @@ jq -L "$SCRIPT_DIR" -n \
   --slurpfile secondmate_current "$SECONDMATE_CURRENT_JSON_FILE" \
   --slurpfile secondmate_landed "$SECONDMATE_LANDED_JSON_FILE" \
   'include "fm-fleet-events";
-   ($backlog[0]) as $backlog
+   ($event_collection[0]) as $event_collection
+   | ($backlog[0]) as $backlog
    | ($tasks[0]) as $tasks
    | ($main_inventory[0]) as $main_inventory
    | ($scout_reports[0]) as $scout_reports
@@ -1996,7 +2025,8 @@ jq -L "$SCRIPT_DIR" -n \
      generated:$generated,
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
-     events:(fleet_events($backlog; $tasks; $event_evidence) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
+     events:(fleet_events($backlog; $tasks; $event_collection.events) + [$secondmate_current.records[]? as $m | $m.events[]? | . + {id:($m.id + "/" + .id),owner:$m.id}]),
+     omitted:$event_collection.omitted,
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),
      main_inventory:$main_inventory,

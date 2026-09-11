@@ -44,6 +44,7 @@
 # Main-home inventory validity comes from the canonical snapshot's main_inventory
 # object (orphan structured in-flight without meta, unstructured current rows).
 # Bearings never invents Underway rows from backlog-only ids; it discloses those
+# Event collection failures and bounded home event projections also propagate to omitted[].
 # gaps in omitted[] and, when invalid, a Charted Next gate line so the four-section
 # chat cannot claim an empty fleet while main current state is broken.
 #
@@ -555,7 +556,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | . + (if $f_actions then {actions:[ $snap.tasks[] | {id, watch:(.actions.watch // .actions.send // "-"), steer:(.actions.steer // .actions.send // "-")} ]} else {} end)
   | . + (if $f_endpoints then {endpoints:[ $snap.tasks[] | {id, backend, target:(.endpoint.target // "-"), exists:.endpoint.exists, agent:.endpoint.agent_alive} ]} else {} end)
   | . + {omitted: (
-      [ (if $f_bodies then empty else {surface:"backlog item bodies", reveal:"--fields bodies"} end),
+      [ ($snap.omitted[]? | . + {owner:"(main)"}),
+        ($snap.secondmate_current.records[]? as $m | $m.omitted[]? | select(.surface | startswith("events")) | . + {owner:$m.id}),
+        (if $f_bodies then empty else {surface:"backlog item bodies", reveal:"--fields bodies"} end),
         (if $f_paths then empty else {surface:"task paths", reveal:"--fields paths"} end),
         (if $f_actions then empty else {surface:"watch/steer actions", reveal:"--fields actions"} end),
         (if $f_endpoints then empty else {surface:"healthy endpoint detail", reveal:"--fields endpoints"} end),
