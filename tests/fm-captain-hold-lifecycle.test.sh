@@ -3182,7 +3182,84 @@ test_rehold_promotes_current_review_page() {
   pass "re-hold promotes current review pages and preserves fallback order on retries"
 }
 
+test_completion_scopes_pages_to_each_call() {
+  local home id call phase page
+  home=$(make_home completion-call-pages)
+  id=shared-review
+  write_origin_meta "$home" "$id"
+  cat > "$home/config/projets.json" <<'EOF'
+{"schema":"fm-projets-config.v1","projects":[{"id":"sample","name":"Exemple","prefixes":["call-","shared-"],"repos":["sample"]}]}
+EOF
+  for call in a b; do
+    run_captain "$home" hold "call-$call" --title "Choisir $call" \
+      --reason "voir http://localhost:4387/session/$call" --repo sample --origin "$id" >/dev/null \
+      || fail "could not hold call $call"
+  done
+  cat > "$home/state/$id.status" <<'EOF'
+paused: http://localhost:4387/session/a
+done: http://localhost:4387/session/b
+EOF
+  for phase in complete retry cleaned; do
+    if [ "$phase" = cleaned ]; then
+      rm "$home/state/$id.status" "$home/state/$id.meta"
+    elif [ "$phase" = retry ]; then
+      run_captain "$home" complete "$id" call-a >/dev/null || fail "partial inventory retry failed"
+    else
+      run_captain "$home" complete "$id" call-a call-b >/dev/null || fail "multi-call completion failed"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "multi-call snapshot failed"
+    for call in a b; do
+      jq -e --arg call "$call" '.decisions_open[] | select(.id == "call-" + $call)
+        | .links == "http://localhost:4387/session/" + $call' "$home/snapshot.json" >/dev/null \
+        || fail "call $call acquired another call's page ($phase)"
+    done
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "multi-call composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "multi-call rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      for call in a b; do
+        jq -e --arg call "$call" '.cards[].blocs[].decisions[] | select(.key == "call-" + $call)
+          | .pageHref == "http://localhost:4387/session/" + $call' "$home/rendered.json" >/dev/null \
+          || fail "call $call opens the wrong page ($page, $phase)"
+      done
+    done
+  done
+  pass "multi-call completion preserves each call's own page through retries and cleanup"
+}
+
+test_completion_promotes_only_associated_status_pages() {
+  local home id before after
+  home=$(make_home associated-status-pages)
+  id=shared-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold call-a --title 'Choisir A http://localhost:4387/session/a-final' \
+    --reason 'voir http://localhost:4387/session/a-draft' --repo sample --origin "$id" >/dev/null || fail "could not hold versioned call"
+  run_captain "$home" hold call-b --title 'Choisir B' \
+    --reason 'voir http://localhost:4387/session/b-final http://localhost:4387/session/b-draft' --repo sample --origin "$id" >/dev/null || fail "could not hold explicit call"
+  run_captain "$home" hold call-c --title 'Choisir C' \
+    --reason choisir --repo sample --origin "$id" >/dev/null || fail "could not hold call without a page"
+  before=$(tasks_in "$home" show call-b --full)
+  cat > "$home/state/$id.status" <<'EOF'
+paused: http://localhost:4387/session/a-draft
+done: http://localhost:4387/session/a-final
+done: http://localhost:4387/session/unassigned
+EOF
+  run_captain "$home" complete "$id" call-a call-b call-c >/dev/null || fail "associated-page completion failed"
+  after=$(tasks_in "$home" show call-b --full)
+  [ "$before" = "$after" ] || fail "unassociated status pages changed explicit call links"
+  rm "$home/state/$id.status" "$home/state/$id.meta"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "associated-page snapshot failed"
+  jq -e '.decisions_open[] | select(.id == "call-a") | (.links | split(" ")) ==
+    ["http://localhost:4387/session/a-final", "http://localhost:4387/session/a-draft"]' "$home/snapshot.json" >/dev/null \
+    || fail "newest associated status page did not lead its call's fallbacks"
+  jq -e '.decisions_open[] | select(.id == "call-c") | .links == ""' "$home/snapshot.json" >/dev/null \
+    || fail "unassigned status page was attached to a call without links"
+  pass "completion promotes known pages newest first and leaves unassociated calls unchanged"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
+  test_completion_scopes_pages_to_each_call
+  test_completion_promotes_only_associated_status_pages
   test_completion_preserves_review_pages_after_status_cleanup
   test_completion_keeps_control_before_metadata
   test_ipv6_review_pages_survive_extraction_and_completion
@@ -3193,6 +3270,8 @@ if [ "${1:-}" = --completion-pages ]; then
   exit 0
 fi
 
+test_completion_scopes_pages_to_each_call
+test_completion_promotes_only_associated_status_pages
 test_completion_preserves_review_pages_after_status_cleanup
 test_completion_keeps_control_before_metadata
 test_ipv6_review_pages_survive_extraction_and_completion

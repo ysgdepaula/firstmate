@@ -1625,15 +1625,22 @@ command_complete() {
       if [ -n "$CAPTAIN_RESOLVED_ID" ]; then
         acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
         verify_hold_durable "$CAPTAIN_RESOLVED_ID"
+        show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
         status_file="$STATE/$origin.status"
         page_urls='[]'
         if [ -f "$status_file" ]; then
-          page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
+          page_urls=$(jq -L "$SCRIPT_DIR" -Rs --arg inventory "$keys" --arg entry "$entry" \
+            --arg reason "$(show_field_value "$show" hold_reason)" \
+            --arg title "$(show_field_value "$show" title)" '
             include "fm-call-links"; include "fm-projets-data";
             call_link_candidates([]; .) | map(select(project_page_url))
+            | if $inventory == $entry then .
+              else
+                call_link_candidates([]; $reason + "\n" + $title) as $owned
+                | map(select(. as $url | $owned | index($url)))
+              end
           ' "$status_file") || fail "cannot collect recorded pages for $origin"
         fi
-        show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
         if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
           updated_reason=$(merge_review_pages "$reason" "" "$page_urls") \
