@@ -17,8 +17,6 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 If pipeline fixes move the PR head, no-mistakes must republish its attestation for that final head on the existing PR.
 The shared action reads the live PR body and head through the GitHub API, so rerunning an older workflow evaluates the refreshed attestation even though GitHub replays the original event payload.
 The workflow grants `pull-requests: read`; if the live lookup fails, the check fails closed instead of trusting the archived event.
-If verification fails, the workflow waits 60 seconds and retries the same verifier once, allowing the pipeline's separate push and PR-body publication to finish.
-The retry reads live facts again and must pass every existing requirement; an attestation that remains stale or invalid still fails the job.
 Inside an active run, return a stale-attestation failure to the outer executor that owns PR publication instead of starting a nested pipeline or changing the head-binding check.
 After each CI-fix push, that executor must refresh the existing PR attestation for the final head before rerunning compliance; rerunning while the live body still attests the previous head will fail again.
 If the live attestation already matches the current head but the failed run logged an older attestation, the outer executor must rerun that failed compliance check against the refreshed metadata.

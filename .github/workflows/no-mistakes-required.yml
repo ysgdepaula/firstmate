@@ -28,14 +28,4 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
       - name: Verify no-mistakes signature and pipeline attestation
-        id: verify
-        continue-on-error: true
         uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@76fa0921a9797b09e120c8b5979c4d0e65f88922 # live PR lookup and fail-closed API handling (#923)
-      # A synchronize event can arrive before the pipeline updates the PR body.
-      # Retry once with live facts; a persistently invalid attestation still fails.
-      - name: Allow the pipeline to finish publishing its attestation
-        if: steps.verify.outcome == 'failure'
-        run: sleep 60
-      - name: Verify the published attestation again
-        if: steps.verify.outcome == 'failure'
-        uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@76fa0921a9797b09e120c8b5979c4d0e65f88922
