@@ -88,7 +88,9 @@
 #                   including an explicit --jobs, and never raises it or makes a
 #                   serial selection concurrent. Export it to keep a machine
 #                   responsive while a suite runs; it can never admit an
-#                   unproven script to a concurrent phase.
+#                   unproven script to a concurrent phase, and it is dropped
+#                   before any test script runs, so exporting it cannot change
+#                   what the suite measures.
 #   FM_TEST_QUEUE_TIMEOUT_SECS
 #                   how long a queued run waits for the suite ahead of it before
 #                   refusing (default 3600). It refuses rather than running
@@ -106,6 +108,17 @@
 # would have let every one of them through. A run nested inside another - a test
 # that drives this runner - proceeds under its parent's hold instead of
 # deadlocking against it, and --no-queue opts a run out entirely.
+#
+# NOT COVERED, stated plainly because both bounds above are easy to read as
+# total. They account for the workers this runner schedules and the suite runs
+# it queues. A background process that outlives whatever launched it is outside
+# both: once a test detaches a worker, a daemon, or an agent that keeps running
+# after the script that started it returns, this runner no longer knows the
+# process exists and neither bound applies to it. So the ceiling is on what this
+# runner starts and waits for, not on everything a suite leaves running on the
+# machine, and a machine can still be loaded by survivors after every run here
+# has finished. Accounting for those survivors is a separate piece of work and
+# nothing in this file attempts it.
 #
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
@@ -2214,6 +2227,17 @@ trap cleanup_run EXIT
 # after every selection and argument refusal, so only a run that is going to
 # execute scripts ever queues.
 acquire_run_queue
+
+# Both operator knobs above are fully consumed by this point: the ceiling is
+# folded into JOBS, and the queue wait is over. Drop them here so they cannot
+# reach the test scripts this run is about to execute. A test that drives this
+# runner resolves its own worker count and its own queue wait, and an inherited
+# ceiling would silently lower them - an operator who exports FM_TEST_JOBS to
+# keep the machine usable, exactly as its documentation invites, would otherwise
+# turn the suite red with a run that never resolved the count it asserts.
+# FM_TEST_QUEUE_DIR deliberately stays: it names WHICH queue, so parent and
+# child must keep agreeing on it for the nested-hold check below to match.
+unset FM_TEST_JOBS FM_TEST_QUEUE_TIMEOUT_SECS 2>/dev/null || true
 
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"
 TOTAL=0

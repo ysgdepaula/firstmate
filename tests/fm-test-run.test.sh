@@ -1491,6 +1491,52 @@ test_automatic_worker_count_is_half_the_processors() {
   pass "automatic worker count is half the processors, floored at 2 and capped at the proven ceiling"
 }
 
+# An operator who exports FM_TEST_JOBS is doing exactly what its documentation
+# invites - keeping the machine usable while a suite runs. That must not change
+# what the suite MEASURES. A test that drives this runner resolves its own
+# worker count, and an inherited ceiling silently lowered it, turning the
+# half-the-processors assertions red for no reason but the caller's shell.
+test_operator_knobs_do_not_reach_test_scripts() {
+  local tmp repo queue witness seen
+  tmp=$(fm_test_tmproot fm-test-run-hermetic) || fail "could not create a temp root"
+  repo="$tmp/repo"
+  queue="$tmp/queue"
+  witness="$tmp/witness"
+  mkdir -p "$repo/tests" "$queue" || fail "could not build the hermetic fixture"
+  install_fixture_runner "$repo" || fail "could not install the fixture runner"
+  # Each fixture script reports the knobs it can see, so the assertion is about
+  # the environment a real test script is handed, not about runner internals.
+  for name in fm-lint fm-crew-state; do
+    cat >"$repo/tests/$name.test.sh" <<SH
+#!/usr/bin/env bash
+printf '%s jobs=%s timeout=%s\n' "$name" "\${FM_TEST_JOBS-unset}" \
+  "\${FM_TEST_QUEUE_TIMEOUT_SECS-unset}" >>"$witness"
+printf 'ok - $name\n'
+SH
+    chmod +x "$repo/tests/$name.test.sh"
+  done
+
+  # The serial path: one script resolves to a single worker.
+  : >"$witness"
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" FM_TEST_JOBS=2 FM_TEST_QUEUE_TIMEOUT_SECS=45 \
+    bin/fm-test-run.sh tests/fm-lint.test.sh) >/dev/null 2>&1 \
+    || fail "the serial hermetic fixture run failed"
+  seen=$(cat "$witness")
+  [ "$seen" = "fm-lint jobs=unset timeout=unset" ] \
+    || fail "a serially run test script must not inherit the operator knobs: $seen"
+
+  # And the concurrent path, which is where the real failure was observed.
+  : >"$witness"
+  (cd "$repo" && FM_TEST_QUEUE_DIR="$queue" FM_TEST_JOBS=2 FM_TEST_QUEUE_TIMEOUT_SECS=45 \
+    bin/fm-test-run.sh tests/fm-lint.test.sh tests/fm-crew-state.test.sh) >/dev/null 2>&1 \
+    || fail "the concurrent hermetic fixture run failed"
+  seen=$(LC_ALL=C sort <"$witness" | paste -sd, -)
+  [ "$seen" = "fm-crew-state jobs=unset timeout=unset,fm-lint jobs=unset timeout=unset" ] \
+    || fail "a concurrently run test script must not inherit the operator knobs: $seen"
+
+  pass "an exported operator ceiling never reaches the test scripts a run executes"
+}
+
 test_one_suite_run_at_a_time_on_this_machine() {
   local tmp repo queue witness first_pid waited second_rc order
   tmp=$(fm_test_tmproot fm-test-run-queue) || fail "could not create a temp root"
@@ -1585,6 +1631,7 @@ test_changed_dependency_selection_and_unmapped_failure
 test_changed_bin_reference_selects_per_script_not_per_family
 test_changed_uses_bounded_automatic_concurrency
 test_automatic_worker_count_is_half_the_processors
+test_operator_knobs_do_not_reach_test_scripts
 test_one_suite_run_at_a_time_on_this_machine
 test_script_list_uses_bounded_automatic_concurrency
 test_family_proofs_run_in_separate_concurrent_phases

@@ -123,6 +123,7 @@ Its header and `--help` own the flags, family labels, lanes, and changed-file ma
 Two of its bounds exist to keep a development machine usable while work runs on it, and its header owns both: the automatic worker count is half the machine's processors rather than all of them, and one complete suite run executes at a time on a machine, so a second run waits instead of adding a second worker pool to the same machine.
 That queue is machine-wide rather than per-checkout because the runs that overloaded a laptop were validation-gate runs in throwaway worktrees, which share no checkout and declare no firstmate home.
 `FM_TEST_JOBS` lowers the worker count without touching a command line, and `--no-queue` opts one run out of that wait.
+Neither bound covers a background process that outlives whatever launched it, so a suite that detaches a worker or a daemon can still leave load on the machine after the run finishes; the header states that limit in full.
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
