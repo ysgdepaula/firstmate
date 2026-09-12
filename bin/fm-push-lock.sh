@@ -93,12 +93,12 @@ _fm_push_lock_timeout() {
 # could not be prepared at all.
 fm_push_lock_acquire() {
   local label=${1:-publish} timeout lock parent deadline now holder announced=0
-  FM_PUSH_LOCK_ACQUIRED=0
   lock=$(fm_push_lock_path) || return 1
   parent=${FM_PUSH_LOCK_HELD:-}
   if [ -n "$parent" ] && [ "$parent" = "$lock" ]; then
     return 0
   fi
+  FM_PUSH_LOCK_ACQUIRED=0
   if ! timeout=$(_fm_push_lock_timeout "${2:-}"); then
     printf 'fm-push-lock: timeout must be a positive whole number of seconds\n' >&2
     return 1

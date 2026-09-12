@@ -128,6 +128,26 @@ test_a_nested_publication_proceeds_under_its_parent() {
   pass "a nested publication proceeds under its parent's hold instead of deadlocking"
 }
 
+test_reentrant_acquire_preserves_release_ownership() {
+  local tmp out
+  tmp=$(fm_test_tmproot fm-push-lock-reentrant) || fail "could not create a temp root"
+
+  out=$(FM_PUSH_LOCK_DIR="$tmp/lock" bash -c '
+    set -e
+    . "$1"
+    fm_push_lock_acquire "first acquire" 3
+    fm_push_lock_acquire "reentrant acquire" 3
+    fm_push_lock_release
+    env -u FM_PUSH_LOCK_HELD "$1" --timeout 1 -- printf "published\n"
+    fm_push_lock_release
+  ' _ "$LOCKER" 2>&1) \
+    || fail "release after reentrant acquire must admit an independent publication: $out"
+  [ "$out" = published ] \
+    || fail "the independent publication must run without waiting: $out"
+
+  pass "release after reentrant acquire admits an independent publication without waiting"
+}
+
 test_a_dead_holder_never_wedges_the_machine() {
   local tmp rc waited
   tmp=$(fm_test_tmproot fm-push-lock-dead) || fail "could not create a temp root"
@@ -157,4 +177,5 @@ test_wrapper_runs_the_command_and_passes_its_status
 test_two_publications_never_overlap
 test_bounded_wait_refuses_instead_of_hanging
 test_a_nested_publication_proceeds_under_its_parent
+test_reentrant_acquire_preserves_release_ownership
 test_a_dead_holder_never_wedges_the_machine
