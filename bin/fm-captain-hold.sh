@@ -1074,6 +1074,16 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
   rm -f -- "$tmp"
 }
 
+merge_review_pages() {
+  jq -L "$SCRIPT_DIR" -nr --arg reason "$1" --arg previous "$2" --argjson current "${3:-[]}" '
+    include "fm-call-links"; include "fm-projets-data";
+    call_link_candidates($current; $reason) as $current_urls
+    | (call_link_candidates($current_urls; $previous) | map(select(project_page_url))) as $urls
+    | ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
+    | ($urls + $remaining) | join(" ")
+  '
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
@@ -1123,12 +1133,8 @@ command_hold() {
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
     if [ "$existing_hold_kind" = captain ]; then
-      reason=$(jq -L "$SCRIPT_DIR" -nr --arg previous "$(show_field_value "$show" hold_reason)" --arg reason "$reason" '
-        include "fm-call-links"; include "fm-projets-data";
-        (call_link_candidates([]; $previous) | map(select(project_page_url))) as $urls
-        | ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
-        | ($urls + $remaining) | join(" ")
-      ') || fail "cannot retain recorded pages for $id"
+      reason=$(merge_review_pages "$reason" "$(show_field_value "$show" hold_reason)") \
+        || fail "cannot retain recorded pages for $id"
     fi
   else
     [ -n "$title" ] || fail "--title is required to create task $id"
@@ -1620,10 +1626,8 @@ command_complete() {
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
         if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
-          updated_reason=$(jq -nr --arg reason "$reason" --argjson urls "$page_urls" '
-            ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
-            | ($urls + $remaining) | join(" ")
-          ') || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          updated_reason=$(merge_review_pages "$reason" "" "$page_urls") \
+            || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
           if [ "$updated_reason" != "$reason" ]; then
             until=$(show_field_value "$show" hold_until)
             tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$updated_reason" ${until:+--until "$until"} >/dev/null \

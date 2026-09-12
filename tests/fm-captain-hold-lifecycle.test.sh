@@ -3164,6 +3164,25 @@ test_completion_preserves_hold_title_identity() {
   pass "completion preserves strict title identity and ordered links through hold retries"
 }
 
+test_rehold_promotes_current_review_page() {
+  local home id reason page
+  home=$(make_home rehold-pages)
+  id=rehold-review
+  run_captain "$home" hold "$id" --title 'Choisir la suite' --reason 'voir http://localhost:4387/session/draft' --repo sample >/dev/null || fail "could not hold draft review"
+  for reason in 'voir http://localhost:4387/session/final' 'voir http://localhost:4387/session/final' voir; do
+    run_captain "$home" hold "$id" --title 'Choisir la suite' --reason "$reason" --repo sample >/dev/null || fail "could not re-hold review"
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "re-hold snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "rehold-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "re-hold put stored pages ahead of current page or lost fallbacks"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "re-hold composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "re-hold rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e '.cards[].blocs[].decisions[] | select(.key == "rehold-review") | .pageHref == "http://localhost:4387/session/final" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "re-hold opened an older page"
+    done
+  done
+  pass "re-hold promotes current review pages and preserves fallback order on retries"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
   test_completion_preserves_review_pages_after_status_cleanup
   test_completion_keeps_control_before_metadata
@@ -3171,6 +3190,7 @@ if [ "${1:-}" = --completion-pages ]; then
   test_newest_status_page_precedes_older_fallbacks
   test_repeated_completion_promotes_latest_page
   test_completion_preserves_hold_title_identity
+  test_rehold_promotes_current_review_page
   exit 0
 fi
 
@@ -3180,6 +3200,7 @@ test_ipv6_review_pages_survive_extraction_and_completion
 test_newest_status_page_precedes_older_fallbacks
 test_repeated_completion_promotes_latest_page
 test_completion_preserves_hold_title_identity
+test_rehold_promotes_current_review_page
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
