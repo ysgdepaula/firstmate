@@ -36,7 +36,9 @@
 #            owned by docs/configuration.md "Projects page"), id prefix first,
 #            longest prefix wins, then repo. Without a table every repo becomes
 #            its own project and the page says the table is missing. Rows that
-#            match nothing land in the brain card's `unlinked`, or `unassigned`
+#            match nothing remain actionable on the brain card when held for the
+#            captain, or on a composed Sans projet card without a brain. Other
+#            unmatched rows land in the brain card's `unlinked`, or `unassigned`
 #            when no brain card is configured. Costs come from the optional measured file
 #            data/projets-couts.json (schema fm-projets-couts.v1) plus quota-axi's
 #            subscription windows; anything unmeasured stays null and the page
@@ -419,6 +421,13 @@ PYTIME
   | ([ .gates[]? | select(.reason | test("^(until |held [0-9]+d)")) | . + {project: project_of(.id; null)} ]) as $deferred_rows
   | (if $has_table then [ $projects[] | {id, name} ]
      else ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | .project | select(. != null) ] | unique | map({id: ., name: .})) end) as $project_list
+  | (if $brain_id == null and any($decision_rows[]; .project == null) then
+       ($project_list | map(.id)) as $ids
+       | def available($id): if ($ids | index($id)) == null then $id else available($id + "-") end;
+         {id: available("sans-projet"), name: "Sans projet"}
+     else null end) as $fallback_project
+  | ($project_list + (if $fallback_project == null then [] else [$fallback_project] end)) as $project_list
+  | ($decision_rows | map(.project = (.project // $brain_id // $fallback_project.id))) as $decision_rows
   | ($quota.providers // [] | [ .[]
        | select(type == "object")
        | (.provider // "?") as $p
@@ -427,7 +436,8 @@ PYTIME
        | "\($p | (.[:1] | ascii_upcase) + .[1:]) \(100 - ($left | floor)) %" ]
      | if length == 0 then null else join(" · ") end) as $subscriptions
   | (if $costs.period == $now[:7] then ($costs.projects // {}) else {} end) as $cost_map
-  | ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | select(.project == null)
+  | ([ ($doing_rows + $landed_rows + $event_rows)[] | select(.project == null)
+       | select(.id as $id | any($decision_rows[]; .id == $id) | not)
        | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
      | unique_by(.id)) as $unassigned
   | [ $project_list[] | . as $proj

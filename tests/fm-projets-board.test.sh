@@ -191,7 +191,8 @@ test_compose_groups_rows_by_project_prefix_then_repo() {
     and ([.projects[] | select(.id == "club") | .missing_from_you[].key] == ["chef-domaine", "chef-rose"])
     and ([.projects[] | select(.id == "ydeep") | .missing_from_you[].key] == ["core-source-de-verite"])
     and ([.projects[] | select(.id == "solos") | (.doing + .missing_from_you + .journal) | length] == [0])
-    and ([.unassigned[].id] == ["sacem-relance"])
+    and (.unassigned == [])
+    and ([.projects[] | select(.id == "sans-projet") | .missing_from_you[].key] == ["sacem-relance"])
   ' >/dev/null || fail "rows were not grouped by id prefix first, then repo: $out"
   pass "compose groups every row by id prefix first, then by repo, splits scouts out, and keeps the rest as unassigned"
 }
@@ -201,7 +202,7 @@ test_compose_orders_the_rail_by_decisions_waiting_on_the_captain() {
   home=$(make_home rail)
   write_table "$home/config/projets.json"
   out=$(compose "$home") || fail "compose failed"
-  [ "$(printf '%s' "$out" | jq -r '[.projects[].id] | join(",")')" = "club,torre,ydeep,solos" ] \
+  [ "$(printf '%s' "$out" | jq -r '[.projects[].id] | join(",")')" = "club,sans-projet,torre,ydeep,solos" ] \
     || fail "the rail is not ordered by decisions waiting on the captain, then name: $out"
   printf '%s' "$out" | jq -e '
     .badges.workers == 3 and .badges.decisions == 6 and .badges.subscriptions == null
@@ -268,9 +269,10 @@ test_compose_without_a_table_uses_repos_and_says_so() {
   out=$(compose "$home") || fail "compose failed without a table"
   printf '%s' "$out" | jq -e '
     .table_missing == true
-    and ([.projects[].id] == ["agent-platform", "x-deep-core"])
+    and ([.projects[].id] == ["sans-projet", "agent-platform", "x-deep-core"])
     and (.projects[] | select(.id == "agent-platform") | (.missing_from_you | length) == 2)
-    and ([.unassigned[].id] == ["chef-rose", "sacem-relance"])
+    and (.unassigned == [])
+    and ([.projects[] | select(.id == "sans-projet") | .missing_from_you[].key] == ["chef-rose", "sacem-relance"])
   ' >/dev/null || fail "a missing table did not fall back to one project per repo: $out"
   pass "compose without a table groups by repo and marks the table missing"
 }
@@ -600,14 +602,14 @@ test_allowed_management_networks_and_refusals() {
     jq -n --arg url "$url" '{schema:"fm-projets-config.v1",projects:[{id:"torre",name:"Torre",prefixes:["torre-"],pages:[{label:"Revue",url:$url}]}]}' > "$home/config/projets.json"
     out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota) || fail "URL composition failed"
     printf '%s' "$out" > "$home/payload.json"
-    jq -e --arg url "$url" '.projects[0].pages[0].url == $url' "$home/payload.json" >/dev/null || fail "allowed URL rejected: $url"
+    jq -e --arg url "$url" '.projects[] | select(.id == "torre") | .pages[0].url == $url' "$home/payload.json" >/dev/null || fail "allowed URL rejected: $url"
     run_board "$home" render "$home/payload.json" >/dev/null || fail "allowed URL failed validation: $url"
   done
   for url in http://010.0.0.1/a http://0172.16.0.1/a http://public.example/a http://172.32.0.1/a http://192.169.1.1/a http://127.999.0.1/a http://a.ts.net.evil/a 'javascript:alert(1)' 'http://localhost@evil.test/a' 'http://localhost\@evil.test/a'; do
     jq -n --arg url "$url" '{schema:"fm-projets-config.v1",projects:[{id:"torre",name:"Torre",prefixes:["torre-"],pages:[{label:"Revue",url:$url}]}]}' > "$home/config/projets.json"
     out=$(run_board "$home" compose --snapshot "$home/snapshot.json" --no-quota) || fail "refused URL composition failed"
     printf '%s' "$out" > "$home/payload.json"
-    jq -e --arg url "$url" '.projects[0].pages[0] | .url == null and .url_refused == $url' "$home/payload.json" >/dev/null || fail "unsafe URL not disclosed: $url"
+    jq -e --arg url "$url" '.projects[] | select(.id == "torre") | .pages[0] | .url == null and .url_refused == $url' "$home/payload.json" >/dev/null || fail "unsafe URL not disclosed: $url"
     run_board "$home" render "$home/payload.json" >/dev/null || fail "refusal failed validation"
   done
   pass "allowed private networks navigate and rejected links stay explicit"
@@ -646,11 +648,12 @@ test_compose_brain_card_carries_unlinked_rows_articles_recommendations_and_quick
     (.unassigned == [])
     and (.projects[] | select(.id == "cerveau")
       | .brain == true
-      and (.unlinked | map(.id)) == ["sacem-relance"]
-      and (.missing_from_you | map(.key | sub("-[0-9a-f]{12}$"; ""))) == ["reco__adopter-gbrain-comme-index", "reco__indexer-les-rapports", "article__doctrine-de-d-pense-des-mod-les"]
-      and (.missing_from_you | map(.kind)) == ["recommandation", "recommandation", "article"]
-      and (.missing_from_you[1].question == "Indexer les rapports : ils dorment dans data")
-      and (.missing_from_you[2] | .question == "Article à valider : Doctrine de dépense des modèles" and .url == "https://example.test/article"
+      and .unlinked == []
+      and .missing_from_you[0].key == "sacem-relance"
+      and (.missing_from_you[1:] | map(.key | sub("-[0-9a-f]{12}$"; ""))) == ["reco__adopter-gbrain-comme-index", "reco__indexer-les-rapports", "article__doctrine-de-d-pense-des-mod-les"]
+      and (.missing_from_you[1:] | map(.kind)) == ["recommandation", "recommandation", "article"]
+      and (.missing_from_you[2].question == "Indexer les rapports : ils dorment dans data")
+      and (.missing_from_you[3] | .question == "Article à valider : Doctrine de dépense des modèles" and .url == "https://example.test/article"
            and (.options | map(.value)) == ["valide", "a-revoir", "plus-tard"])
       and .quick_wins == ["Relier les scouts au cerveau"]
       and (.pages | map(.label)) == ["Index du cerveau"]
@@ -734,16 +737,16 @@ test_recommendation_and_article_identities() {
     "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
   out=$(compose "$home") || fail "compose failed with colliding title prefixes"
   printf '%s' "$out" > "$home/payload.json"
-  printf '%s' "$out" | jq -e '.projects[] | select(.id == "cerveau") | .missing_from_you
+  printf '%s' "$out" | jq -e '.projects[] | select(.id == "cerveau") | [.missing_from_you[] | select(.kind != null)]
     | length == 4 and (map(.key) | unique | length) == 4
       and (map(.local_id) | unique | length) == 4
       and all(.[]; .key == .local_id and (.key | test("^(reco|article)__.+-[0-9a-f]{12}$")))' >/dev/null \
     || fail "full titles did not receive distinct answer identities: $out"
-  before=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[].key]')
+  before=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[] | select(.kind != null) | .key]')
   jq '(.projects[] | select(.id == "cerveau")) |= (.recommendations |= reverse | .articles |= reverse)' \
     "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
   out=$(compose "$home") || fail "compose failed after title reordering"
-  after=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[1,0,3,2].key]')
+  after=$(printf '%s' "$out" | jq -c '.projects[] | select(.id == "cerveau") | [.missing_from_you[2,1,4,3].key]')
   [ "$before" = "$after" ] || fail "title identity changed when entries moved"
   run_board "$home" render "$home/payload.json" >/dev/null || fail "distinct title identities did not render"
   cp "$home/.lavish/projets.html" "$home/before.html"
@@ -834,7 +837,7 @@ test_optional_text_preserves_entries() {
     "$home/config/projets.json" > "$home/config/projets.json.tmp" && mv "$home/config/projets.json.tmp" "$home/config/projets.json"
   out=$(compose "$home") || fail "compose failed with empty optional text"
   printf '%s' "$out" | jq -e '.projects[] | select(.id == "cerveau")
-    | [.missing_from_you[].question] == ["Indexer les rapports", "Relier les notes", "Classer les sources", "Lire les articles", "Préparer la revue", "Publier la synthèse : pour demain", "Article à valider : Doctrine"]
+    | [.missing_from_you[] | select(.kind != null) | .question] == ["Indexer les rapports", "Relier les notes", "Classer les sources", "Lire les articles", "Préparer la revue", "Publier la synthèse : pour demain", "Article à valider : Doctrine"]
       and [.creations[].label] == ["Rapport", "Notes", "Sources", "Articles", "Revue", "Synthèse"]
       and [.creations[].kind] == [null, null, null, null, null, "page"]' >/dev/null \
     || fail "optional text removed an entry or invalid primary text survived: $out"
@@ -843,3 +846,62 @@ test_optional_text_preserves_entries() {
   pass "empty or rejected optional text preserves entries while invalid primary text excludes them"
 }
 test_optional_text_preserves_entries
+
+
+test_unmatched_captain_calls_remain_actionable_on_both_pages() {
+  local home mode card page
+  for mode in brain no-brain collision; do
+    home=$(make_home "unmatched-$mode")
+    write_snapshot "$home/snapshot.json"
+    write_table "$home/config/projets.json"
+    jq '.projects |= map(.missing_from_others = [])' "$home/config/projets.json" > "$home/table.json"
+    card=sans-projet
+    if [ "$mode" = brain ]; then
+      jq '.projects += [{id:"cerveau",name:"Cerveau",brain:true}]' "$home/table.json" > "$home/config/projets.json"
+      card=cerveau
+    elif [ "$mode" = collision ]; then
+      jq '.projects += [{id:"sans-projet",name:"Projet existant"}]' "$home/table.json" > "$home/config/projets.json"
+      card=sans-projet-
+    else
+      cp "$home/table.json" "$home/config/projets.json"
+    fi
+    jq '.decisions_open |= map(select(.id == "sacem-relance") | .repo = "unknown-repo"
+          | .links = "http://localhost:4387/session/orphan" | .since = "2026-09-01")
+        | .in_flight += [{id:"sacem-relance",repo:"unknown-repo",state:"parked",title:"Relancer Sabine"},
+                         {id:"unplaced-work",repo:null,state:"working",title:"Travail sans rattachement"}]' \
+      "$home/snapshot.json" > "$home/unmatched.json"
+    run_board "$home" compose --snapshot "$home/unmatched.json" --no-quota > "$home/payload.json" || fail "unmatched composition failed"
+    jq -e --arg card "$card" '
+      .badges.decisions == 1
+      and ([.projects[].missing_from_you[]] | length) == 1
+      and (.projects[] | select(.id == $card) | .missing_from_you[0]
+           | .key == "sacem-relance" and .owner == "(main)" and .local_id == "sacem-relance"
+           and .question == "SACEM: relancer Sabine" and .nature == "decision"
+           and .ask == "on le fait, ou on ne le fait pas ?"
+           and (.options | map(.value)) == ["on-y-va","on-ne-le-fait-pas","pas-maintenant","on-en-parle"]
+           and .page.url == "http://localhost:4387/session/orphan" and .since == "2026-09-01"
+           and has("url"))
+      and ([.unassigned[], .projects[].unlinked[]] | map(.id)) == ["unplaced-work"]
+    ' "$home/payload.json" >/dev/null || fail "unmatched captain call lost its actionable shape ($mode)"
+    for page in projets a-valider; do
+      run_board "$home" render "$home/payload.json" --page "$page" >/dev/null || fail "unmatched render failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" \
+        "click=$card/sacem-relance/on-y-va" > "$home/rendered.json" || fail "unmatched renderer failed"
+      jq -e --arg card "$card" --arg page "$page" '
+        .error == "" and .calls == ["queuePrompt"]
+        and (.queued[0].data | .projet == $card and .decision == "sacem-relance" and .choix == "on-y-va")
+        and (.cards[] | select(.id == $card) | .blocs[] | select(.num == 2) | .decisions[0]
+             | .key == "sacem-relance" and (.choices | length) == 4
+             and .pageHref == "http://localhost:4387/session/orphan")
+        and (.badges[] | select(.kind == "decisions") | .value == "1")
+        and (if $page == "projets" then
+          (.rail | map(.id) | unique | length) == (.rail | length)
+          and (.rail[] | select(.id == $card) | .count == 1)
+          else true end)
+      ' "$home/rendered.json" >/dev/null || fail "unmatched captain call is not actionable ($mode, $page)"
+    done
+  done
+  pass "unmatched captain calls render and queue on both pages with or without a brain"
+}
+
+test_unmatched_captain_calls_remain_actionable_on_both_pages

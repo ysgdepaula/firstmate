@@ -1192,7 +1192,8 @@ test_a_captain_call_carries_its_recorded_links_and_date() {
 ## Queued
 - [ ] linked-call - Held call with a page (repo: firstmate) (kind: captain) (hold: answer on http://localhost:4387/session/abc) (hold-kind: captain)
   Captain hold set: 2026-07-09
-- [ ] status-call - Held call whose page is in its status (repo: firstmate) (kind: captain) (hold: six questions) (hold-kind: captain)
+- [ ] status-call - Held call whose page is in its status https://example.test/doc1 https://example.test/doc2 https://example.test/doc3 https://example.test/doc4 https://example.test/doc5 (repo: firstmate) (kind: captain) (hold: six questions) (hold-kind: captain)
+- [ ] clipped-call - Held call with a clipped URL (repo: firstmate) (kind: captain) (hold: http://localhost:4387/session/cut…) (hold-kind: captain)
 - [ ] bare-call - Held call with nothing on record (repo: firstmate) (kind: captain) (hold: choose) (hold-kind: captain)
 
 ## Done
@@ -1208,10 +1209,51 @@ EOF
     (.decisions_open[] | select(.id == "linked-call")
      | .links == "http://localhost:4387/session/abc" and .since == "2026-07-09")
     and (.decisions_open[] | select(.id == "status-call")
-         | .links == "http://ydeep.ts.net:4387/session/zed" and .since == null)
+         | (.links | split(" ")) == ["https://example.test/doc1", "https://example.test/doc2", "https://example.test/doc3", "https://example.test/doc4", "https://example.test/doc5", "http://ydeep.ts.net:4387/session/zed"] and .since == null)
     and (.decisions_open[] | select(.id == "bare-call") | .links == "" and .since == null)
+    and (.decisions_open[] | select(.id == "clipped-call") | .links == "")
   ' >/dev/null || fail "a held captain call did not carry the links and date it records: $json"
-  pass "a held captain call carries the URLs and the date already on its record"
+  printf '%s' "$json" > "$home/bearings.json"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "link composition failed"
+  jq -e '.projects[].missing_from_you[] | select(.key == "status-call")
+         | .page.url == "http://ydeep.ts.net:4387/session/zed"' "$home/page.json" >/dev/null || fail "sixth candidate did not survive page selection"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "link render failed"
+  node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json" || fail "link renderer failed"
+  jq -e '.cards[].blocs[].decisions[] | select(.key == "status-call")
+         | .pageHref == "http://ydeep.ts.net:4387/session/zed" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "sixth candidate is not offered as a review page"
+  pass "a held captain call carries its date and a review page after five documents"
+}
+
+test_secondmate_call_links_survive_summary_truncation() {
+  local home mate fakebin json padding bucket until
+  home=$(make_home mate-call-links)
+  write_fixture "$home"
+  mate=$(fixture_mate_home "$home")
+  fakebin=$(make_fakebin "$home")
+  padding=$(printf '%0140d' 0)
+  for bucket in live dated; do
+    until=""
+    [ "$bucket" != dated ] || until=" (hold-until: 2026-12-31)"
+    cat > "$mate/data/backlog.md" <<EOF
+## In flight
+
+## Queued
+- [ ] long-call - Choisir la suite (repo: firstmate) (kind: captain) (hold: $padding http://localhost:4387/session/complete-session-id) (hold-kind: captain)$until
+
+## Done
+EOF
+    json=$(run "$home" "$fakebin" --json --all-decisions) || fail "secondmate links projection failed"
+    jq -e --arg bucket "$bucket" '
+      .queued[] | select(.id == "long-call")
+      | .hold_bucket == $bucket and (.hold_reason | endswith("…"))
+        and .links == ["http://localhost:4387/session/complete-session-id"]
+    ' "$mate/state/home-summary.json" >/dev/null || fail "fixture did not exercise the truncated $bucket summary"
+    printf '%s' "$json" | jq -e '
+      .decisions_open[] | select(.id == "mate/long-call")
+      | .links == "http://localhost:4387/session/complete-session-id"
+    ' >/dev/null || fail "secondmate $bucket call lost or truncated its URL: $json"
+  done
+  pass "secondmate live and deferred holds preserve complete links before prose truncation"
 }
 
 test_undated_hold_phrasing_and_aging_projection() {
@@ -2960,6 +3002,12 @@ test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_co
   pass "a missing remote ledger stays explicitly unreadable without remote summary computation"
 }
 
+if [ "${1:-}" = --captain-links ]; then
+  test_a_captain_call_carries_its_recorded_links_and_date
+  test_secondmate_call_links_survive_summary_truncation
+  exit 0
+fi
+
 test_task_teardown_during_metadata_capture_does_not_abort_snapshot
 test_current_state_uses_captured_status_observation
 test_relaunched_task_does_not_inherit_reused_endpoint_state
@@ -3008,6 +3056,7 @@ test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
 test_a_captain_call_carries_its_recorded_links_and_date
+test_secondmate_call_links_survive_summary_truncation
 test_undated_hold_phrasing_and_aging_projection
 test_blocked_deferred_hold_has_concrete_disclosure
 test_revealed_deferred_holds_show_their_deferral_reason

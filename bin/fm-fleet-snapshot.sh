@@ -85,6 +85,7 @@
 #     reconcile_inventory independently of projection trust.
 #     Actionable captain holds appear in decisions_open; every captain hold remains
 #     in the bounded queued inventory with its structured classification metadata.
+#     Both surfaces preserve backlog URL candidates in links[] before prose truncation.
 #     Structured-home input must declare the current hold-classifier schema; an
 #     older live ledger or cached copy is invalid even when it contains no captain
 #     holds, and leaves the home explicitly unreadable until its producer refreshes it.
@@ -1006,7 +1007,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     | ([ $queued_all[]
          | select(.captain_actionable == true)
          | {id,repo,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
-            reason:(.hold_reason | trunc(160)),
+            reason:(.hold_reason | trunc(160)), links:(.links // []),
             hold_until:(.hold_until // null),
             hold_bucket:(.hold_bucket // null),
             hold_age_days:(.hold_age_days // null),source:"backlog"} ]) as $captain_holds_all
@@ -1117,6 +1118,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           unresolved_blocker_ids:((.unresolved_blocker_ids // []) | map(trunc(120))),
           blocked_reason:((.blocked_reason // null) | if . == null then null else trunc(160) end),
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
+          links:(.links // []),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
           hold_until:((.hold_until // null) | if . == null then null else trunc(40) end),
           hold_bucket:(.hold_bucket // null),

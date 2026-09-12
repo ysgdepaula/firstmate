@@ -397,8 +397,9 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
   def call_links($row_links; $status_text):
     [ ($row_links // [])[], (($status_text // "") | scan("https?://[^[:space:])\"<>]+")) ]
     | map(select(type == "string" and length > 0 and length <= 500))
+    | map(select(endswith("…") or endswith("...") | not))
     | reduce .[] as $u ([]; if index($u) == null then . + [$u] else . end)
-    | .[:5] | join(" ");
+    | join(" ");
   def hold_day:
     if type != "string" then null
     else ((capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")? // null) | if . == null then null else .d end)
@@ -523,7 +524,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
                  repo:(.repo // null),local_id:.id,
                  summary:hold_summary((.summary // .id);
                                       (.reason // "captain decision pending")),owner:$m.id,
-                 since:null, links:call_links([]; .reason)} ]
+                 since:null, links:call_links(.links; null)} ]
             + [ $m.queued[]?
                 | select($all_decisions == 1 and .hold_kind == "captain")
                 | select(.id as $id
@@ -535,7 +536,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
                    repo:(.repo // null),local_id:.id,
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),owner:$m.id,
-                   since:null, links:call_links([]; .hold_reason)} ])[] ]) as $decisions_all
+                   since:null, links:call_links(.links; null)} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]

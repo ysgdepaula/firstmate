@@ -308,7 +308,9 @@ __FM_PROJETS_BOARD_DATA__
   var unassigned = Array.isArray(data.unassigned) ? data.unassigned : [];
   var hasBrain = projects.some(function (p) { return p.brain === true; });
   if (unassigned.length && !hasBrain) {
-    projects.push({ id: "sans-projet", name: "Sans projet", synthetic: true, items: unassigned,
+    var unassignedId = "sans-projet";
+    while (projects.some(function (p) { return p.id === unassignedId; })) unassignedId += "-";
+    projects.push({ id: unassignedId, name: "Sans projet", synthetic: true, items: unassigned,
       doing: [], missing_from_you: [], missing_from_others: [], pages: [], journal: [], meeting: null, gaps: [],
       costs: null });
   }
