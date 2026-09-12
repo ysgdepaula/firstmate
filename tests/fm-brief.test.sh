@@ -323,6 +323,30 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
   pass "fm-brief.sh: faster paths use configured authority without stacked review"
 }
 
+# The worker owns the push only in direct-PR mode, so that is the only brief
+# that can hand it the machine-wide publication lock. A no-mistakes brief must
+# not, because the pipeline owns that push, and a local-only brief must not,
+# because nothing is pushed at all.
+test_direct_pr_brief_pushes_through_the_publication_lock() {
+  local home id brief
+  home="$TMP_ROOT/push-lock-home"
+  write_registry "$home"
+  id="brief-push-lock-a5"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "bin/fm-push-lock.sh -- git push -u origin fm/$id" "$brief" \
+    "direct-PR brief must hand the worker the machine-wide publication lock"
+  for id in brief-push-lock-nm-a5 brief-push-lock-lo-a5; do
+    case "$id" in
+      *-nm-*) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" nm-proj --mode no-mistakes >/dev/null 2>&1 ;;
+      *) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --mode local-only >/dev/null 2>&1 ;;
+    esac
+    assert_no_grep "fm-push-lock.sh" "$home/data/$id/brief.md" \
+      "only a direct-PR brief owns the push, so only it may carry the publication lock"
+  done
+  pass "fm-brief.sh: a direct-PR brief pushes through the machine-wide publication lock"
+}
+
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
@@ -877,6 +901,7 @@ test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
+test_direct_pr_brief_pushes_through_the_publication_lock
 test_no_mistakes_dod_wording
 test_ask_user_escalation_format
 test_ship_project_memory_wording

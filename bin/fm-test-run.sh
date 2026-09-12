@@ -37,16 +37,22 @@
 #                   drop scripts whose primary family matches <name> after selection
 #                   (repeatable; portable CI lanes exclude real-herdr-gated so the
 #                   dedicated required Herdr lane owns that coverage)
+#   --no-queue      run even while another suite run holds the machine's queue.
+#                   The queue exists because bounding one run's worker pool does
+#                   not bound the machine: four --changed runs at once each take
+#                   their own pool. Use this only when the two runs are known to
+#                   be small enough to share the machine.
 #   --fail-on-gate-skip <token>
 #                   after each script, fail the run if any output line contains
 #                   "skip: <token>" (e.g. --fail-on-gate-skip 'herdr not found').
 #                   The required Herdr CI lane uses this so a missing pin cannot
 #                   silently pass as a gate skip.
 #   --jobs N        run the selected scripts with up to N concurrent workers.
-#                   Plain --changed and a plain list of script paths use
-#                   min(4, cpus) workers when multiple selected scripts are
-#                   admissible; --lane, --family, and --all stay serial unless
-#                   asked for concurrency explicitly.
+#                   Plain --changed and a plain list of script paths use half
+#                   this machine's processors, never fewer than 2 and never
+#                   more than the recorded family proof ceiling, when multiple
+#                   selected scripts are admissible; --lane, --family, and
+#                   --all stay serial unless asked for concurrency explicitly.
 #                   N>1 is allowed only when every selected script is proven
 #                   safe to run concurrently: individually in the proven-isolated
 #                   set (bin/fm-test-isolation-proof.sh --list), or in a family
@@ -75,6 +81,44 @@
 #                   bounded by --per-script-timeout-secs. Pathological output
 #                   sinks that block finalization are explicitly out of scope.
 #   -h, --help      print this header
+#
+# Environment:
+#   FM_TEST_JOBS    operator ceiling on this run's concurrency, applied last and
+#                   in one direction: it lowers the resolved worker count,
+#                   including an explicit --jobs, and never raises it or makes a
+#                   serial selection concurrent. Export it to keep a machine
+#                   responsive while a suite runs; it can never admit an
+#                   unproven script to a concurrent phase, and it is dropped
+#                   before any test script runs, so exporting it cannot change
+#                   what the suite measures.
+#   FM_TEST_QUEUE_TIMEOUT_SECS
+#                   how long a queued run waits for the suite ahead of it before
+#                   refusing (default 3600). It refuses rather than running
+#                   beside that suite, because running beside it is the overload
+#                   the queue exists to prevent.
+#   FM_TEST_QUEUE_DIR
+#                   directory holding the run queue's lock; default
+#                   $XDG_STATE_HOME/firstmate (~/.local/state/firstmate), the
+#                   same place the other machine-wide firstmate records live.
+#
+# One complete suite run at a time on this machine. Machine-wide rather than
+# per-checkout or per-firstmate-home, because the overload this bounds was four
+# concurrent runs on one laptop, and the runs that caused it were validation-gate
+# runs in throwaway worktrees that declare no home at all - a per-home queue
+# would have let every one of them through. A run nested inside another - a test
+# that drives this runner - proceeds under its parent's hold instead of
+# deadlocking against it, and --no-queue opts a run out entirely.
+#
+# NOT COVERED, stated plainly because both bounds above are easy to read as
+# total. They account for the workers this runner schedules and the suite runs
+# it queues. A background process that outlives whatever launched it is outside
+# both: once a test detaches a worker, a daemon, or an agent that keeps running
+# after the script that started it returns, this runner no longer knows the
+# process exists and neither bound applies to it. So the ceiling is on what this
+# runner starts and waits for, not on everything a suite leaves running on the
+# machine, and a machine can still be loaded by survivors after every run here
+# has finished. Accounting for those survivors is a separate piece of work and
+# nothing in this file attempts it.
 #
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
@@ -141,6 +185,20 @@ FAIL_ON_GATE_SKIP=
 JOBS=1
 JOBS_EXPLICIT=0
 JOBS_MAX=8
+QUEUE=1
+# Ceiling on the AUTOMATIC worker count. It is the recorded family proof
+# ceiling, not a taste: concurrent_safe_family_jobs_max proves every admitted
+# family only up to 4 workers, so a computed default above it would schedule
+# concurrency nothing has measured. It also bounds the half-processor rule on a
+# large machine, where half the processors is a number no proof covers.
+AUTO_JOBS_MAX=4
+# How long a queued suite run waits for the one ahead of it. Generous on
+# purpose: the complete suite is tens of minutes, and the queue's job is to make
+# the second run wait rather than pile onto the machine.
+QUEUE_TIMEOUT_DEFAULT_SECS=3600
+# Where the machine-wide queue lock lives, alongside firstmate's other
+# machine-wide records (see FM_PROCEVENT_CLAIM_ROOT in docs/configuration.md).
+QUEUE_DIR_DEFAULT="${XDG_STATE_HOME:-$HOME/.local/state}/firstmate"
 MAX_WALL_MS=
 PER_SCRIPT_TIMEOUT_SECS=0
 # Bound applied automatically on the automatic --changed path, derived from
@@ -200,6 +258,20 @@ cpu_count() {
   esac
   [ "$n" -ge 1 ] || n=1
   printf '%s\n' "$n"
+}
+
+# Worker count the bounded automatic scheduler uses when the caller named no
+# --jobs: half this machine's processors, floored at 2 so a small machine still
+# overlaps two scripts, and capped at the recorded family proof ceiling. Half
+# rather than all, because a test worker is not one process: each one drives
+# fm-session-start, fm-bootstrap, fm-spawn and their children, so a pool sized
+# to the processor count leaves nothing for the machine the suite is running on.
+auto_default_jobs() {
+  local half
+  half=$(( $(cpu_count) / 2 ))
+  [ "$half" -ge 2 ] || half=2
+  [ "$half" -le "$AUTO_JOBS_MAX" ] || half=$AUTO_JOBS_MAX
+  printf '%s\n' "$half"
 }
 
 # Primary family for one tests/*.test.sh basename. Unmapped scripts are
@@ -1333,6 +1405,14 @@ families_for_changed_path() {
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge
       ;;
+    bin/fm-push-lock.sh)
+      # The machine-wide publication lock, sourced by both merge entry points
+      # (pr-forge) and handed to direct-PR workers by the brief scaffold, whose
+      # regression pins the exact command the brief prints.
+      printf '%s\n' pr-forge
+      printf '%s\n' "__script__:fm-push-lock.test.sh"
+      printf '%s\n' "__script__:fm-brief.test.sh"
+      ;;
     bin/fm-nm-run-lib.sh)
       # Shared no-mistakes run-attribution primitives, sourced by
       # bin/fm-crew-state.sh (pure-contract-unit), bin/fm-teardown.sh's
@@ -1715,6 +1795,10 @@ while [ "$#" -gt 0 ]; do
       PER_SCRIPT_TIMEOUT_SECS=${1#--per-script-timeout-secs=}
       shift
       ;;
+    --no-queue)
+      QUEUE=0
+      shift
+      ;;
     --list)
       LIST_ONLY=1
       shift
@@ -1965,10 +2049,24 @@ if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq
     script_allows_concurrency "$s" && auto_admissible=$((auto_admissible + 1))
   done
   if [ "$auto_admissible" -gt 1 ]; then
-    JOBS=$(cpu_count)
-    [ "$JOBS" -le 4 ] || JOBS=4
-    [ "$JOBS" -ge 1 ] || JOBS=1
+    JOBS=$(auto_default_jobs)
     [ "$JOBS" -eq 1 ] || AUTO_CONCURRENCY=1
+  fi
+fi
+
+# The operator's ceiling, applied last so it bounds both the computed default
+# and an explicit --jobs. One direction only: lowering can never admit an
+# unproven script to a concurrent phase and can never make a curated lane
+# refuse, which is what makes this safe to export in a shell.
+if [ -n "${FM_TEST_JOBS:-}" ]; then
+  case "$FM_TEST_JOBS" in
+    ''|*[!0-9]*) die "FM_TEST_JOBS must be a positive integer (got '$FM_TEST_JOBS')" ;;
+  esac
+  [ "$FM_TEST_JOBS" -ge 1 ] || die "FM_TEST_JOBS must be >= 1 (got '$FM_TEST_JOBS')"
+  if [ "$JOBS" -gt "$FM_TEST_JOBS" ]; then
+    log "FM_TEST_JOBS=$FM_TEST_JOBS lowers this run from $JOBS workers"
+    JOBS=$FM_TEST_JOBS
+    [ "$JOBS" -gt 1 ] || AUTO_CONCURRENCY=0
   fi
 fi
 if [ "$JOBS" -gt 1 ] || [ "$MODE" = changed ] || [ "$MODE" = scripts ]; then
@@ -2047,13 +2145,99 @@ declare -a WORKER_PIDS=()
 declare -a WORKER_IDX=()
 declare -a WORKER_SCRIPTS=()
 
+# Machine-wide run queue: one complete suite run at a time on this machine.
+# Bounding one run's worker pool does not bound the machine - the measured
+# overload was four --changed runs sharing one laptop, each with its own pool -
+# so the second run waits here instead of piling on. Machine-wide rather than
+# per-home: the runs that caused that overload were validation-gate runs in
+# throwaway worktrees, which declare no firstmate home at all.
+QUEUE_LOCK=
+QUEUE_HELD=0
+QUEUE_POLL_SECS=1
+
+acquire_run_queue() {
+  local lock dir deadline now holder announced=0 timeout
+  [ "$QUEUE" -eq 1 ] || return 0
+  timeout=${FM_TEST_QUEUE_TIMEOUT_SECS:-$QUEUE_TIMEOUT_DEFAULT_SECS}
+  case "$timeout" in
+    ''|*[!0-9]*|0) die "FM_TEST_QUEUE_TIMEOUT_SECS must be a positive integer (got '$timeout')" ;;
+  esac
+  [ -r "$ROOT/bin/fm-wake-lib.sh" ] \
+    || die "the run queue needs bin/fm-wake-lib.sh beside this runner; pass --no-queue to run without it"
+  # fm-wake-lib.sh owns the portable lock primitive; flock is absent on macOS.
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$ROOT/bin/fm-wake-lib.sh"
+  dir=${FM_TEST_QUEUE_DIR:-$QUEUE_DIR_DEFAULT}
+  mkdir -p "$dir" 2>/dev/null || die "cannot create the run queue directory $dir"
+  lock="$dir/test-run.lock"
+  # A run nested inside a run already holding this exact lock - a test that
+  # drives this runner - is already serialized by its parent's hold, so waiting
+  # on it would deadlock against ourselves.
+  if [ "${FM_TEST_RUN_QUEUE_HELD:-}" = "$lock" ]; then
+    return 0
+  fi
+  if ! fm_lock_try_acquire "$lock"; then
+    deadline=$(( $(date +%s) + timeout ))
+    while :; do
+      now=$(date +%s)
+      [ "$now" -lt "$deadline" ] || break
+      if [ "$announced" -eq 0 ]; then
+        holder=${FM_LOCK_HELD_PID:-unknown}
+        log "another suite run is already using this machine (pid $holder); waiting up to ${timeout}s for it to finish (--no-queue runs beside it)"
+        announced=1
+      fi
+      sleep "$QUEUE_POLL_SECS"
+      if fm_lock_try_acquire "$lock"; then
+        QUEUE_LOCK=$lock
+        QUEUE_HELD=1
+        FM_TEST_RUN_QUEUE_HELD=$lock
+        export FM_TEST_RUN_QUEUE_HELD
+        return 0
+      fi
+    done
+    holder=${FM_LOCK_HELD_PID:-unknown}
+    die "gave up after ${timeout}s waiting for the suite run queue (held by pid $holder); wait for that run, raise FM_TEST_QUEUE_TIMEOUT_SECS, or pass --no-queue"
+  fi
+  QUEUE_LOCK=$lock
+  QUEUE_HELD=1
+  FM_TEST_RUN_QUEUE_HELD=$lock
+  export FM_TEST_RUN_QUEUE_HELD
+}
+
+# Invoked indirectly by the EXIT trap below.
+# shellcheck disable=SC2329
+release_run_queue() {
+  [ "$QUEUE_HELD" -eq 1 ] || return 0
+  QUEUE_HELD=0
+  fm_lock_release "$QUEUE_LOCK"
+  FM_TEST_RUN_QUEUE_HELD=
+  export FM_TEST_RUN_QUEUE_HELD
+}
+
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
   rm -rf "$RUN_TMP"
+  release_run_queue
 }
 
 trap cleanup_run EXIT
+
+# Taken after the trap above, so an interrupted run always releases it, and
+# after every selection and argument refusal, so only a run that is going to
+# execute scripts ever queues.
+acquire_run_queue
+
+# Both operator knobs above are fully consumed by this point: the ceiling is
+# folded into JOBS, and the queue wait is over. Drop them here so they cannot
+# reach the test scripts this run is about to execute. A test that drives this
+# runner resolves its own worker count and its own queue wait, and an inherited
+# ceiling would silently lower them - an operator who exports FM_TEST_JOBS to
+# keep the machine usable, exactly as its documentation invites, would otherwise
+# turn the suite red with a run that never resolved the count it asserts.
+# FM_TEST_QUEUE_DIR deliberately stays: it names WHICH queue, so parent and
+# child must keep agreeing on it for the nested-hold check below to match.
+unset FM_TEST_JOBS FM_TEST_QUEUE_TIMEOUT_SECS 2>/dev/null || true
 
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"
 TOTAL=0

@@ -84,6 +84,9 @@ The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Tes
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
 
+Push through `bin/fm-push-lock.sh -- git push ...`.
+The [wrapper header](bin/fm-push-lock.sh) owns publication coverage and waiting behavior; only participating Firstmate paths serialize, so unwrapped pushes and other tools' pipeline pushes remain outside the guarantee.
+
 Check and test the toolbelt before pushing:
 
 ```sh
@@ -94,6 +97,8 @@ bin/fm-test-run.sh tests/<a>.test.sh tests/<b>.test.sh   # several subjects at o
 bin/fm-test-run.sh --family pure-contract-unit   # ordinary family-scoped local path (serial, timed)
 bin/fm-test-run.sh --changed   # normal changed-file-informed path with automatic bounded concurrency
 bin/fm-test-run.sh --changed --jobs 1   # explicit serial override
+FM_TEST_JOBS=2 bin/fm-test-run.sh --changed   # operator ceiling: keep the machine usable while the suite runs
+bin/fm-test-run.sh --changed --no-queue   # run beside another suite run on this machine instead of waiting for it
 bin/fm-test-run.sh --changed --max-wall-ms 300000   # same automatic path with a post-run five-minute result check
 bin/fm-test-run.sh --proven-isolated --jobs 4   # explicit local parallel of the individually proven set
 bin/fm-test-run.sh --lane portable-serial   # portable serial remainder (watcher/AFK/tmux/stateful)
@@ -113,6 +118,7 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 
 `bin/fm-test-run.sh` is the single owner of behavior-suite selection, portable CI lane composition, bounded concurrency admission, per-script timing markers, family totals, the coverage guard, and the optional JSON timing artifact.
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
+See the [runner header](bin/fm-test-run.sh) for worker ceilings, the shared run queue, and the explicit uncovered case: a background process that outlives its launcher can escape both bounds, and tracking survivors is separate work.
 `bin/fm-test-isolation-proof.sh` remains the single owner of the portable candidate proof and reusable family proof harness; see `docs/fm-test-isolation-proof.md`.
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
