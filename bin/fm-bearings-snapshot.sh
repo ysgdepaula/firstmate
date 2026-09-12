@@ -355,6 +355,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
   --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
   --argjson candidate_prs "$CANDIDATE_PRS" '
   include "fm-fleet-events";
+  include "fm-call-links";
   def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
   def fit($n):
@@ -395,11 +396,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
   # latest recorded status line of that same task. Candidates only, with no
   # policy about what they point at: each consumer decides which link it uses.
   def call_links($row_links; $status_text):
-    [ ($row_links // [])[], (($status_text // "") | scan("https?://[^[:space:])\"<>]+")) ]
-    | map(select(type == "string" and length > 0 and length <= 500))
-    | map(select(endswith("…") or endswith("...") | not))
-    | reduce .[] as $u ([]; if index($u) == null then . + [$u] else . end)
-    | join(" ");
+    call_link_candidates($row_links; $status_text) | join(" ");
   def hold_day:
     if type != "string" then null
     else ((capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")? // null) | if . == null then null else .d end)
@@ -524,7 +521,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
                  repo:(.repo // null),local_id:.id,
                  summary:hold_summary((.summary // .id);
                                       (.reason // "captain decision pending")),owner:$m.id,
-                 since:null, links:call_links(.links; null)} ]
+                 since:((.hold_set // .since) | hold_day), links:call_links(.links; null)} ]
             + [ $m.queued[]?
                 | select($all_decisions == 1 and .hold_kind == "captain")
                 | select(.id as $id
@@ -536,7 +533,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
                    repo:(.repo // null),local_id:.id,
                    summary:hold_summary((.title // .id);
                                         (.hold_reason // "captain decision pending")),owner:$m.id,
-                   since:null, links:call_links(.links; null)} ])[] ]) as $decisions_all
+                   since:((.hold_set // .since) | hold_day), links:call_links(.links; null)} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]

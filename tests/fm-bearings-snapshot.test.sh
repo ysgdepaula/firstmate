@@ -1256,6 +1256,100 @@ EOF
   pass "secondmate live and deferred holds preserve complete links before prose truncation"
 }
 
+test_secondmate_status_pages_and_dates_reach_the_board() {
+  local home mate fakebin id page
+  home=$(make_home mate-status-pages)
+  write_fixture "$home"
+  mate=$(fixture_mate_home "$home")
+  fakebin=$(make_fakebin "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] newer-main - Choisir la suite principale (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+  Captain hold set: 2026-07-08T09:00:00Z
+
+## Done
+EOF
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] older-live - Choisir la premiere revue https://example.test/document (repo: firstmate) (kind: captain) (since 2026-06-30) (hold: choisir) (hold-kind: captain)
+  Captain hold set: 2026-07-01T09:00:00Z
+- [ ] older-deferred - Choisir la seconde revue (repo: firstmate) (kind: captain) (since 2026-07-02) (hold: choisir) (hold-kind: captain) (hold-until: 2026-12-31)
+- [ ] clipped-status - Choisir sans page (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+
+## Done
+EOF
+  for id in older-live older-deferred clipped-status unrelated; do
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+      "worktree=$mate/projects/mate" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  done
+  python3 - "$mate/state" <<'PYFIX'
+from pathlib import Path
+import sys
+state = Path(sys.argv[1])
+(state / 'older-live.status').write_text(
+    'working: lecture\ndone: ' + 'contexte ' * 250 +
+    'https://example.test/document http://localhost:4387/session/older-live\n')
+(state / 'older-deferred.status').write_text(
+    'paused: revue http://localhost:4387/session/older-deferred\n')
+(state / 'clipped-status.status').write_text(
+    'done: http://localhost:4387/session/incomplete… '
+    'http://localhost:4387/session/incomplete... '
+    'http://localhost:4387/session/' + 'x' * 600 + '\n')
+(state / 'unrelated.status').write_text('done: http://localhost:4387/session/unrelated\n')
+PYFIX
+  run "$home" "$fakebin" --json --all-decisions > "$home/bearings.json" || fail "secondmate status projection failed"
+  jq -e '
+    (.decisions_open[] | select(.id == "older-live")
+      | .hold_set == "2026-07-01T09:00:00Z" and .since == "2026-06-30"
+        and .links == ["https://example.test/document", "http://localhost:4387/session/older-live"])
+    and (.queued[] | select(.id == "older-live")
+      | .hold_set == "2026-07-01T09:00:00Z" and .since == "2026-06-30"
+        and .links == ["https://example.test/document", "http://localhost:4387/session/older-live"])
+    and (.queued[] | select(.id == "older-deferred")
+      | .hold_bucket == "dated" and .hold_set == null and .since == "2026-07-02"
+        and .links == ["http://localhost:4387/session/older-deferred"])
+    and ([.decisions_open[].id] | index("older-deferred")) == null
+    and (.queued[] | select(.id == "clipped-status") | .links == [])
+    and (.decisions_open[] | select(.id == "clipped-status") | .links == [])
+  ' "$mate/state/home-summary.json" >/dev/null || fail "secondmate summary lost status candidates or hold clocks"
+  jq -e '
+    (.decisions_open[] | select(.id == "mate/older-live")
+      | .since == "2026-07-01" and (.links | contains("http://localhost:4387/session/older-live")))
+    and (.decisions_open[] | select(.id == "mate/older-deferred")
+      | .since == "2026-07-02" and .links == "http://localhost:4387/session/older-deferred")
+    and (.decisions_open[] | select(.id == "mate/clipped-status") | .since == null and .links == "")
+  ' "$home/bearings.json" >/dev/null || fail "secondmate status links or dates were lost in bearings"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "secondmate page composition failed"
+  jq -e '
+    (.projects[] | select(.id == "firstmate") | .missing_from_you) as $rows
+    | ($rows[] | select(.key == "mate__older-live")
+       | .page.url == "http://localhost:4387/session/older-live" and .since == "2026-07-01")
+    and ($rows[] | select(.key == "mate__older-deferred")
+       | .page.url == "http://localhost:4387/session/older-deferred" and .since == "2026-07-02")
+    and ($rows[] | select(.key == "mate__clipped-status") | .page == null)
+  ' "$home/page.json" >/dev/null || fail "secondmate status-only review pages were not composed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "secondmate page render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "secondmate page renderer failed"
+    jq -e --arg page "$page" '
+      .error == ""
+      and (.cards[] | select(.id == "firstmate") | .blocs[] | select(.num == 2) | .decisions
+        | (if $page == "a-valider" then map(.key) == ["mate__older-live", "mate__older-deferred", "newer-main", "mate__clipped-status"] else true end)
+          and (.[] | select(.key == "mate__older-live")
+               | .pageHref == "http://localhost:4387/session/older-live" and .page == "ouvrir la page")
+          and (.[] | select(.key == "mate__older-deferred")
+               | .pageHref == "http://localhost:4387/session/older-deferred" and .page == "ouvrir la page")
+          and (.[] | select(.key == "mate__clipped-status") | .pageHref == null))
+    ' "$home/rendered.json" >/dev/null || fail "secondmate review links or oldest-first order did not render ($page)"
+  done
+  pass "secondmate status-only review links render and older holds precede main-home calls"
+}
+
 test_undated_hold_phrasing_and_aging_projection() {
   local home mate fakebin json
   home=$(make_home undated-aging-proj)
@@ -3005,6 +3099,7 @@ test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_co
 if [ "${1:-}" = --captain-links ]; then
   test_a_captain_call_carries_its_recorded_links_and_date
   test_secondmate_call_links_survive_summary_truncation
+  test_secondmate_status_pages_and_dates_reach_the_board
   exit 0
 fi
 
@@ -3057,6 +3152,7 @@ test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
 test_a_captain_call_carries_its_recorded_links_and_date
 test_secondmate_call_links_survive_summary_truncation
+test_secondmate_status_pages_and_dates_reach_the_board
 test_undated_hold_phrasing_and_aging_projection
 test_blocked_deferred_hold_has_concrete_disclosure
 test_revealed_deferred_holds_show_their_deferral_reason
