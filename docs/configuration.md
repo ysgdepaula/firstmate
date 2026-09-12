@@ -532,8 +532,8 @@ A budget that is not a whole number from 1 to 120 is still refused outright.
 
 ## Projects page (config/projets.json, data/projets-couts.json, data/projets-agenda.json)
 
-`config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page.
-[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the brain card, or to the page's "sans projet" entry when no brain card is configured.
+`config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page and for the `/a-valider` page built from the same payload.
+[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`; its header owns project matching and the brain or "Sans projet" fallback, which keeps unmatched captain calls actionable on both pages.
 Without the table every repo becomes its own project and the page says the table is missing.
 Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP, Firstmate and the brain card Cerveau; an existing table is preserved unless `--force` is passed.
 All configured projects remain visible, including those without activity.
@@ -581,6 +581,10 @@ A decision entry's nonempty `options` replace the page's default buttons for tha
 Only this table can declare `etat`, because it is where firstmate records a reason to believe the captain may already have done the thing, and the page then always admits it cannot establish that state.
 `bin/fm-projets-board.sh`'s header owns those default buttons and the wording of that admission.
 The page counts entries with absent or empty options as a brain gap.
+A decision also shows its recorded review page and the day it was put to the captain; [`bin/fm-bearings-snapshot.sh`](../bin/fm-bearings-snapshot.sh)'s help owns the source fields and candidate precedence.
+The direct review link accepts HTTP or HTTPS on `127.0.0.1`, `::1`, `localhost`, or a `.ts.net` host, and on the Lavish port 4387 or the front-door port 4390; when no candidate qualifies, the page prints "pas de page dédiée".
+A home that moves its front door off 4390 keeps decision links for Lavish sessions and loses them for front-door pages.
+Give a decision its link by recording that link on the held task, never by hand-editing a payload.
 The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
 Missing `team` or `deadline` becomes a visible knowledge gap.
 Links accept HTTPS, or HTTP to localhost, 127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, the Tailscale range 100.64/10 and hosts ending in .ts.net.
@@ -632,17 +636,25 @@ A fresh empty reading says there are no upcoming meetings; an unavailable readin
 Bidirectional calendar synchronization is a following task, disclosed in block 7.
 These files are not inherited by secondmate homes.
 
+The `a-valider` page presents the pending decisions across projects; [`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh)'s header owns its render/build commands, ordering, and stable file path.
+It reads no fleet state of its own, takes the same validation and the same captain-vocabulary filter, and gets its own Lavish session and its own process-event source.
+On both pages a button only puts a prompt in the Lavish queue, which the captain sends himself; nothing acts from a page.
+To request one review page for several decisions, tick their checkboxes within a project and click "créer une page Lavish pour la sélection", then send the request from Lavish's Conversation panel.
+Changing a quick choice can leave its previous prompt in that queue; review and remove superseded entries before sending.
+The [projets skill](../.agents/skills/projets/SKILL.md#handling-a-page-wake) owns chat confirmation and handling of submitted choices and page requests.
+
 ## Stable page address (config/projets-serve.json)
 
 `config/projets-serve.json` is the optional local, gitignored table of the base's stable HTTP front door on the tailnet, served by [`bin/fm-projets-serve.py`](../bin/fm-projets-serve.py) and operated by [`bin/fm-projets-serve.sh`](../bin/fm-projets-serve.sh).
 The server binds every interface on one reserved port so the stable address is reachable by the MagicDNS name from the captain's machines.
-`/projets` redirects with HTTP 302 and `Cache-Control: no-store` to the existing, non-ended Lavish session whose file matches `$FM_HOME/.lavish/projets.html`, preserving the bridge that sends button responses to firstmate.
-Rebuilding that file in place keeps the same page path and Lavish session.
-If the session is absent or Lavish does not answer, the route serves the page with a prominent French warning and marks its buttons as unsent; the index also discloses this fallback.
+`/projets` and `/a-valider` redirect with HTTP 302 and `Cache-Control: no-store` to the existing, non-ended Lavish session whose file matches `$FM_HOME/.lavish/projets.html` or `$FM_HOME/.lavish/a-valider.html`, preserving the bridge that queues button responses for firstmate.
+Each route resolves its own session, so a session open on one page never redirects the other.
+Rebuilding either file in place keeps its page path and its Lavish session.
+If the session is absent or Lavish does not answer, the route serves the page with a prominent French warning and marks its buttons as unqueued; the index also discloses this fallback.
 Its index at `/` is the page the captain bookmarks: one line per thing reachable on the base, with its address and a state measured by a real request when the index is opened, never assumed.
 The page and folder measurements request their published routes through `127.0.0.1:<port>`, including following the page redirect; missing or unreadable content does not count as answering.
 The listing and at most eight concurrent HTTP probes share `FM_PROJETS_SERVE_INDEX_BUDGET` (default 3 seconds); rows still unmeasured at the deadline say « mesure inachevée », and the operator status request allows one extra second for the response.
-It lists the projets page, the Lavish reviews still open (from `lavish-axi`'s own listing), and the demos and shared folders declared in the table; declared folders are served read-only under `/fichiers/<id>/` and confined to their directory.
+It lists both pages, the Lavish reviews still open (from `lavish-axi`'s own listing), and the demos and shared folders declared in the table; declared folders are served read-only under `/fichiers/<id>/` and confined to their directory.
 This section is the single owner of the table schema; the script headers own the routes, the launchd mechanics and the operator commands.
 
 ```json
@@ -655,7 +667,8 @@ This section is the single owner of the table schema; the script headers own the
 }
 ```
 
-The reserved port is 4390 by default, beside Lavish on 4387; change it in the table before installing.
+The reserved port is 4390 by default, beside Lavish on 4387; change it in the table before installing, and note that "Projects page" above accepts only those two ports as a decision link.
+`bin/fm-projets-serve.sh url` prints the base index address and both page addresses.
 Use `bin/fm-projets-serve.sh install` for persistence at user login and restart after a crash; its header owns the private plist, LaunchAgents link, and installation, start, stop, status, URL and uninstall commands.
 The server reads this table at startup; restart the installed service with `bin/fm-projets-serve.sh start` after changing the host, port, demos or folders.
 The tailnet only covers the captain's own machines: the front door is never a client-facing surface, the index and the page say so, and client pages go through a paid subdomain in a separate piece of work.

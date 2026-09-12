@@ -85,6 +85,8 @@
 #     reconcile_inventory independently of projection trust.
 #     Actionable captain holds appear in decisions_open; every captain hold remains
 #     in the bounded queued inventory with its structured classification metadata.
+#     Both surfaces preserve hold_set, since, and backlog/status URL candidates
+#     in links[] before prose truncation.
 #     Structured-home input must declare the current hold-classifier schema; an
 #     older live ledger or cached copy is invalid even when it contains no captain
 #     holds, and leaves the home explicitly unreadable until its producer refreshes it.
@@ -478,7 +480,9 @@ backlog_json() {  # [<backlog-path>] [<archive: 0|1>]
              reported:metadata_word($rest; "reported"),
              done:metadata_word($rest; "done"),
              completion:completion($rest),
-             links:links($rest),
+             links:((if metadata($rest; "hold-kind") == "captain" then links(hold_metadata($rest) // "") else [] end)
+                    + links($rest)
+                    | reduce .[] as $url ([]; if index($url) == null then . + [$url] else . end)),
              pr_url:((links($rest) | map(select(test("/pull/[0-9]+"))) | .[0]) // null),
              report_path:cap($rest; ".*(?<v>data/[^[:space:])]+/report\\.md).*"),
              local_note:local_note($rest),
@@ -753,7 +757,7 @@ task_json_lines() {
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json status_links
 
   while [ "$index" -lt "$SNAPSHOT_TASK_META_COUNT" ]; do
     meta=${SNAPSHOT_TASK_METAS[index]}
@@ -799,6 +803,11 @@ task_json_lines() {
       return 1
     }
     event_json=$(status_event_json "$status_log" "$STATE/$id.status")
+    status_links='[]'
+    if [ -f "$status_log" ]; then
+      status_links=$(jq -L "$SCRIPT_DIR" -Rs 'include "fm-call-links"; call_link_candidates([]; .)' "$status_log") \
+        || return 1
+    fi
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     read -r current_state current_source < <(
       printf '%s' "$current_json" | jq -r '[.state // "", .source // ""] | @tsv'
@@ -888,12 +897,14 @@ task_json_lines() {
       --argjson worktree_path "$worktree_json" \
       --argjson home_path "$home_json" \
       --argjson endpoint_exists "$endpoint_exists" \
+      --argjson links "$status_links" \
       --argjson open_decisions "$open_decisions_json" \
       --argjson pending_decision "$(bool_json "$pending_decision")" \
       --argjson blocked_event "$(bool_json "$blocked_event")" \
       --argjson report_present "$(bool_json "$report_present")" \
       '{
         id:$id,
+        links:$links,
         kind:$kind,
         harness:($harness // ""),
         mode:($mode // ""),
@@ -988,9 +999,11 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
     --slurpfile backlog "$1" \
     --slurpfile tasks "$2" '
     include "fm-fleet-events";
+    include "fm-call-links";
     ($event_collection[0]) as $event_collection
    | ($backlog[0]) as $backlog
     | ($tasks[0]) as $tasks
+    | ($tasks | map({key:.id, value:(.links // [])}) | from_entries) as $status_by_id
     | def trunc($n):
       tostring | gsub("\\s+"; " ")
       | if length > $n then .[:$n] + "…" else . end;
@@ -1002,11 +1015,13 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
              (.hold_bucket != null or .state == "queued" or
               (.state == "in_flight" and .current_role == "held"
                and (.id as $id
-                    | any($tasks[]; .id == $id and .current_state.state == "working") | not)))) ]) as $queued_all
+                    | any($tasks[]; .id == $id and .current_state.state == "working") | not))))
+         | .links = call_link_candidates(($status_by_id[.id] // []) + (.links // []); null) ]) as $queued_all
     | ([ $queued_all[]
          | select(.captain_actionable == true)
          | {id,repo,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
-            reason:(.hold_reason | trunc(160)),
+            reason:(.hold_reason | trunc(160)), links:(.links // []),
+            hold_set:(.hold_set // null), since:(.since // null),
             hold_until:(.hold_until // null),
             hold_bucket:(.hold_bucket // null),
             hold_age_days:(.hold_age_days // null),source:"backlog"} ]) as $captain_holds_all
@@ -1117,6 +1132,8 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           unresolved_blocker_ids:((.unresolved_blocker_ids // []) | map(trunc(120))),
           blocked_reason:((.blocked_reason // null) | if . == null then null else trunc(160) end),
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
+          links:(.links // []),
+          hold_set:(.hold_set // null), since:(.since // null),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
           hold_until:((.hold_until // null) | if . == null then null else trunc(40) end),
           hold_bucket:(.hold_bucket // null),

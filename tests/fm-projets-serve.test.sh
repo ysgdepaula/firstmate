@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for the base's stable front door (bin/fm-projets-serve.py and
 # bin/fm-projets-serve.sh): the index measures every entry with a real request,
-# the projets page redirects to Lavish or warns that answers cannot be sent,
+# each page redirects to Lavish or warns that answers cannot be queued,
 # index probes share a deadline, shared GET streams and HEAD reports metadata,
 # and the launchd user agent is installed, started, stopped and removed through
 # the operator commands without touching the shared repository.
@@ -150,6 +150,44 @@ test_the_page_is_read_fresh_at_a_stable_address() {
   pass "the page is read fresh at every request behind one stable address"
 }
 
+# The second page the captain bookmarks lives beside the first, with its own
+# file and its own Lavish session, and is never confused with it.
+test_the_a_valider_page_has_its_own_stable_address() {
+  local home base code port
+  home=$(make_home valider)
+  port=$(start_dummy "$home" "$home/share")
+  printf '{"schema": "fm-projets-serve.v1", "port": 4390, "host": "base.test"}\n' > "$home/config/projets-serve.json"
+  base=$(start_front_door "$home")
+  code=$(curl -s -o /dev/null -w '%{http_code}' "${base}a-valider")
+  [ "$code" = 404 ] || fail "a missing a valider page did not answer 404: $code"
+  printf '<!doctype html><title>a valider</title>ce qui attend Yan\n' > "$home/.lavish/a-valider.html"
+  printf '<!doctype html><title>projets</title>la page projets\n' > "$home/.lavish/projets.html"
+  curl -s "${base}a-valider" | grep -q "ce qui attend Yan" || fail "the a valider page is not served"
+  curl -s "${base}projets" | grep -q "la page projets" || fail "the projects page stopped being served"
+  index_lines "$base" | grep -q "^répond | Ce qui attend ta réponse | ${base}a-valider" \
+    || fail "the index does not list the a valider page at its own address"
+  # a Lavish session on one page must never redirect the other
+  cat > "$home/fakebin/lavish-axi" <<EOF
+#!/bin/sh
+printf '%s\\n' 'sessions[1]{file,status,url,pending_prompts}:
+  $home/.lavish/a-valider.html,open,"http://127.0.0.1:$port/",0'
+EOF
+  python3 - "$base" "$port" <<'PYHTTP'
+import http.client, sys, urllib.parse
+base = urllib.parse.urlsplit(sys.argv[1])
+for path, expected in (("/a-valider", 302), ("/projets", 200)):
+    conn = http.client.HTTPConnection(base.hostname, base.port, timeout=5)
+    conn.request("GET", path)
+    response = conn.getresponse()
+    assert response.status == expected, (path, response.status)
+    if expected == 302:
+        assert response.getheader("Location") == "http://127.0.0.1:%s/" % sys.argv[2]
+    response.read()
+    conn.close()
+PYHTTP
+  pass "the a valider page is served at its own stable address with its own Lavish session"
+}
+
 test_folders_are_served_read_only_and_confined() {
   local home base code
   home=$(make_home folders)
@@ -197,11 +235,11 @@ assert response.getheader("Cache-Control") == "no-store"
 assert response.read() == b""
 conn.close()
 PYHTTP
-  curl -fsS "$base" | grep -q 'réponses transmises par Lavish' || fail "the index lost the session state"
+  curl -fsS "$base" | grep -q 'réponses mises en file par Lavish' || fail "the index lost the session state"
   printf '#!/bin/sh\nexit 1\n' > "$home/fakebin/lavish-axi"
   out=$(curl -fsS "${base}projets") || fail "the absent session did not fall back to the page"
-  assert_contains "$out" 'Ici les boutons ne transmettent rien' "the fallback warning is missing"
-  curl -fsS "$base" | grep -q 'boutons non transmis' || fail "the index did not disclose fallback"
+  assert_contains "$out" 'Ici les boutons ne mettent rien en file' "the fallback warning is missing"
+  curl -fsS "$base" | grep -q 'boutons sans file' || fail "the index did not disclose fallback"
   pass "the stable page redirects only to its active Lavish session and discloses unavailable delivery"
 }
 
@@ -316,7 +354,8 @@ SH
   }
   out=$(run url) || fail "url failed"
   assert_contains "$out" "base: http://base.test:4391/" "url does not print the configured base address: $out"
-  assert_contains "$out" "page: http://base.test:4391/projets" "url does not print the page address: $out"
+  assert_contains "$out" "projets: http://base.test:4391/projets" "url does not print the projects page address: $out"
+  assert_contains "$out" "a-valider: http://base.test:4391/a-valider" "url does not print the a valider page address: $out"
 
   out=$(run install) || fail "install failed: $out"
   label=co.firstmate.projets-serve
@@ -385,6 +424,7 @@ PY
 
 test_index_measures_every_entry_with_a_real_request
 test_the_page_is_read_fresh_at_a_stable_address
+test_the_a_valider_page_has_its_own_stable_address
 test_folders_are_served_read_only_and_confined
 test_launchd_agent_is_installed_started_stopped_and_removed
 test_lavish_redirect_and_fallback

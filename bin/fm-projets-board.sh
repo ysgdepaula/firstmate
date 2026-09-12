@@ -11,14 +11,20 @@
 # fm-projets-board.v1 JSON payload make the page; this script owns every
 # mechanic so the invoking agent's per-run work stays "compose, polish, build".
 #
+# The same payload also makes the SECOND page, `--page a-valider`: everything
+# waiting on the captain, every project at once, grouped by project in the rail
+# order and oldest first inside a project, with undated entries last and ties
+# retaining payload order. It reads no fleet state of its own; an empty result
+# with collection warnings or partial projects cannot confirm no calls remain.
+#
 # Usage:
 #   fm-projets-board.sh init [--force]
 #   fm-projets-board.sh compose [--snapshot <fm-bearings.v1.json>] [--config <projets.json>]
 #                               [--quota <quota-axi.json> | --no-quota] [--costs <couts.json>]
 #                               [--agenda <agenda.json>] [--now <iso8601>]
-#   fm-projets-board.sh render <payload.json>
-#   fm-projets-board.sh build <payload.json>
-#   fm-projets-board.sh path
+#   fm-projets-board.sh render [--page projets|a-valider] <payload.json>
+#   fm-projets-board.sh build [--page projets|a-valider] <payload.json>
+#   fm-projets-board.sh path [--page projets|a-valider]
 #
 # init       Copy the shipped seven-project seed (six projects plus the captain's
 #            brain card, flagged `brain: true`) to config/projets.json; preserve
@@ -32,7 +38,9 @@
 #            owned by docs/configuration.md "Projects page"), id prefix first,
 #            longest prefix wins, then repo. Without a table every repo becomes
 #            its own project and the page says the table is missing. Rows that
-#            match nothing land in the brain card's `unlinked`, or `unassigned`
+#            match nothing remain actionable on the brain card when held for the
+#            captain, or on a composed Sans projet card without a brain. Other
+#            unmatched rows land in the brain card's `unlinked`, or `unassigned`
 #            when no brain card is configured. Costs come from the optional measured file
 #            data/projets-couts.json (schema fm-projets-couts.v1) plus quota-axi's
 #            subscription windows; anything unmeasured stays null and the page
@@ -44,8 +52,11 @@
 #            it reaches the payload, and the composer translates each task state
 #            into plain French. The rail order is decided here: projects sort by
 #            how many decisions wait on the captain, most first, then by name.
-# render     Validate the payload and inject it into a fresh copy of the shipped
-#            template at the stable page path. No Lavish call, no registration:
+# render     Validate the payload and inject it, with the shared decision block
+#            (assets/decisions.js), into a fresh copy of the selected shipped
+#            template at that page's stable path. Both pages take the same
+#            payload and the same validation; `--page` only chooses which one is
+#            written. No Lavish call, no registration:
 #            this is what tests and screenshot captures use. Prints `board: <path>`,
 #            then `stable: <url>` when config/projets-serve.json exists, because
 #            bin/fm-projets-serve.sh serves that same file at a fixed tailnet
@@ -60,14 +71,15 @@
 #            Serve-first is the same ordering rule as bin/fm-bearings-board.sh: a
 #            registered poll can never race a session that does not exist.
 #            DELIBERATELY NO keyed-answer binding (bin/fm-captain-hold.sh bind):
-#            the captain decided that a page button SENDS the answer to firstmate,
-#            who asks the question again in chat before acting, and that nothing
-#            acts directly from the page. The template therefore queues plain
-#            Lavish prompts whose context data carries `projet`, `decision`,
-#            `choix`, and `nature` (never the `question`/`answer` pair the keyed
-#            intake reads), so even a bound source could not close a task from
-#            a click.
-# path       Print the stable page path for this home.
+#            the captain decided that nothing acts from the page and that he
+#            sends the queue himself. A click only QUEUES a plain Lavish prompt
+#            and stops there; firstmate asks the question again in chat before
+#            acting. Two tags come off these pages, `choice` for a closed choice
+#            on one call and `create-lavish` for a request to build one page for
+#            the selected calls. Choice context data carries `projet`, `decision`,
+#            `choix`, and `nature`; neither tag carries the `question`/`answer` pair
+#            the keyed intake reads, so even a bound source could close nothing.
+# path       Print the selected page's stable path for this home.
 #
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-projets-board.v1 and every renderer-consumed field must satisfy the
@@ -84,7 +96,14 @@
 #     scouts[]: same shape as doing, the investigations running for this project's brain,
 #     missing_from_you[]: {key:slug, owner, local_id, question, nature?:"decision"|"etat",
 #       ask?:string|null, options[]: {value:slug, label}, kind?:string,
-#       url:allowed|null, url_refused?:string} (kind "recommandation" or "article" marks a table-born entry),
+#       url:allowed|null, url_refused?:string,
+#       page?:null|{url:decision-page}, since?:null|YYYY-MM-DD}
+#       (kind "recommandation" or "article" marks a table-born entry; `page` is the
+#       review page the captain opens to decide, taken from the links the held
+#       call already records, and null when it records none so the page can say
+#       "pas de page dediee"; `since` is the day the call was put to him.
+#       Table-born entries take page from their configured URL and have no date;
+#       older payloads may omit both fields),
 #     creations[]: {label, kind:string|null, url:allowed|null, url_refused?:string},
 #     unlinked[]: {id, what} (brain card only: rows that match no project),
 #     quick_wins[]: string (brain card only),
@@ -129,12 +148,14 @@
 # fail-open); the composer drops such details and the validator refuses them.
 # "worker" is the captain's own word for a live helper and stays allowed.
 #
-# The page path is stable - $FM_HOME/.lavish/projets.html - so a rebuild keeps
+# Each page path is stable - $FM_HOME/.lavish/projets.html and
+# $FM_HOME/.lavish/a-valider.html - so a rebuild keeps
 # the same Lavish session URL and the same canonical process-event source id.
 # Injection escapes every `<` in the compact JSON as the \u003c string escape,
 # so a payload string containing "</script>" can never end the data block early.
 #
-# FM_PROJETS_BOARD_TEMPLATE overrides the shipped template path (tests only).
+# FM_PROJETS_BOARD_TEMPLATE and FM_PROJETS_VALIDER_TEMPLATE override the shipped
+# template paths (tests only).
 # FM_PROJETS_QUOTA_TIMEOUT bounds the quota-axi call in seconds (default 15).
 set -eu
 
@@ -147,8 +168,12 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
-TEMPLATE="${FM_PROJETS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/projets/assets/page-template.html}"
+ASSETS="$SCRIPT_DIR/../.agents/skills/projets/assets"
+TEMPLATE="${FM_PROJETS_BOARD_TEMPLATE:-$ASSETS/page-template.html}"
+VALIDER_TEMPLATE="${FM_PROJETS_VALIDER_TEMPLATE:-$ASSETS/valider-template.html}"
+DECISIONS_JS="$ASSETS/decisions.js"
 PLACEHOLDER='__FM_PROJETS_BOARD_DATA__'
+DECISIONS_SLOT='__FM_PROJETS_DECISIONS_JS__'
 BOARD_SCHEMA=fm-projets-board.v1
 CONFIG_SCHEMA=fm-projets-config.v1
 COSTS_SCHEMA=fm-projets-couts.v1
@@ -168,7 +193,43 @@ fail() {
   exit 1
 }
 
-board_path() { printf '%s/.lavish/projets.html\n' "$FM_HOME"; }
+# The two pages this payload makes, each at its own stable path so a rebuild
+# keeps its Lavish session and its process-event source id.
+page_file() {  # <page>
+  case "$1" in
+    projets) printf '%s/.lavish/projets.html\n' "$FM_HOME" ;;
+    a-valider) printf '%s/.lavish/a-valider.html\n' "$FM_HOME" ;;
+    *) fail "unknown page: $1 (projets, a-valider)" ;;
+  esac
+}
+
+page_template() {  # <page>
+  case "$1" in
+    projets) printf '%s\n' "$TEMPLATE" ;;
+    a-valider) printf '%s\n' "$VALIDER_TEMPLATE" ;;
+    *) fail "unknown page: $1 (projets, a-valider)" ;;
+  esac
+}
+
+# --page <name>, shared by render, build and path. Sets PAGE_NAME and leaves
+# every other argument in PAGE_ARGS; it must run in the caller's own shell.
+PAGE_NAME=projets
+PAGE_ARGS=()
+parse_page() {  # <args...>
+  PAGE_NAME=projets
+  PAGE_ARGS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --page) shift; PAGE_NAME=${1:?--page needs a page name} ;;
+      *) PAGE_ARGS+=("$1") ;;
+    esac
+    shift
+  done
+  case "$PAGE_NAME" in
+    projets|a-valider) : ;;
+    *) fail "unknown page: $PAGE_NAME (projets, a-valider)" ;;
+  esac
+}
 
 # One owner for the vocabulary rule: the composer filters with it, the
 # validator refuses with it. Word-bounded, case-insensitive.
@@ -300,6 +361,8 @@ PYTIME
   def clean: tostring | gsub("\\s+"; " ") | gsub("^ | $"; "");
   def trunc($n): clean | if length > $n then .[:($n - 1)] + "…" else . end;
   def safe: test($internal_re) | not;
+  def fr_date: if type != "string" then null
+    else ((capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})$")? // null) | if . == null then null else .d end) end;
   def fr_day: if . == null then null else
     ((capture("^(?<y>[0-9]{4})-(?<m>[0-9]{2})-(?<d>[0-9]{2})")? // null) | if . == null then null else "\(.d)/\(.m)" end) end;
   def local_id: split("/") | last;
@@ -362,6 +425,13 @@ PYTIME
   | ([ .gates[]? | select(.reason | test("^(until |held [0-9]+d)")) | . + {project: project_of(.id; null)} ]) as $deferred_rows
   | (if $has_table then [ $projects[] | {id, name} ]
      else ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | .project | select(. != null) ] | unique | map({id: ., name: .})) end) as $project_list
+  | (if $brain_id == null and any($decision_rows[]; .project == null) then
+       ($project_list | map(.id)) as $ids
+       | def available($id): if ($ids | index($id)) == null then $id else available($id + "-") end;
+         {id: available("sans-projet"), name: "Sans projet"}
+     else null end) as $fallback_project
+  | ($project_list + (if $fallback_project == null then [] else [$fallback_project] end)) as $project_list
+  | ($decision_rows | map(.project = (.project // $brain_id // $fallback_project.id))) as $decision_rows
   | ($quota.providers // [] | [ .[]
        | select(type == "object")
        | (.provider // "?") as $p
@@ -370,7 +440,8 @@ PYTIME
        | "\($p | (.[:1] | ascii_upcase) + .[1:]) \(100 - ($left | floor)) %" ]
      | if length == 0 then null else join(" · ") end) as $subscriptions
   | (if $costs.period == $now[:7] then ($costs.projects // {}) else {} end) as $cost_map
-  | ([ ($doing_rows + $decision_rows + $landed_rows + $event_rows)[] | select(.project == null)
+  | ([ ($doing_rows + $landed_rows + $event_rows)[] | select(.project == null)
+       | select(.id as $id | any($decision_rows[]; .id == $id) | not)
        | {id, what: ((.title // .summary // .what // .id) | clean | if safe then trunc(110) else "élément sans projet" end)} ]
      | unique_by(.id)) as $unassigned
   | [ $project_list[] | . as $proj
@@ -423,6 +494,12 @@ PYTIME
                            {value: "pas-maintenant", label: "pas maintenant"},
                            {value: "on-en-parle", label: "on en parle"}] end),
               url: null,
+              # The page the captain opens to decide, when the held call already
+              # records one. Pressing a choice without having been able to look
+              # is exactly what he asked never to happen again, so a call with no
+              # page keeps null and the page names the gap.
+              page: (($d.links // "") | if type == "array" then . else tostring | split(" ") end | project_page),
+              since: (($d.since // null) | fr_date),
               configured: $closed} + ($d | identity) + (($dc.url // $d.url // $pr_by_id[$d.id]) | project_link) ]) as $decisions_you
       # Recommendations are what firstmate proposes and the captain has not ruled
       # on yet: they wait on him exactly like a decision, as closed choices.
@@ -435,6 +512,7 @@ PYTIME
               question: (($w + (if $why != null then " : " + $why else "" end)) | trunc(200)),
               nature: "decision", ask: null,
               options: [{value: "on-y-va", label: "on y va"}, {value: "pas-maintenant", label: "pas maintenant"}, {value: "on-en-parle", label: "on en parle"}],
+              page: ([ (if ($rc | type) == "object" then ($rc.url // null) else null end) ] | project_page), since: null,
               kind: "recommandation", configured: true}
              + ((if ($rc | type) == "object" then ($rc.url // null) else null end) | project_link) ]) as $recommendations
       | (if $is_brain then
@@ -446,6 +524,7 @@ PYTIME
                 question: (("Article à valider : " + $t) | trunc(200)),
                 nature: "decision", ask: null,
                 options: [{value: "valide", label: "validé"}, {value: "a-revoir", label: "à revoir"}, {value: "plus-tard", label: "plus tard"}],
+                page: ([ (if ($ar | type) == "object" then ($ar.url // null) else null end) ] | project_page), since: null,
                 kind: "article", configured: true}
                + ((if ($ar | type) == "object" then ($ar.url // null) else null end) | project_link) ]
          else [] end) as $articles
@@ -531,6 +610,10 @@ validate_payload() {  # <data.json>
       and (.status | captain_string) and (has("next") and (.next == null or (.next | captain_string)))
       and link_item;
     def option_item: type == "object" and (.value | slug(128)) and (.label | captain_string);
+    # A decision page is narrower than an ordinary link: only a review page this
+    # home serves can be offered as "ouvrir la page".
+    def decision_page: . == null
+      or (type == "object" and (keys == ["url"]) and (.url | project_page_url));
     def you_item: type == "object" and (.key | slug(128)) and (.question | captain_string)
       and (.options | type == "array" and length > 0 and all(.[]; option_item))
       and optional_captain("kind")
@@ -540,6 +623,9 @@ validate_payload() {  # <data.json>
       # rendered as a question of unstated nature.
       and ((has("nature") | not) or .nature == "decision"
            or (.nature == "etat" and (.ask | captain_string)))
+      and ((has("page") | not) or (.page | decision_page))
+      and ((has("since") | not) or (.since == null
+           or (.since | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))))
       and link_item;
     def creation_item: type == "object" and (.label | captain_string) and optional_captain("kind") and link_item;
     def unlinked_item: type == "object" and (.id | nonempty_string) and (.what | captain_string);
@@ -601,8 +687,8 @@ explain_refusal() {  # <data.json> - best-effort pointer at the first offending 
   ' "$1" 2>/dev/null || true
 }
 
-render_page() {  # <data.json> -> prints board: <path>
-  local data=$1 board json tmp extracted why
+render_page() {  # <page> <data.json> -> prints board: <path>
+  local page=$1 data=$2 board template json tmp extracted why
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "page data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "page data is not valid JSON: $data"
@@ -610,21 +696,35 @@ render_page() {  # <data.json> -> prints board: <path>
     why=$(explain_refusal "$data")
     fail "page data does not satisfy $BOARD_SCHEMA: $data${why:+ ($why)}"
   fi
-  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "page template is missing: $TEMPLATE"
-  [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
-    || fail "page template does not carry exactly one data slot: $TEMPLATE"
+  template=$(page_template "$page")
+  [ -f "$template" ] && [ ! -L "$template" ] || fail "page template is missing: $template"
+  [ "$(grep -cxF "$PLACEHOLDER" "$template")" -eq 1 ] \
+    || fail "page template does not carry exactly one data slot: $template"
+  [ "$(grep -cxF "$DECISIONS_SLOT" "$template")" -eq 1 ] \
+    || fail "page template does not carry exactly one decision-block slot: $template"
+  [ -f "$DECISIONS_JS" ] && [ ! -L "$DECISIONS_JS" ] \
+    || fail "the shared decision block is missing: $DECISIONS_JS"
 
   json=$(jq -c . "$data") || fail "cannot compact the page data"
   json=${json//</\\u003c}
 
-  board=$(board_path)
+  board=$(page_file "$page")
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
   tmp=$(umask 077; mktemp "${board%/*}/.projets.XXXXXX") || fail "cannot stage the page"
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+  # Both pages take the same JSON payload and the same decision block, so a
+  # click means the same thing on each of them.
+  if ! BOARD_JSON="$json" DECISIONS_FILE="$DECISIONS_JS" \
+       DECISIONS_SLOT="$DECISIONS_SLOT" BOARD_SLOT="$PLACEHOLDER" perl -pe '
+      if ($_ eq "$ENV{DECISIONS_SLOT}\n") {
+        open(my $fh, "<", $ENV{DECISIONS_FILE}) or die "decision block unreadable";
+        local $/; $_ = <$fh>; close $fh;
+      } else {
+        s/^\Q$ENV{BOARD_SLOT}\E$/$ENV{BOARD_JSON}/;
+      }' "$template" > "$tmp"; then
     rm -f -- "$tmp"
     fail "cannot inject the page data"
   fi
-  if grep -qxF "$PLACEHOLDER" "$tmp"; then
+  if grep -qxF "$PLACEHOLDER" "$tmp" || grep -qxF "$DECISIONS_SLOT" "$tmp"; then
     rm -f -- "$tmp"
     fail "the page data slot survived injection"
   fi
@@ -639,24 +739,29 @@ render_page() {  # <data.json> -> prints board: <path>
     fail "cannot publish the page"
   fi
   printf 'board: %s\n' "$board"
-  # The front door (bin/fm-projets-serve.sh) serves this file at a stable
+  # The front door (bin/fm-projets-serve.sh) serves each page at a stable
   # tailnet address; say it whenever its table exists so the captain never
   # has to look for a session id.
   if [ -f "$CONFIG/projets-serve.json" ]; then
-    printf 'stable: %s\n' "$("$SCRIPT_DIR/fm-projets-serve.sh" url | awk '/^page:/ { print $2 }')"
+    printf 'stable: %s\n' \
+      "$("$SCRIPT_DIR/fm-projets-serve.sh" url | awk -v page="$page:" '$1 == page { print $2 }')"
   fi
 }
 
 command_render() {
+  parse_page "$@"
+  set -- ${PAGE_ARGS+"${PAGE_ARGS[@]}"}
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
-  render_page "$1"
+  render_page "$PAGE_NAME" "$1"
 }
 
 command_build() {
   local board sid
+  parse_page "$@"
+  set -- ${PAGE_ARGS+"${PAGE_ARGS[@]}"}
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
-  render_page "$1"
-  board=$(board_path)
+  render_page "$PAGE_NAME" "$1"
+  board=$(page_file "$PAGE_NAME")
 
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
   lavish-axi "$board" || fail "cannot establish the page Lavish session"
@@ -692,12 +797,18 @@ command_init() {
   printf 'initialized: %s\n' "$target"
 }
 
+command_path() {
+  parse_page "$@"
+  [ "${#PAGE_ARGS[@]}" -eq 0 ] || { usage >&2; exit 2; }
+  page_file "$PAGE_NAME"
+}
+
 case "${1-}" in
   init) shift; command_init "$@" ;;
   compose) shift; command_compose "$@" ;;
   render) shift; command_render "$@" ;;
   build) shift; command_build "$@" ;;
-  path) board_path ;;
+  path) shift; command_path "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

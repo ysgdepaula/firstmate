@@ -1032,7 +1032,7 @@ EOF
   mkdir -p "$home/at-close"
   cat > "$home/fakebin/tasks-axi" <<'EOF'
 #!/usr/bin/env bash
-if [ "${1:-}" = done ] && [ "${2:-}" = sample-interrupted-call ] \
+if [ "${1:-}" = "done" ] && [ "${2:-}" = sample-interrupted-call ] \
   && [ ! -e "$FM_HOME/close-failed-once" ]; then
   cp "$FM_HOME/data/backlog.md" "$FM_HOME/at-close/backlog.md" || exit 93
   : > "$FM_HOME/close-failed-once"
@@ -1041,7 +1041,7 @@ fi
 if [ "${1:-}" = update ] && [ "${2:-}" = sample-interrupted-call ] \
   && [ ! -e "$FM_HOME/normalize-failed-once" ]; then
   state=$("$REAL_TASKS_AXI" show "$2" --full | sed -n 's/^  state: //p' | head -1)
-  if [ "$state" = done ]; then
+  if [ "$state" = "done" ]; then
     : > "$FM_HOME/normalize-failed-once"
     exit 94
   fi
@@ -2944,6 +2944,417 @@ EOF
   pass "a purged pre-collapse call passes on the status close recorded under its composed key"
 }
 
+test_completion_preserves_review_pages_after_status_cleanup() {
+  local home id show before after page
+  home=$(make_home completion-pages)
+  id=sample-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold sample-page-call --title "Choisir la suite" --reason "choisir" --repo sample --origin "$id" --until 2026-12-31 >/dev/null || fail "could not hold review"
+  before=$(tasks_in "$home" show sample-page-call --full)
+  printf 'needs-decision [key=route]: choisir la suite\n' > "$home/state/$id.status"
+  # Backticks are literal fixture content for the delimiter-trimming test.
+  # shellcheck disable=SC2016
+  printf 'paused: voir `http://localhost:4387/session/durable`.\n' > "$home/state/sample-page-call.status"
+  run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion did not retain page"
+  assert_grep 'captain-held [key=route]: tracked by sample-page-call' "$home/state/$id.status" "completion did not record its transfer"
+  show=$(tasks_in "$home" show sample-page-call --full)
+  assert_contains "$show" "http://localhost:4387/session/durable" "held task lost its review page"
+  run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion retry failed"
+  after=$(tasks_in "$home" show sample-page-call --full)
+  [ "$show" = "$after" ] || fail "completion retry changed the held task"
+  assert_contains "$after" '2026-12-31' "completion lost the hold date"
+  [ "$(printf '%s\n' "$before" | sed -n '/Captain hold set:/p')" = "$(printf '%s\n' "$after" | sed -n '/Captain hold set:/p')" ] || fail "completion changed the hold timestamp"
+  rm "$home/state/$id.status" "$home/state/$id.meta" "$home/state/sample-page-call.status"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "post-cleanup projection failed"
+  jq -e '.decisions_open[] | select(.id == "sample-page-call") | .links == "http://localhost:4387/session/durable"' "$home/snapshot.json" >/dev/null || fail "durable backlog links lost the page after cleanup"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "post-cleanup composition failed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "post-cleanup rendering failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "sample-page-call")
+      | .pageHref == "http://localhost:4387/session/durable" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "page link vanished after cleanup ($page)"
+  done
+  pass "completion retains review URLs in the held task across retries and status cleanup"
+}
+
+test_completion_keeps_control_before_metadata() {
+  local home id
+  home=$(make_home completion-locks)
+  id=sample-locks
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la suite" --reason choisir --repo sample >/dev/null || fail "could not hold origin"
+  run_captain "$home" hold retained-call --title "Autre choix" --reason choisir --repo sample >/dev/null || fail "could not hold retained call"
+  printf 'paused: http://localhost:4387/session/locks\nneeds-decision [key=route]: choisir\n' > "$home/state/$id.status"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = hold ] && [ "${2:-}" = --help ]; then
+  touch "$FM_HOME/completion-ready"
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  cat > "$home/cleanup-locks.sh" <<'SH'
+#!/usr/bin/env bash
+set -e
+. "$1/bin/fm-wake-lib.sh"
+control="$FM_HOME/state/.control-$2.lock"
+meta="$FM_HOME/state/$2.meta"
+meta_lock=$(fm_meta_lock_path "$meta")
+fm_lock_acquire_wait "$control"
+trap 'fm_lock_release "$meta_lock"; fm_lock_release "$control"' EXIT
+printf 'ready\n'
+read -r _
+fm_lock_acquire_wait_bounded "$meta_lock" 3
+printf 'decision_keys=retained-call\n' >> "$meta"
+SH
+  python3 - "$ROOT" "$home" "$id" "$TASKS_AXI_BIN" <<'PYLOCK' || fail "completion and cleanup did not obey the shared lock order"
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+root, home, task, tasks = sys.argv[1:]
+env = dict(os.environ, FM_HOME=home, FM_STATE_OVERRIDE=home + '/state',
+           FM_DATA_OVERRIDE=home + '/data', FM_CONFIG_OVERRIDE=home + '/config',
+           HOME=home, REAL_TASKS_AXI=tasks, PATH=home + '/fakebin:' + os.environ['PATH'])
+processes = []
+try:
+    cleanup = subprocess.Popen(['bash', home + '/cleanup-locks.sh', root, task], env=env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    processes.append(cleanup)
+    assert cleanup.stdout.readline().strip() == 'ready'
+    complete = subprocess.Popen([root + '/bin/fm-captain-hold.sh', 'complete', task, task],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+    processes.append(complete)
+    deadline = time.monotonic() + 10
+    while not Path(home, 'completion-ready').exists():
+        assert complete.poll() is None and time.monotonic() < deadline, 'completion never reached inventory validation'
+        time.sleep(.02)
+    cleanup.stdin.write('continue\n')
+    cleanup.stdin.flush()
+    _, errors = cleanup.communicate(timeout=8)
+    assert cleanup.returncode == 0, 'cleanup could not acquire metadata while completion waited for control: ' + errors
+    _, errors = complete.communicate(timeout=15)
+    assert complete.returncode == 0, 'completion failed after concurrent metadata update: ' + errors
+finally:
+    for process in processes:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+PYLOCK
+  run_captain "$home" verify "$id" >/dev/null || fail "concurrent completion inventory is not valid"
+  assert_grep 'decision_keys=retained-call,sample-locks' "$home/state/$id.meta" "completion lost the inventory written while waiting"
+  pass "completion permits control-then-metadata cleanup and rereads concurrent inventory"
+}
+
+test_ipv6_review_pages_survive_extraction_and_completion() {
+  local home id phase
+  home=$(make_home ipv6-pages)
+  id=ipv6-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold IPv6 review"
+  cat > "$home/state/$id.status" <<'EOF'
+paused: [revue](http://[::1]:4387/session/abc), `http://[::1]:4387/session/abc`.
+needs-decision [key=route]: choisir
+EOF
+  for phase in status durable; do
+    if [ "$phase" = durable ]; then
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "IPv6 page completion failed"
+      rm "$home/state/$id.status"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "IPv6 snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "ipv6-review") | .links == "http://[::1]:4387/session/abc"' "$home/snapshot.json" >/dev/null || fail "IPv6 authority brackets were lost ($phase)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "IPv6 composition failed"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "IPv6 render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "ipv6-review") | .pageHref == "http://[::1]:4387/session/abc"' "$home/rendered.json" >/dev/null || fail "IPv6 page link is absent ($phase)"
+  done
+  pass "IPv6 review URLs retain authority brackets in snapshots and durable completion"
+}
+
+test_newest_status_page_precedes_older_fallbacks() {
+  local home id phase
+  home=$(make_home newest-pages)
+  id=newest-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold versioned review"
+  cat > "$home/state/$id.status" <<'EOF'
+paused: http://localhost:4387/session/draft
+done: http://localhost:4387/session/final
+needs-decision [key=route]: choisir
+EOF
+  for phase in status durable; do
+    if [ "$phase" = durable ]; then
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "versioned page completion failed"
+      rm "$home/state/$id.status"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "versioned snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "newest-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "status page priority was reversed ($phase)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "versioned composition failed"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "versioned render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "newest-review") | .pageHref == "http://localhost:4387/session/final"' "$home/rendered.json" >/dev/null || fail "older draft outranked final review ($phase)"
+  done
+  pass "newest status page wins while older URLs survive as completion fallbacks"
+}
+
+test_repeated_completion_promotes_latest_page() {
+  local home id version expected page
+  home=$(make_home repeated-pages)
+  id=repeated-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold repeated review"
+  for version in draft final draft final cleaned; do
+    if [ "$version" = cleaned ]; then
+      rm "$home/state/$id.status"
+    else
+      printf 'done: http://localhost:4387/session/%s\n' "$version" >> "$home/state/$id.status"
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "repeated completion failed ($version)"
+      expected="http://localhost:4387/session/$version"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "repeated snapshot failed"
+    jq -e --arg expected "$expected" '.decisions_open[] | select(.id == "repeated-review") | (.links | split(" "))[0] == $expected' "$home/snapshot.json" >/dev/null || fail "completion did not promote latest page ($version)"
+    if [ "$version" = final ] || [ "$version" = cleaned ]; then
+      jq -e '.decisions_open[] | select(.id == "repeated-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "completion lost older page fallback ($version)"
+    fi
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "repeated composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "repeated rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e --arg expected "$expected" '.cards[].blocs[].decisions[] | select(.key == "repeated-review")
+        | .pageHref == $expected and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "page opened superseded review ($page, $version)"
+    done
+  done
+  pass "repeated completion promotes new and previously stored pages through status cleanup"
+}
+
+test_completion_preserves_hold_title_identity() {
+  local home id version title page before after
+  for title in 'Choisir la suite' 'Choisir la suite http://localhost:4387/session/draft'; do
+    home=$(make_home "title-retry-${#title}")
+    id="title-review"
+    write_origin_meta "$home" "$id"
+    run_captain "$home" hold "$id" --title "$title" --reason choisir --repo sample >/dev/null || fail "could not create titled hold"
+    before=$(tasks_in "$home" show "$id" --full | sed -n '/^  title: /p')
+    for version in draft final; do
+      printf 'done: http://localhost:4387/session/%s\n' "$version" >> "$home/state/$id.status"
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "titled hold completion failed"
+      after=$(tasks_in "$home" show "$id" --full | sed -n '/^  title: /p')
+      [ "$before" = "$after" ] || fail "completion changed the captain title"
+      run_captain "$home" hold "$id" --title "$title" --reason choisir --repo sample >/dev/null || fail "identical hold retry failed after completion"
+    done
+    if run_captain "$home" hold "$id" --title "$title autre" --reason choisir --repo sample > "$home/refused" 2>&1; then
+      fail "different title was accepted after completion"
+    fi
+    assert_grep 'has a different title' "$home/refused" "different title failed for the wrong reason"
+    rm "$home/state/$id.status"
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "title retry snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "title-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "hold retry lost newest-first durable links"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "title retry composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "title retry rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e '.cards[].blocs[].decisions[] | select(.key == "title-review") | .pageHref == "http://localhost:4387/session/final" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "hold retry opened an older page"
+    done
+  done
+  pass "completion preserves strict title identity and ordered links through hold retries"
+}
+
+test_rehold_promotes_current_review_page() {
+  local home id reason page
+  home=$(make_home rehold-pages)
+  id=rehold-review
+  run_captain "$home" hold "$id" --title 'Choisir la suite' --reason 'voir http://localhost:4387/session/draft' --repo sample >/dev/null || fail "could not hold draft review"
+  for reason in 'voir http://localhost:4387/session/final' 'voir http://localhost:4387/session/final' voir; do
+    run_captain "$home" hold "$id" --title 'Choisir la suite' --reason "$reason" --repo sample >/dev/null || fail "could not re-hold review"
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "re-hold snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "rehold-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "re-hold put stored pages ahead of current page or lost fallbacks"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "re-hold composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "re-hold rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e '.cards[].blocs[].decisions[] | select(.key == "rehold-review") | .pageHref == "http://localhost:4387/session/final" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "re-hold opened an older page"
+    done
+  done
+  pass "re-hold promotes current review pages and preserves fallback order on retries"
+}
+
+test_completion_scopes_pages_to_each_call() {
+  local home id call phase page
+  home=$(make_home completion-call-pages)
+  id=shared-review
+  write_origin_meta "$home" "$id"
+  cat > "$home/config/projets.json" <<'EOF'
+{"schema":"fm-projets-config.v1","projects":[{"id":"sample","name":"Exemple","prefixes":["call-","shared-"],"repos":["sample"]}]}
+EOF
+  for call in a b; do
+    run_captain "$home" hold "call-$call" --title "Choisir $call" \
+      --reason "voir http://localhost:4387/session/$call" --repo sample --origin "$id" >/dev/null \
+      || fail "could not hold call $call"
+  done
+  cat > "$home/state/$id.status" <<'EOF'
+paused: http://localhost:4387/session/a
+done: http://localhost:4387/session/b
+EOF
+  for phase in partial complete retry cleaned; do
+    if [ "$phase" = cleaned ]; then
+      rm "$home/state/$id.status" "$home/state/$id.meta"
+    elif [ "$phase" = retry ] || [ "$phase" = partial ]; then
+      run_captain "$home" complete "$id" call-a >/dev/null || fail "partial inventory retry failed"
+    else
+      run_captain "$home" complete "$id" call-a call-b >/dev/null || fail "multi-call completion failed"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "multi-call snapshot failed"
+    for call in a b; do
+      jq -e --arg call "$call" '.decisions_open[] | select(.id == "call-" + $call)
+        | .links == "http://localhost:4387/session/" + $call' "$home/snapshot.json" >/dev/null \
+        || fail "call $call acquired another call's page ($phase)"
+    done
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "multi-call composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "multi-call rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      for call in a b; do
+        jq -e --arg call "$call" '.cards[].blocs[].decisions[] | select(.key == "call-" + $call)
+          | .pageHref == "http://localhost:4387/session/" + $call' "$home/rendered.json" >/dev/null \
+          || fail "call $call opens the wrong page ($page, $phase)"
+      done
+    done
+  done
+  pass "multi-call completion preserves each call's own page through retries and cleanup"
+}
+
+test_completion_promotes_only_associated_status_pages() {
+  local home id before after
+  home=$(make_home associated-status-pages)
+  id=shared-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold call-a --title 'Choisir A http://localhost:4387/session/a-final' \
+    --reason 'voir http://localhost:4387/session/a-draft' --repo sample --origin "$id" >/dev/null || fail "could not hold versioned call"
+  run_captain "$home" hold call-b --title 'Choisir B' \
+    --reason 'voir http://localhost:4387/session/b-final http://localhost:4387/session/b-draft' --repo sample --origin "$id" >/dev/null || fail "could not hold explicit call"
+  run_captain "$home" hold call-c --title 'Choisir C' \
+    --reason choisir --repo sample --origin "$id" >/dev/null || fail "could not hold call without a page"
+  before=$(tasks_in "$home" show call-b --full)
+  cat > "$home/state/call-a.status" <<'EOF'
+paused: http://localhost:4387/session/a-draft
+done: http://localhost:4387/session/a-final
+EOF
+  printf 'done: http://localhost:4387/session/unassigned\n' > "$home/state/$id.status"
+  run_captain "$home" complete "$id" call-a call-b call-c >/dev/null || fail "associated-page completion failed"
+  after=$(tasks_in "$home" show call-b --full)
+  [ "$before" = "$after" ] || fail "unassociated status pages changed explicit call links"
+  rm "$home/state/$id.status" "$home/state/$id.meta" "$home/state/call-a.status"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "associated-page snapshot failed"
+  jq -e '.decisions_open[] | select(.id == "call-a") | (.links | split(" ")) ==
+    ["http://localhost:4387/session/a-final", "http://localhost:4387/session/a-draft"]' "$home/snapshot.json" >/dev/null \
+    || fail "newest associated status page did not lead its call's fallbacks"
+  jq -e '.decisions_open[] | select(.id == "call-c") | .links == ""' "$home/snapshot.json" >/dev/null \
+    || fail "unassigned status page was attached to a call without links"
+  pass "completion promotes known pages newest first and leaves unassociated calls unchanged"
+}
+
+test_partial_completion_leaves_unowned_calls_without_pages() {
+  local home id page show
+  home=$(make_home partial-page-ownership)
+  id=review-origin
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold call-a --title 'Choisir A' --reason choisir --repo sample --origin "$id" >/dev/null || fail "could not hold first call"
+  tasks_in "$home" add call-b 'Choisir B' --repo sample >/dev/null || fail "could not create existing sibling"
+  run_captain "$home" hold call-b --title 'Choisir B' --reason 'http://localhost:4387/session/b' \
+    --repo sample --origin "$id" --until 2000-01-01 >/dev/null || fail "could not hold sibling call"
+  printf 'done: http://localhost:4387/session/b\n' > "$home/state/$id.status"
+  run_captain "$home" complete "$id" call-a >/dev/null || fail "partial completion failed"
+  show=$(tasks_in "$home" show call-a --full)
+  assert_not_contains "$show" 'http://localhost:4387/session/b' "partial completion claimed a sibling page"
+  run_captain "$home" complete "$id" call-a call-b >/dev/null || fail "full completion failed"
+  rm "$home/state/$id.status" "$home/state/$id.meta"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "ownership snapshot failed"
+  jq -e '(.decisions_open[] | select(.id == "call-a") | .links == "")
+    and (.decisions_open[] | select(.id == "call-b") | .links == "http://localhost:4387/session/b")' "$home/snapshot.json" >/dev/null || fail "completion persisted a sibling page"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "ownership composition failed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "ownership rendering failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "ownership renderer failed"
+    jq -e '(.cards[].blocs[].decisions[] | select(.key == "call-a") | .pageHref == null and .page == "pas de page dédiée")
+      and (.cards[].blocs[].decisions[] | select(.key == "call-b") | .pageHref == "http://localhost:4387/session/b")' "$home/rendered.json" >/dev/null || fail "completion opened a sibling page ($page)"
+  done
+  pass "partial completion leaves an unassociated call without a page through cleanup"
+}
+
+test_own_status_page_updates_before_recompletion() {
+  local home viewer owner id row_id page before after
+  for owner in main mate; do
+    home=$(make_home "status-update-$owner")
+    id=status-review
+    write_origin_meta "$home" "$id"
+    run_captain "$home" hold "$id" --title 'Choisir la revue' --reason choisir --repo sample >/dev/null || fail "could not hold versioned call"
+    printf 'done: http://localhost:4387/session/draft\n' > "$home/state/$id.status"
+    run_captain "$home" complete "$id" "$id" >/dev/null || fail "could not persist draft"
+    before=$(tasks_in "$home" show "$id" --full)
+    assert_contains "$before" 'http://localhost:4387/session/draft' "draft was not persisted"
+    assert_not_contains "$before" 'http://localhost:4387/session/final' "final was already persisted"
+    printf 'done: http://localhost:4387/session/final\n' >> "$home/state/$id.status"
+    viewer=$home
+    row_id=$id
+    if [ "$owner" = mate ]; then
+      viewer=$(make_home status-update-parent)
+      mkdir -p "$home/bin"
+      printf '# Synthetic secondmate home\n' > "$home/AGENTS.md"
+      printf 'sample-mate\n' > "$home/.fm-secondmate-home"
+      printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
+        "$home" > "$viewer/data/secondmates.md"
+      fm_write_secondmate_meta "$viewer/state/sample-mate.meta" "$home" "firstmate:fm-sample-mate" sample
+      PATH="$home/fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null || fail "could not refresh secondmate status page"
+      jq -e '(.decisions_open[] | select(.id == "status-review") | .links == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"])
+        and (.queued[] | select(.id == "status-review") | .links == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"])' "$home/state/home-summary.json" >/dev/null || fail "secondmate summary did not prefer its new status page"
+      row_id="sample-mate/$id"
+    fi
+    PATH="$viewer/fakebin:$PATH" FM_HOME="$viewer" "$BEARINGS" --json --all-decisions > "$viewer/snapshot.json" || fail "could not rebuild status-page snapshot"
+    jq -e --arg id "$row_id" '.decisions_open[] | select(.id == $id) | (.links | split(" ")) ==
+      ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$viewer/snapshot.json" >/dev/null || fail "persisted draft outranked final status ($owner)"
+    FM_HOME="$viewer" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$viewer/snapshot.json" --no-quota > "$viewer/page.json" || fail "status-page composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$viewer" "$ROOT/bin/fm-projets-board.sh" render "$viewer/page.json" --page "$page" >/dev/null || fail "status-page rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$viewer/.lavish/$page.html" > "$viewer/rendered.json" || fail "status-page renderer failed"
+      jq -e --arg key "${row_id//\//__}" '.cards[].blocs[].decisions[] | select(.key == $key)
+        | .pageHref == "http://localhost:4387/session/final"' "$viewer/rendered.json" >/dev/null || fail "dashboard opened draft before recompletion ($owner, $page)"
+    done
+    after=$(tasks_in "$home" show "$id" --full)
+    [ "$before" = "$after" ] || fail "snapshot changed persisted links ($owner)"
+  done
+  pass "main and secondmate dashboards prefer new own-status pages before recompletion"
+}
+
+if [ "${1:-}" = --completion-pages ]; then
+  test_own_status_page_updates_before_recompletion
+  test_partial_completion_leaves_unowned_calls_without_pages
+  test_completion_scopes_pages_to_each_call
+  test_completion_promotes_only_associated_status_pages
+  test_completion_preserves_review_pages_after_status_cleanup
+  test_completion_keeps_control_before_metadata
+  test_ipv6_review_pages_survive_extraction_and_completion
+  test_newest_status_page_precedes_older_fallbacks
+  test_repeated_completion_promotes_latest_page
+  test_completion_preserves_hold_title_identity
+  test_rehold_promotes_current_review_page
+  exit 0
+fi
+
+test_own_status_page_updates_before_recompletion
+test_partial_completion_leaves_unowned_calls_without_pages
+test_completion_scopes_pages_to_each_call
+test_completion_promotes_only_associated_status_pages
+test_completion_preserves_review_pages_after_status_cleanup
+test_completion_keeps_control_before_metadata
+test_ipv6_review_pages_survive_extraction_and_completion
+test_newest_status_page_precedes_older_fallbacks
+test_repeated_completion_promotes_latest_page
+test_completion_preserves_hold_title_identity
+test_rehold_promotes_current_review_page
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes

@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>À valider</title>
+<style>
+/* ============================================================
+   Page « a valider ». Tout ce qui attend le capitaine, tous projets
+   confondus, sur une seule page : meme systeme monochrome que la page
+   projets, meme bloc de decision, mais une seule question posee - qu'est-ce
+   qui attend Yan, et depuis quand. Les projets restent le regroupement ;
+   dans un projet la plus ancienne demande passe en premier.
+   Sur telephone rien ne defile en largeur : chaque decision devient une
+   liste empilee et tous les boutons restent dans le flux.
+   ============================================================ */
+:root {
+  --paper: #FAFAF8; --surround: #EFEEE9; --ink: #111111; --muted: #8A8A87;
+  --faint: #B8B7B1; --line: #DBDAD4; --fill: #F1F0EB;
+  --f-sans: "Helvetica Neue", Helvetica, "Inter", Arial, sans-serif;
+  --f-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --hair: 1px; --struct: 1.6px;
+  --sh-card: 0 1px 2px rgba(17,17,17,.03), 0 10px 30px rgba(17,17,17,.05);
+  --r: 18px; --r-sm: 10px; --pad: 22px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { max-width: 100%; overflow-x: hidden; }
+body { background: var(--surround); color: var(--ink); font-family: var(--f-sans); font-size: 15px;
+       line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px 96px; min-width: 0; }
+:where(p, h1, h2, h3, h4, li, td, th, span, a, button) { overflow-wrap: anywhere; }
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+       margin-bottom: 20px; }
+.top h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.top .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.badges { display: flex; gap: 10px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.badge { display: flex; align-items: center; gap: 10px; background: var(--paper);
+         border: var(--struct) solid var(--ink); border-radius: 999px; padding: 8px 16px 8px 12px;
+         box-shadow: var(--sh-card); min-width: 0; max-width: 100%; }
+.badge svg { width: 20px; height: 20px; flex: none; stroke: var(--ink); fill: none;
+             stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.badge b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.badge small { display: block; color: var(--muted); font-size: 11px; font-family: var(--f-mono);
+               letter-spacing: .1em; text-transform: uppercase; margin-top: 3px; }
+.badge.soft { border-style: dashed; border-color: var(--faint); }
+.notice { border: var(--hair) dashed var(--faint); border-radius: var(--r-sm); padding: 10px 14px;
+          color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+
+/* --- un projet, une carte, une seule section : ce qui attend le capitaine --- */
+.list { display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--paper); border: var(--struct) solid var(--ink); border-radius: var(--r);
+        padding: var(--pad); box-shadow: var(--sh-card); min-width: 0; }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px 24px; flex-wrap: wrap;
+        border-bottom: var(--hair) solid var(--line); padding-bottom: 14px; margin-bottom: 8px; }
+.head h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.head .n { font-family: var(--f-mono); font-size: 12px; border: var(--hair) solid var(--ink); border-radius: 999px;
+           padding: 1px 8px; flex: none; font-variant-numeric: tabular-nums; }
+.bloc { padding: 18px 0 6px; }
+.bloc h3 { font-family: var(--f-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+           color: var(--muted); font-weight: 400; line-height: 1.5; }
+.bloc .body { margin-top: 14px; }
+.empty { color: var(--muted); font-style: italic; font-size: 14px; }
+.tag { display: inline-block; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; border: var(--hair) solid var(--line);
+       border-radius: 4px; padding: 0 6px; margin-left: 8px; color: var(--muted); vertical-align: 1px; }
+.src { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+.you { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.you li { border: var(--struct) solid var(--ink); border-radius: var(--r-sm); padding: 10px 12px;
+          display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.you .q { flex: 1 1 260px; min-width: 0; }
+.you .ask { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+.you li[data-nature="etat"] .ask { width: fit-content; max-width: 100%; color: var(--ink);
+                                   border-bottom: var(--hair) dashed var(--faint); padding-bottom: 2px; }
+.you .pick { width: 15px; height: 15px; margin: 0 8px 0 0; vertical-align: -2px; accent-color: var(--ink); }
+.you .btns { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--paper);
+       text-align: left; max-width: 100%; }
+.btn:hover { background: var(--ink); color: var(--paper); }
+.btn.on { background: var(--ink); color: var(--paper); }
+.btn:disabled { border-color: var(--line); color: var(--faint); cursor: default; background: var(--paper); }
+.you li.queued { border-style: dashed; }
+.you li.queued .btn { border-color: var(--line); color: var(--muted); }
+.you li.queued .btn.on { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.you .ok { flex-basis: 100%; color: var(--muted); font-size: 13px; display: none; }
+.you li.refused { border-style: dotted; }
+.you li.queued .ok, .you li.refused .ok { display: block; }
+.you .page { flex: 0 0 auto; font-size: 13px; }
+.you .page .go { text-decoration: underline; text-underline-offset: 3px; }
+.you .page .dim { color: var(--faint); font-style: italic; }
+.group { margin-top: 12px; display: flex; align-items: baseline; gap: 10px 12px; flex-wrap: wrap; }
+.group .make { border-width: var(--struct); }
+.group .src { margin-top: 0; flex: 1 1 240px; min-width: 0; }
+.group.queued .src, .group.refused .src { color: var(--ink); }
+
+.limit { margin-top: 22px; color: var(--muted); font-size: 13px; max-width: 78ch; }
+.err { border: var(--struct) solid var(--ink); border-radius: var(--r); padding: var(--pad); background: var(--paper); }
+.err h2 { font-size: 20px; margin-bottom: 8px; }
+
+@media (max-width: 720px) {
+  .wrap { padding: 16px 12px 64px; }
+  .top { align-items: flex-start; }
+  .top h1 { font-size: 20px; }
+  .badge { padding: 6px 12px 6px 10px; } .badge b { font-size: 17px; }
+  .card { padding: 16px; border-radius: 14px; }
+  .head { flex-direction: column; align-items: stretch; gap: 6px; }
+  .head h2 { font-size: 20px; }
+  /* le compte reste une pastille, il ne s'etire pas en bandeau */
+  .head .n { align-self: flex-start; }
+  .tag { display: inline-block; margin: 4px 6px 0 0; }
+  .you li { align-items: stretch; }
+  .you .q, .you .btns, .you .ok, .you .page { flex-basis: 100%; }
+  .group { flex-direction: column; align-items: stretch; }
+  .group .make { text-align: center; }
+  /* en colonne, une base flex devient une HAUTEUR : la note reprend la sienne */
+  .group .src { flex: 0 0 auto; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>À valider</h1>
+      <div class="meta" id="pj-meta"></div>
+    </div>
+    <div class="badges" id="pj-badges"></div>
+  </header>
+  <div id="pj-notice" class="notice" hidden></div>
+  <main class="list" id="pj-main"></main>
+  <footer class="limit">Cette page vit sur le réseau privé de Yan (tailnet) : seules ses machines la voient, un client extérieur n'y a pas accès. Les pages client passent par un sous-domaine dédié, chantier séparé.</footer>
+</div>
+
+<script id="projets-data" type="application/json">
+__FM_PROJETS_BOARD_DATA__
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  function renderError(msg) {
+    var main = document.getElementById("pj-main");
+    main.innerHTML = "";
+    var box = el("div", "err");
+    box.appendChild(el("h2", "", "Cette page n'a pas pu se charger"));
+    box.appendChild(el("p", "", msg + ". Demande à firstmate de la régénérer."));
+    main.appendChild(box);
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+  function link(text, url, cls, refused) {
+    if (!url) return el("span", cls || "", text + (refused ? " · lien refusé, hors réseau autorisé" : ""));
+    var a = el("a", cls || "", text);
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    return a;
+  }
+  function tag(text, ok) {
+    return el("span", "tag" + (ok ? " ok" : ""), text);
+  }
+  function utf8ByteLength(s) {
+    return typeof TextEncoder === "function" ? new TextEncoder().encode(s).length : s.length;
+  }
+
+  var ICONS = {
+    decisions: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="m16 15 2.2 2.2L22 13"/></svg>',
+    workers: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg>'
+  };
+
+  /* Le bloc de decision est le meme que sur la page projets, injecte ici a
+     l'identique : une seule description de ce que fait un clic. */
+__FM_PROJETS_DECISIONS_JS__
+
+  var raw, data;
+  try {
+    raw = document.getElementById("projets-data").textContent;
+    data = JSON.parse(raw);
+  } catch (e) {
+    renderError("Les données de la page sont illisibles");
+    return;
+  }
+  if (!data || data.schema !== "fm-projets-board.v1" || !Array.isArray(data.projects)) {
+    renderError("Les données de la page ne sont pas au format attendu");
+    return;
+  }
+
+  try {
+  document.getElementById("pj-meta").textContent =
+    "mis à jour " + data.updated_label + " · tout ce qui attend ta réponse, tous projets confondus";
+  var badges = document.getElementById("pj-badges");
+  function badge(kind, value, label, soft) {
+    var b = el("div", "badge" + (soft ? " soft" : ""));
+    b.setAttribute("data-badge", kind);
+    var ic = el("span", "ic");
+    ic.innerHTML = ICONS[kind];
+    b.appendChild(ic);
+    var t = el("span", "");
+    t.appendChild(el("b", "", value));
+    t.appendChild(el("small", "", label));
+    b.appendChild(t);
+    badges.appendChild(b);
+  }
+
+  /* L'ordre du rail de la page projets est deja dans le payload : on le garde,
+     on laisse tomber les projets qui n'attendent rien, et dans un projet la
+     plus ancienne demande passe devant quand sa date est connue. */
+  var projects = data.projects.filter(function (p) {
+    return Array.isArray(p.missing_from_you) && p.missing_from_you.length > 0;
+  }).map(function (p) {
+    var rows = p.missing_from_you.map(function (r, i) { return { r: r, i: i }; });
+    rows.sort(function (a, b) {
+      var da = a.r.since || "", db = b.r.since || "";
+      if (da && db && da !== db) return da < db ? -1 : 1;
+      if (da && !db) return -1;
+      if (!da && db) return 1;
+      return a.i - b.i;
+    });
+    return { id: p.id, name: p.name, rows: rows.map(function (x) { return x.r; }) };
+  });
+  var total = projects.reduce(function (n, p) { return n + p.rows.length; }, 0);
+
+  badge("decisions", String(total), (total === 1 ? "décision à prendre" : "décisions à prendre"));
+  var workers = (data.badges && data.badges.workers) || 0;
+  badge("workers", String(workers), (workers === 1 ? "worker en cours" : "workers en cours"), !workers);
+
+  var notice = document.getElementById("pj-notice");
+  if (data.table_missing) {
+    notice.hidden = false;
+    notice.textContent = "La table des projets n'est pas encore écrite : un projet par dépôt en attendant. Demande à firstmate de la remplir.";
+  }
+  if (data.warnings && data.warnings.length) {
+    notice.hidden = false;
+    notice.textContent += (notice.textContent ? " · " : "") + data.warnings.join(" · ");
+  }
+
+  var main = document.getElementById("pj-main");
+  if (!projects.length) {
+    var partial = (data.warnings && data.warnings.length) || data.projects.some(function (p) { return p.partial; });
+    main.appendChild(el("p", "empty", partial
+      ? "État partiel : impossible de confirmer si quelque chose attend ta réponse."
+      : "Rien n'attend de toi en ce moment."));
+  }
+  projects.forEach(function (p) {
+    var c = el("section", "card");
+    c.setAttribute("data-project", p.id);
+    var head = el("div", "head");
+    head.appendChild(el("h2", "", p.name));
+    head.appendChild(el("span", "n", String(p.rows.length)));
+    c.appendChild(head);
+    var b = el("section", "bloc");
+    b.setAttribute("data-bloc", "2");
+    b.setAttribute("data-open", "true");
+    var h = el("h3", "", "Il manque de toi");
+    b.appendChild(h);
+    var body = el("div", "body");
+    renderDecisions(body, p, p.rows);
+    b.appendChild(body);
+    c.appendChild(b);
+    main.appendChild(c);
+  });
+  } catch (e) {
+    renderError("La page n'a pas pu être dessinée");
+  }
+})();
+</script>
+</body>
+</html>

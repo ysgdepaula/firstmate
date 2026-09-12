@@ -112,6 +112,13 @@
 # `captain-held [key=...]` status close naming the inventory. Later review
 # passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
+# For each still-held inventory task, completion preserves eligible review URLs
+# from its own status log in the hold reason before status cleanup.
+# `merge_review_pages` owns promotion for both completion and hold retries;
+# bin/fm-call-links.jq owns extraction and bin/fm-projets-data.jq eligibility.
+# Completion rereads status candidates under the held task's control lock.
+# It then takes the origin's control lock before its metadata lock and revalidates
+# the inventory, preserving teardown's lock order even when origin holds itself.
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
 # entry must still be durable and no keyed status decision may be open.
@@ -1074,6 +1081,19 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
   rm -f -- "$tmp"
 }
 
+# Current-operation pages precede retained fallbacks, including already stored
+# URLs that need promotion. Keep ordered links in the hold reason, never in the
+# title: identical hold retries must still pass the strict title identity check.
+merge_review_pages() {
+  jq -L "$SCRIPT_DIR" -nr --arg reason "$1" --arg previous "$2" --argjson current "${3:-[]}" '
+    include "fm-call-links"; include "fm-projets-data";
+    call_link_candidates($current; $reason) as $current_urls
+    | (call_link_candidates($current_urls; $previous) | map(select(project_page_url))) as $urls
+    | ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
+    | ($urls + $remaining) | join(" ")
+  '
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
@@ -1121,6 +1141,10 @@ command_hold() {
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
+    fi
+    if [ "$existing_hold_kind" = captain ]; then
+      reason=$(merge_review_pages "$reason" "$(show_field_value "$show" hold_reason)") \
+        || fail "cannot retain recorded pages for $id"
     fi
   else
     [ -n "$title" ] || fail "--title is required to create task $id"
@@ -1569,18 +1593,12 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  local attested_by_prefix=''
+  local attested_by_prefix='' page_urls='[]' show reason updated_reason until
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] && has_meta=1
-  if [ "$has_meta" = 1 ]; then
-    CAPTAIN_META_LOCK=$(fm_meta_lock_path "$meta") || fail "could not resolve task metadata lock"
-    fm_lock_acquire_wait "$CAPTAIN_META_LOCK"
-    CAPTAIN_META_LOCK_HELD=1
-    [ -f "$meta" ] || fail "task metadata disappeared while recording completion"
-  fi
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
   if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
@@ -1604,10 +1622,55 @@ command_complete() {
       if [ "$CAPTAIN_RESOLVED_HOW" = migrated-prefix ]; then
         attested_by_prefix="${attested_by_prefix}${attested_by_prefix:+ }$entry=$CAPTAIN_RESOLVED_ID"
       fi
+      if [ -n "$CAPTAIN_RESOLVED_ID" ]; then
+        acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
+        verify_hold_durable "$CAPTAIN_RESOLVED_ID"
+        show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
+        status_file="$STATE/$CAPTAIN_RESOLVED_ID.status"
+        page_urls='[]'
+        if [ -f "$status_file" ]; then
+          page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
+            include "fm-call-links"; include "fm-projets-data";
+            call_link_candidates([]; .) | map(select(project_page_url))
+          ' "$status_file") || fail "cannot collect recorded pages for $CAPTAIN_RESOLVED_ID"
+        fi
+        if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
+          reason=$(show_field_value "$show" hold_reason)
+          updated_reason=$(merge_review_pages "$reason" "" "$page_urls") \
+            || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          if [ "$updated_reason" != "$reason" ]; then
+            until=$(show_field_value "$show" hold_until)
+            tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$updated_reason" ${until:+--until "$until"} >/dev/null \
+              || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          fi
+        fi
+        fm_lock_release "$CAPTAIN_CONTROL_LOCK"
+        CAPTAIN_CONTROL_LOCK_HELD=0
+      fi
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
   fi
+
+  acquire_task_control_lock "$origin"
+  has_meta=0
+  previous=''
+  if [ -f "$meta" ]; then
+    CAPTAIN_META_LOCK=$(fm_meta_lock_path "$meta") || fail "could not resolve task metadata lock"
+    fm_lock_acquire_wait "$CAPTAIN_META_LOCK"
+    CAPTAIN_META_LOCK_HELD=1
+    [ -f "$meta" ] || fail "task metadata disappeared while recording completion"
+    has_meta=1
+    previous=$(meta_value "$meta" decision_keys)
+  fi
+  origin_exists_here "$origin" || fail "origin $origin is no longer owned by the active home $FM_HOME"
+  keys=$(sorted_key_union "$previous" "$supplied")
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    verify_inventory_entry "$origin" "$entry"
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
 
   status_file="$STATE/$origin.status"
   raw_open=$(status_open_decisions "$status_file")

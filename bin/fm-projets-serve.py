@@ -10,7 +10,9 @@ Serves, on one fixed port bound to every interface so the MagicDNS name answers:
                     render time, never assumed
   /projets          a no-store redirect to the open Lavish session for the page;
                     without a session, reads $FM_HOME/.lavish/projets.html fresh
-                    with a visible warning that answers cannot be transmitted
+                    with a visible warning that answers cannot be queued
+  /a-valider        the same for $FM_HOME/.lavish/a-valider.html, everything
+                    waiting on the captain across every project
   /fichiers/<id>/   the shared folders declared in the table, read-only, with a
                     plain listing; paths are confined to the declared folder
 
@@ -150,19 +152,34 @@ def lavish_sessions(timeout: float) -> tuple[list, str | None]:
     return rows, None
 
 
-def page_path() -> Path:
-    return fm_home() / ".lavish" / "projets.html"
+# The two pages bin/fm-projets-board.sh writes, each at its own stable route.
+PAGES = (
+    ("/projets", "projets.html", "La page projets"),
+    ("/a-valider", "a-valider.html", "Ce qui attend ta réponse"),
+)
+
+
+def page_path(name: str = "projets.html") -> Path:
+    return fm_home() / ".lavish" / name
+
+
+def page_route(path: str):
+    """Match a request path against the served pages; returns (file, label) or None."""
+    for route, name, label in PAGES:
+        if path in (route, route + "/", route + ".html"):
+            return name, label
+    return None
 
 
 def h(text) -> str:
     return html.escape(str(text), quote=True)
 
 
-def page_session(sessions: list) -> str | None:
+def page_session(sessions: list, name: str = "projets.html") -> str | None:
     for session in sessions:
         url = session["url"]
         parsed = urllib.parse.urlsplit(url)
-        if (Path(session["file"]).resolve() == page_path().resolve()
+        if (Path(session["file"]).resolve() == page_path(name).resolve()
                 and parsed.scheme in ("http", "https") and parsed.netloc
                 and "\r" not in url and "\n" not in url):
             return url
@@ -174,9 +191,11 @@ def render_index(cfg: dict, public_base: str, probe_base: str) -> bytes:
     budget = float(os.environ.get("FM_PROJETS_SERVE_INDEX_BUDGET", "3"))
     deadline = time.monotonic() + budget
     sessions, note = lavish_sessions(max(0.001, min(timeout, budget)))
-    hint = ("réponses transmises par Lavish" if page_session(sessions)
-            else "boutons non transmis : session Lavish absente ou indisponible")
-    lines = [("La page projets", public_base + "/projets", probe_base + "/projets", hint)]
+    lines = []
+    for route, name, label in PAGES:
+        hint = ("réponses mises en file par Lavish" if page_session(sessions, name)
+                else "boutons sans file : session Lavish absente ou indisponible")
+        lines.append((label, public_base + route, probe_base + route, hint))
     for session in sessions:
         lines.append(("Revue Lavish : " + session["label"], session["url"], session["url"], "en cours, à annoter"))
     for entry in cfg["entries"]:
@@ -264,16 +283,18 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path in ("/", "/index.html"):
             return self._send(HTTPStatus.OK, render_index(self.cfg, self.public_base, "http://127.0.0.1:%d" % self.server.server_address[1]))
-        if path in ("/projets", "/projets.html", "/projets/"):
-            page = page_path()
+        route = page_route(path)
+        if route is not None:
+            name, _label = route
+            page = page_path(name)
             try:
                 body = page.read_bytes()
             except FileNotFoundError:
-                return self._send(HTTPStatus.NOT_FOUND, "<p>La page projets n'a pas encore été générée.</p>".encode())
+                return self._send(HTTPStatus.NOT_FOUND, "<p>Cette page n'a pas encore été générée.</p>".encode())
             except OSError:
-                return self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "<p>La page projets est illisible.</p>".encode())
+                return self._send(HTTPStatus.INTERNAL_SERVER_ERROR, "<p>Cette page est illisible.</p>".encode())
             sessions, _ = lavish_sessions(float(os.environ.get("FM_PROJETS_SERVE_PROBE_TIMEOUT", "2")))
-            url = page_session(sessions)
+            url = page_session(sessions, name)
             if url:
                 self.send_response(HTTPStatus.FOUND)
                 self.send_header("Location", url)
@@ -282,19 +303,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return None
             banner = ("<aside role=\"alert\" style=\"padding:16px;background:#fff3cd;color:#111\">"
-                      "Ici les boutons ne transmettent rien : ouvre la page dans Lavish pour répondre "
+                      "Ici les boutons ne mettent rien en file : ouvre la page dans Lavish pour répondre "
                       "(session absente ou indisponible).</aside>").encode()
             body_tag = re.search(rb"<body\b[^>]*>", body, re.IGNORECASE)
             offset = body_tag.end() if body_tag else 0
             body = body[:offset] + banner + body[offset:]
             marker = b"""<script>
 function markUnsent() {
-  document.querySelectorAll('[data-choice]').forEach(function(button) {
+  document.querySelectorAll('[data-choice], [data-create-lavish]').forEach(function(button) {
     button.dataset.transmitted = 'false';
-    button.title = 'non transmis : ouvre cette page dans Lavish';
+    button.title = 'non mis en file : ouvre cette page dans Lavish';
   });
   document.querySelectorAll('.you .ok').forEach(function(status) {
-    status.textContent = 'non transmis : ouvre cette page dans Lavish';
+    status.textContent = 'non mis en file : ouvre cette page dans Lavish';
     status.style.display = 'block';
   });
 }

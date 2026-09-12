@@ -1178,6 +1178,210 @@ EOF
   pass "captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls"
 }
 
+# A held captain call carries the URLs already on record for it, so a page
+# built from this projection can offer the captain a direct link instead of
+# asking him to answer something he cannot open.
+test_a_captain_call_carries_its_recorded_links_and_date() {
+  local home fakebin json
+  home=$(make_home call-links)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] linked-call - Held call with a page (repo: firstmate) (kind: captain) (hold: answer on http://localhost:4387/session/abc) (hold-kind: captain)
+  Captain hold set: 2026-07-09
+- [ ] status-call - Held call whose page is in its status https://example.test/doc1 https://example.test/doc2 https://example.test/doc3 https://example.test/doc4 https://example.test/doc5 (repo: firstmate) (kind: captain) (hold: six questions) (hold-kind: captain)
+- [ ] clipped-call - Held call with a clipped URL (repo: firstmate) (kind: captain) (hold: http://localhost:4387/session/cut…) (hold-kind: captain)
+- [ ] bare-call - Held call with nothing on record (repo: firstmate) (kind: captain) (hold: choose) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$home/state/status-call.meta" \
+    "window=firstmate:fm-status-call" "endpoint_task_id=status-call" \
+    "worktree=$home/wt" "project=firstmate" "harness=echo" "kind=scout" "mode=no-mistakes" "yolo=off"
+  printf 'working: reading\ndone: page http://ydeep.ts.net:4387/session/zed and report\n' \
+    > "$home/state/status-call.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open[] | select(.id == "linked-call")
+     | .links == "http://localhost:4387/session/abc" and .since == "2026-07-09")
+    and (.decisions_open[] | select(.id == "status-call")
+         | (.links | split(" ")) == ["http://ydeep.ts.net:4387/session/zed", "https://example.test/doc1", "https://example.test/doc2", "https://example.test/doc3", "https://example.test/doc4", "https://example.test/doc5"] and .since == null)
+    and (.decisions_open[] | select(.id == "bare-call") | .links == "" and .since == null)
+    and (.decisions_open[] | select(.id == "clipped-call") | .links == "")
+  ' >/dev/null || fail "a held captain call did not carry the links and date it records: $json"
+  printf '%s' "$json" > "$home/bearings.json"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "link composition failed"
+  jq -e '.projects[].missing_from_you[] | select(.key == "status-call")
+         | .page.url == "http://ydeep.ts.net:4387/session/zed"' "$home/page.json" >/dev/null || fail "sixth candidate did not survive page selection"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "link render failed"
+  node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json" || fail "link renderer failed"
+  jq -e '.cards[].blocs[].decisions[] | select(.key == "status-call")
+         | .pageHref == "http://ydeep.ts.net:4387/session/zed" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "sixth candidate is not offered as a review page"
+  pass "a held captain call carries its date and a review page after five documents"
+}
+
+test_secondmate_call_links_survive_summary_truncation() {
+  local home mate fakebin json padding bucket until
+  home=$(make_home mate-call-links)
+  write_fixture "$home"
+  mate=$(fixture_mate_home "$home")
+  fakebin=$(make_fakebin "$home")
+  padding=$(printf '%0140d' 0)
+  for bucket in live dated; do
+    until=""
+    [ "$bucket" != dated ] || until=" (hold-until: 2026-12-31)"
+    cat > "$mate/data/backlog.md" <<EOF
+## In flight
+
+## Queued
+- [ ] long-call - Choisir la suite (repo: firstmate) (kind: captain) (hold: $padding http://localhost:4387/session/complete-session-id) (hold-kind: captain)$until
+
+## Done
+EOF
+    json=$(run "$home" "$fakebin" --json --all-decisions) || fail "secondmate links projection failed"
+    jq -e --arg bucket "$bucket" '
+      .queued[] | select(.id == "long-call")
+      | .hold_bucket == $bucket and (.hold_reason | endswith("…"))
+        and .links == ["http://localhost:4387/session/complete-session-id"]
+    ' "$mate/state/home-summary.json" >/dev/null || fail "fixture did not exercise the truncated $bucket summary"
+    printf '%s' "$json" | jq -e '
+      .decisions_open[] | select(.id == "mate/long-call")
+      | .links == "http://localhost:4387/session/complete-session-id"
+    ' >/dev/null || fail "secondmate $bucket call lost or truncated its URL: $json"
+  done
+  pass "secondmate live and deferred holds preserve complete links before prose truncation"
+}
+
+test_secondmate_status_pages_and_dates_reach_the_board() {
+  local home mate fakebin id page
+  home=$(make_home mate-status-pages)
+  write_fixture "$home"
+  mate=$(fixture_mate_home "$home")
+  fakebin=$(make_fakebin "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] newer-main - Choisir la suite principale (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+  Captain hold set: 2026-07-08T09:00:00Z
+
+## Done
+EOF
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] older-live - Choisir la premiere revue https://example.test/document (repo: firstmate) (kind: captain) (since 2026-06-30) (hold: choisir) (hold-kind: captain)
+  Captain hold set: 2026-07-01T09:00:00Z
+- [ ] older-deferred - Choisir la seconde revue (repo: firstmate) (kind: captain) (since 2026-07-02) (hold: choisir) (hold-kind: captain) (hold-until: 2026-12-31)
+- [ ] clipped-status - Choisir sans page (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+
+## Done
+EOF
+  for id in older-live older-deferred clipped-status unrelated; do
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+      "worktree=$mate/projects/mate" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  done
+  fm_write_meta "$home/state/newer-main.meta" \
+    "window=firstmate:fm-newer-main" "worktree=$home/projects/ship-wt" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  printf 'done: http://localhost:4387/session/newer-main\ncaptain-held [key=main]: tracked by newer-main\n' > "$home/state/newer-main.status"
+  python3 - "$mate/state" <<'PYFIX'
+from pathlib import Path
+import sys
+state = Path(sys.argv[1])
+(state / 'older-live.status').write_text(
+    'working: lecture\ndone: ' + 'contexte ' * 250 +
+    'https://example.test/document http://localhost:4387/session/older-live\ncaptain-held [key=live]: tracked by older-live\n')
+(state / 'older-deferred.status').write_text(
+    'paused: revue http://localhost:4387/session/older-deferred\ncaptain-held [key=deferred]: tracked by older-deferred\n')
+(state / 'clipped-status.status').write_text(
+    'done: http://localhost:4387/session/incomplete… '
+    'http://localhost:4387/session/incomplete... '
+    'http://localhost:4387/session/' + 'x' * 600 + '\n')
+(state / 'unrelated.status').write_text('done: http://localhost:4387/session/unrelated\n')
+PYFIX
+  run "$home" "$fakebin" --json --all-decisions > "$home/bearings.json" || fail "secondmate status projection failed"
+  jq -e '
+    (.decisions_open[] | select(.id == "older-live")
+      | .hold_set == "2026-07-01T09:00:00Z" and .since == "2026-06-30"
+        and .links == ["https://example.test/document", "http://localhost:4387/session/older-live"])
+    and (.queued[] | select(.id == "older-live")
+      | .hold_set == "2026-07-01T09:00:00Z" and .since == "2026-06-30"
+        and .links == ["https://example.test/document", "http://localhost:4387/session/older-live"])
+    and (.queued[] | select(.id == "older-deferred")
+      | .hold_bucket == "dated" and .hold_set == null and .since == "2026-07-02"
+        and .links == ["http://localhost:4387/session/older-deferred"])
+    and ([.decisions_open[].id] | index("older-deferred")) == null
+    and (.queued[] | select(.id == "clipped-status") | .links == [])
+    and (.decisions_open[] | select(.id == "clipped-status") | .links == [])
+  ' "$mate/state/home-summary.json" >/dev/null || fail "secondmate summary lost status candidates or hold clocks"
+  jq -e '
+    (.decisions_open[] | select(.id == "mate/older-live")
+      | .since == "2026-07-01" and (.links | contains("http://localhost:4387/session/older-live")))
+    and (.decisions_open[] | select(.id == "mate/older-deferred")
+      | .since == "2026-07-02" and .links == "http://localhost:4387/session/older-deferred")
+    and (.decisions_open[] | select(.id == "mate/clipped-status") | .since == null and .links == "")
+  ' "$home/bearings.json" >/dev/null || fail "secondmate status links or dates were lost in bearings"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "secondmate page composition failed"
+  jq -e '
+    (.projects[] | select(.id == "firstmate") | .missing_from_you) as $rows
+    | ($rows[] | select(.key == "mate__older-live")
+       | .page.url == "http://localhost:4387/session/older-live" and .since == "2026-07-01")
+    and ($rows[] | select(.key == "mate__older-deferred")
+       | .page.url == "http://localhost:4387/session/older-deferred" and .since == "2026-07-02")
+    and ($rows[] | select(.key == "newer-main") | .page.url == "http://localhost:4387/session/newer-main")
+    and ($rows[] | select(.key == "mate__clipped-status") | .page == null)
+  ' "$home/page.json" >/dev/null || fail "secondmate status-only review pages were not composed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "secondmate page render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "secondmate page renderer failed"
+    jq -e --arg page "$page" '
+      .error == ""
+      and (.cards[] | select(.id == "firstmate") | .blocs[] | select(.num == 2) | .decisions
+        | (if $page == "a-valider" then map(.key) == ["mate__older-live", "mate__older-deferred", "newer-main", "mate__clipped-status"] else true end)
+          and (.[] | select(.key == "mate__older-live")
+               | .pageHref == "http://localhost:4387/session/older-live" and .page == "ouvrir la page")
+          and (.[] | select(.key == "mate__older-deferred")
+               | .pageHref == "http://localhost:4387/session/older-deferred" and .page == "ouvrir la page")
+          and (.[] | select(.key == "newer-main")
+               | .pageHref == "http://localhost:4387/session/newer-main" and .page == "ouvrir la page")
+          and (.[] | select(.key == "mate__clipped-status") | .pageHref == null))
+    ' "$home/rendered.json" >/dev/null || fail "secondmate review links or oldest-first order did not render ($page)"
+  done
+  pass "secondmate status-only review links render and older holds precede main-home calls"
+}
+
+test_page_candidates_strip_prose_delimiters() {
+  local home fakebin
+  home=$(make_home prose-links)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] row-page - Revue (repo: firstmate) (kind: captain) (hold: voir `http://localhost:4387/session/row`.) (hold-kind: captain)
+- [ ] status-page - Revue (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$home/state/status-page.meta" "window=firstmate:fm-status-page" "worktree=$home/wt" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  cat > "$home/state/status-page.status" <<'EOF'
+done: revue `http://localhost:4387/session/status`, puis <http://localhost:4387/session/status>. [page](http://localhost:4387/session/status); 'http://localhost:4387/session/status' et http://localhost:4387/session/status! http://localhost:4387/session/cut…`.
+EOF
+  fakebin=$(make_fakebin "$home")
+  run "$home" "$fakebin" --json > "$home/snapshot.json" || fail "prose URL projection failed"
+  jq -e '(.decisions_open[] | select(.id == "row-page") | .links == "http://localhost:4387/session/row")
+    and (.decisions_open[] | select(.id == "status-page") | .links == "http://localhost:4387/session/status")' "$home/snapshot.json" >/dev/null || fail "candidate delimiters were retained"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "prose page composition failed"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "prose page rendering failed"
+  node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+  jq -e '[.cards[].blocs[].decisions[].pageHref] | sort == ["http://localhost:4387/session/row", "http://localhost:4387/session/status"]' "$home/rendered.json" >/dev/null || fail "rendered links retain prose punctuation"
+  pass "backlog and status URL delimiters never enter rendered page links"
+}
+
 test_undated_hold_phrasing_and_aging_projection() {
   local home mate fakebin json
   home=$(make_home undated-aging-proj)
@@ -2924,6 +3128,68 @@ test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_co
   pass "a missing remote ledger stays explicitly unreadable without remote summary computation"
 }
 
+test_status_pages_respect_call_ownership() {
+  local home mate target fakebin owner prefix page
+  for owner in main mate; do
+    home=$(make_home "ownership-$owner")
+    write_fixture "$home"
+    mate=$(fixture_mate_home "$home")
+    fakebin=$(make_fakebin "$home")
+    target=$home
+    prefix=''
+    if [ "$owner" = mate ]; then target=$mate; prefix='mate/'; fi
+    cat > "$target/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] call-a - Choisir A (repo: firstmate) (hold: choisir) (hold-kind: captain)
+  Origin: review-origin
+- [ ] call-b - Choisir B (repo: firstmate) (hold: http://localhost:4387/session/b) (hold-kind: captain)
+  Origin: review-origin
+- [ ] only-call - Choisir seul (repo: firstmate) (hold: choisir) (hold-kind: captain)
+- [ ] extra-call - Autre choix (repo: firstmate) (hold: choisir) (hold-kind: captain) (hold-until: 2000-01-01)
+  Origin: only-call
+
+## Done
+EOF
+    fm_write_meta "$target/state/review-origin.meta" "window=firstmate:fm-review-origin" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
+    fm_write_meta "$target/state/only-call.meta" "window=firstmate:fm-only-call" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
+    printf 'done: http://localhost:4387/session/b\n' > "$target/state/review-origin.status"
+    printf 'done: http://localhost:4387/session/only\n' > "$target/state/only-call.status"
+    cat > "$home/config/projets.json" <<'EOF'
+{"schema":"fm-projets-config.v1","projects":[{"id":"firstmate","name":"Exemple","brain":true,"repos":["firstmate"]}]}
+EOF
+    run "$home" "$fakebin" --json --all-decisions > "$home/bearings.json" || fail "ownership projection failed ($owner)"
+    if [ "$owner" = mate ]; then
+      jq -e '(.decisions_open[] | select(.id == "call-a") | .links == [])
+        and (.queued[] | select(.id == "call-a") | .links == [])
+        and (.decisions_open[] | select(.id == "call-b") | .links == ["http://localhost:4387/session/b"])
+        and (.decisions_open[] | select(.id == "only-call") | .links == ["http://localhost:4387/session/only"])' "$mate/state/home-summary.json" >/dev/null || fail "fleet summary crossed call ownership"
+    fi
+    jq -e --arg prefix "$prefix" '(.decisions_open[] | select(.id == $prefix + "call-a") | .links == "")
+      and (.decisions_open[] | select(.id == $prefix + "call-b") | .links == "http://localhost:4387/session/b")
+      and (.decisions_open[] | select(.id == $prefix + "only-call") | .links == "http://localhost:4387/session/only")' "$home/bearings.json" >/dev/null || fail "bearings crossed call ownership ($owner)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "ownership composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "ownership rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "ownership renderer failed"
+      jq -e --arg prefix "${prefix//\//__}" '(.cards[].blocs[].decisions[] | select(.key == $prefix + "call-a") | .pageHref == null and .page == "pas de page dédiée")
+        and (.cards[].blocs[].decisions[] | select(.key == $prefix + "call-b") | .pageHref == "http://localhost:4387/session/b")
+        and (.cards[].blocs[].decisions[] | select(.key == $prefix + "only-call") | .pageHref == "http://localhost:4387/session/only")' "$home/rendered.json" >/dev/null || fail "snapshot opened a sibling page ($owner, $page)"
+    done
+    pass "$owner status-page join preserves call ownership and single-call pages"
+  done
+}
+
+if [ "${1:-}" = --captain-links ]; then
+  test_status_pages_respect_call_ownership
+  test_a_captain_call_carries_its_recorded_links_and_date
+  test_secondmate_call_links_survive_summary_truncation
+  test_secondmate_status_pages_and_dates_reach_the_board
+  test_page_candidates_strip_prose_delimiters
+  exit 0
+fi
+
 test_task_teardown_during_metadata_capture_does_not_abort_snapshot
 test_current_state_uses_captured_status_observation
 test_relaunched_task_does_not_inherit_reused_endpoint_state
@@ -2971,6 +3237,11 @@ test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
+test_status_pages_respect_call_ownership
+test_a_captain_call_carries_its_recorded_links_and_date
+test_secondmate_call_links_survive_summary_truncation
+test_secondmate_status_pages_and_dates_reach_the_board
+test_page_candidates_strip_prose_delimiters
 test_undated_hold_phrasing_and_aging_projection
 test_blocked_deferred_hold_has_concrete_disclosure
 test_revealed_deferred_holds_show_their_deferral_reason
