@@ -10,3 +10,14 @@ def call_link_candidates($row_links; $status_text):
   | map(sub("[.,;:!?]+$"; ""))
   | map(select(length > 0 and length <= 500))
   | reduce .[] as $u ([]; if index($u) == null then . + [$u] else . end);
+
+def call_owned_status_links($record; $origin; $records; $status_links):
+  call_link_candidates($record.links; null) as $explicit
+  | [$records[]
+     | select(.hold_kind == "captain" and .state != "done")
+     | select(.id == $origin or any(.body_lines[]?; . == "Origin: " + $origin))
+     | .id] | unique as $calls
+  | call_link_candidates($status_links; null)
+  | if $calls == [$record.id] then .
+    else map(select(. as $url | $explicit | index($url)))
+    end;

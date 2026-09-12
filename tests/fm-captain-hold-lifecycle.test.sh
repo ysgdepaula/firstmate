@@ -3199,10 +3199,10 @@ EOF
 paused: http://localhost:4387/session/a
 done: http://localhost:4387/session/b
 EOF
-  for phase in complete retry cleaned; do
+  for phase in partial complete retry cleaned; do
     if [ "$phase" = cleaned ]; then
       rm "$home/state/$id.status" "$home/state/$id.meta"
-    elif [ "$phase" = retry ]; then
+    elif [ "$phase" = retry ] || [ "$phase" = partial ]; then
       run_captain "$home" complete "$id" call-a >/dev/null || fail "partial inventory retry failed"
     else
       run_captain "$home" complete "$id" call-a call-b >/dev/null || fail "multi-call completion failed"
@@ -3257,7 +3257,35 @@ EOF
   pass "completion promotes known pages newest first and leaves unassociated calls unchanged"
 }
 
+test_partial_completion_leaves_unowned_calls_without_pages() {
+  local home id page show
+  home=$(make_home partial-page-ownership)
+  id=call-a
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title 'Choisir A' --reason choisir --repo sample >/dev/null || fail "could not hold origin call"
+  run_captain "$home" hold call-b --title 'Choisir B' --reason 'http://localhost:4387/session/b' \
+    --repo sample --origin "$id" >/dev/null || fail "could not hold sibling call"
+  printf 'done: http://localhost:4387/session/b\n' > "$home/state/$id.status"
+  run_captain "$home" complete "$id" "$id" >/dev/null || fail "partial completion failed"
+  show=$(tasks_in "$home" show "$id" --full)
+  assert_not_contains "$show" 'http://localhost:4387/session/b' "partial completion claimed a sibling page"
+  run_captain "$home" complete "$id" "$id" call-b >/dev/null || fail "full completion failed"
+  rm "$home/state/$id.status" "$home/state/$id.meta"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "ownership snapshot failed"
+  jq -e '(.decisions_open[] | select(.id == "call-a") | .links == "")
+    and (.decisions_open[] | select(.id == "call-b") | .links == "http://localhost:4387/session/b")' "$home/snapshot.json" >/dev/null || fail "completion persisted a sibling page"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "ownership composition failed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "ownership rendering failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "ownership renderer failed"
+    jq -e '(.cards[].blocs[].decisions[] | select(.key == "call-a") | .pageHref == null and .page == "pas de page dédiée")
+      and (.cards[].blocs[].decisions[] | select(.key == "call-b") | .pageHref == "http://localhost:4387/session/b")' "$home/rendered.json" >/dev/null || fail "completion opened a sibling page ($page)"
+  done
+  pass "partial completion leaves an unassociated call without a page through cleanup"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
+  test_partial_completion_leaves_unowned_calls_without_pages
   test_completion_scopes_pages_to_each_call
   test_completion_promotes_only_associated_status_pages
   test_completion_preserves_review_pages_after_status_cleanup
@@ -3270,6 +3298,7 @@ if [ "${1:-}" = --completion-pages ]; then
   exit 0
 fi
 
+test_partial_completion_leaves_unowned_calls_without_pages
 test_completion_scopes_pages_to_each_call
 test_completion_promotes_only_associated_status_pages
 test_completion_preserves_review_pages_after_status_cleanup

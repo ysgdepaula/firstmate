@@ -3129,7 +3129,58 @@ test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_co
   pass "a missing remote ledger stays explicitly unreadable without remote summary computation"
 }
 
+test_status_pages_respect_call_ownership() {
+  local home mate target fakebin owner prefix page
+  for owner in main mate; do
+    home=$(make_home "ownership-$owner")
+    write_fixture "$home"
+    mate=$(fixture_mate_home "$home")
+    fakebin=$(make_fakebin "$home")
+    target=$home
+    prefix=''
+    if [ "$owner" = mate ]; then target=$mate; prefix='mate/'; fi
+    cat > "$target/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] call-a - Choisir A (repo: firstmate) (hold: choisir) (hold-kind: captain)
+- [ ] call-b - Choisir B (repo: firstmate) (hold: http://localhost:4387/session/b) (hold-kind: captain)
+  Origin: call-a
+- [ ] only-call - Choisir seul (repo: firstmate) (hold: choisir) (hold-kind: captain)
+
+## Done
+EOF
+    fm_write_meta "$target/state/call-a.meta" "window=firstmate:fm-call-a" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
+    fm_write_meta "$target/state/only-call.meta" "window=firstmate:fm-only-call" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
+    printf 'done: http://localhost:4387/session/b\n' > "$target/state/call-a.status"
+    printf 'done: http://localhost:4387/session/only\n' > "$target/state/only-call.status"
+    cat > "$home/config/projets.json" <<'EOF'
+{"schema":"fm-projets-config.v1","projects":[{"id":"firstmate","name":"Exemple","brain":true,"repos":["firstmate"]}]}
+EOF
+    run "$home" "$fakebin" --json --all-decisions > "$home/bearings.json" || fail "ownership projection failed ($owner)"
+    if [ "$owner" = mate ]; then
+      jq -e '(.decisions_open[] | select(.id == "call-a") | .links == [])
+        and (.queued[] | select(.id == "call-a") | .links == [])
+        and (.decisions_open[] | select(.id == "call-b") | .links == ["http://localhost:4387/session/b"])
+        and (.decisions_open[] | select(.id == "only-call") | .links == ["http://localhost:4387/session/only"])' "$mate/state/home-summary.json" >/dev/null || fail "fleet summary crossed call ownership"
+    fi
+    jq -e --arg prefix "$prefix" '(.decisions_open[] | select(.id == $prefix + "call-a") | .links == "")
+      and (.decisions_open[] | select(.id == $prefix + "call-b") | .links == "http://localhost:4387/session/b")
+      and (.decisions_open[] | select(.id == $prefix + "only-call") | .links == "http://localhost:4387/session/only")' "$home/bearings.json" >/dev/null || fail "bearings crossed call ownership ($owner)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/bearings.json" --no-quota > "$home/page.json" || fail "ownership composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "ownership rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json" || fail "ownership renderer failed"
+      jq -e --arg prefix "${prefix//\//__}" '(.cards[].blocs[].decisions[] | select(.key == $prefix + "call-a") | .pageHref == null and .page == "pas de page dédiée")
+        and (.cards[].blocs[].decisions[] | select(.key == $prefix + "call-b") | .pageHref == "http://localhost:4387/session/b")
+        and (.cards[].blocs[].decisions[] | select(.key == $prefix + "only-call") | .pageHref == "http://localhost:4387/session/only")' "$home/rendered.json" >/dev/null || fail "snapshot opened a sibling page ($owner, $page)"
+    done
+    pass "$owner status-page join preserves call ownership and single-call pages"
+  done
+}
+
 if [ "${1:-}" = --captain-links ]; then
+  test_status_pages_respect_call_ownership
   test_a_captain_call_carries_its_recorded_links_and_date
   test_secondmate_call_links_survive_summary_truncation
   test_secondmate_status_pages_and_dates_reach_the_board
@@ -3184,6 +3235,7 @@ test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
+test_status_pages_respect_call_ownership
 test_a_captain_call_carries_its_recorded_links_and_date
 test_secondmate_call_links_survive_summary_truncation
 test_secondmate_status_pages_and_dates_reach_the_board
