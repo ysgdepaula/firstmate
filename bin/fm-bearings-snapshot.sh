@@ -164,9 +164,11 @@ Raise FM_BEARINGS_PR_LIMIT to expand per-repository open-PR results.
 decisions_open carries, per held captain call, the date it was put to the captain
   (since, YYYY-MM-DD, from hold_set with since as fallback, null when absent)
   and links: space-separated URL candidates, or the empty string when absent.
-  The hold reason precedes the rest of the backlog row, then the task's status
-  candidates follow. bin/fm-call-links.jq owns extraction and status ordering;
-  consumers decide which candidate they can use.
+  Candidates come only from the call's own task status and backlog links, never
+  an origin's or sibling call's status. The call's status candidates come first,
+  newest line first, followed by its hold reason and remaining backlog links as
+  fallbacks. This precedence also applies to secondmate-home summaries.
+  bin/fm-call-links.jq owns extraction; consumers decide candidate eligibility.
 EOF
 }
 
