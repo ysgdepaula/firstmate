@@ -1032,7 +1032,7 @@ EOF
   mkdir -p "$home/at-close"
   cat > "$home/fakebin/tasks-axi" <<'EOF'
 #!/usr/bin/env bash
-if [ "${1:-}" = done ] && [ "${2:-}" = sample-interrupted-call ] \
+if [ "${1:-}" = "done" ] && [ "${2:-}" = sample-interrupted-call ] \
   && [ ! -e "$FM_HOME/close-failed-once" ]; then
   cp "$FM_HOME/data/backlog.md" "$FM_HOME/at-close/backlog.md" || exit 93
   : > "$FM_HOME/close-failed-once"
@@ -1041,7 +1041,7 @@ fi
 if [ "${1:-}" = update ] && [ "${2:-}" = sample-interrupted-call ] \
   && [ ! -e "$FM_HOME/normalize-failed-once" ]; then
   state=$("$REAL_TASKS_AXI" show "$2" --full | sed -n 's/^  state: //p' | head -1)
-  if [ "$state" = done ]; then
+  if [ "$state" = "done" ]; then
     : > "$FM_HOME/normalize-failed-once"
     exit 94
   fi
@@ -3007,7 +3007,7 @@ read -r _
 fm_lock_acquire_wait_bounded "$meta_lock" 3
 printf 'decision_keys=retained-call\n' >> "$meta"
 SH
-  python3 - "$ROOT" "$home" "$id" "$TASKS_AXI_BIN" <<'PYLOCK'
+  python3 - "$ROOT" "$home" "$id" "$TASKS_AXI_BIN" <<'PYLOCK' || fail "completion and cleanup did not obey the shared lock order"
 import os
 from pathlib import Path
 import signal
@@ -3045,7 +3045,6 @@ finally:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
 PYLOCK
-  [ "$?" = 0 ] || fail "completion and cleanup did not obey the shared lock order"
   run_captain "$home" verify "$id" >/dev/null || fail "concurrent completion inventory is not valid"
   assert_grep 'decision_keys=retained-call,sample-locks' "$home/state/$id.meta" "completion lost the inventory written while waiting"
   pass "completion permits control-then-metadata cleanup and rereads concurrent inventory"
@@ -3136,7 +3135,7 @@ test_completion_preserves_hold_title_identity() {
   local home id version title page before after
   for title in 'Choisir la suite' 'Choisir la suite http://localhost:4387/session/draft'; do
     home=$(make_home "title-retry-${#title}")
-    id=title-review
+    id="title-review"
     write_origin_meta "$home" "$id"
     run_captain "$home" hold "$id" --title "$title" --reason choisir --repo sample >/dev/null || fail "could not create titled hold"
     before=$(tasks_in "$home" show "$id" --full | sed -n '/^  title: /p')

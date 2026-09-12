@@ -1634,7 +1634,7 @@ command_complete() {
           ' "$status_file") || fail "cannot collect recorded pages for $origin"
         fi
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
-        if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
+        if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
           updated_reason=$(merge_review_pages "$reason" "" "$page_urls") \
             || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
