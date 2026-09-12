@@ -410,10 +410,8 @@ __FM_PROJETS_BOARD_DATA__
         b.type = "button";
         b.setAttribute("data-choice", o.value);
         b.addEventListener("click", function () {
-          /* Le bouton ENVOIE a firstmate ; rien n'agit depuis la page. Le
-             contexte porte projet/decision/choix, jamais le couple
-             question/answer que l'entree a cle lit : un clic ne peut pas
-             fermer une decision, firstmate repose la question en chat. */
+          /* Un clic ne ferme rien : firstmate repose la question en chat avant d'agir.
+             L'en-tete de bin/fm-projets-board.sh definit le contexte transmis et son exclusion de l'entree a cle. */
           var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
           if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
           if (!window.lavish || typeof window.lavish.queuePrompt !== "function" || typeof window.lavish.sendQueuedPrompts !== "function") {

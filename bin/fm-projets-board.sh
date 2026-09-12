@@ -117,7 +117,7 @@
 # pas si c'est deja fait", and its fallback affirmative is the captain's own
 # declaration "je l'ai fait", followed by "pas encore / on en parle", never a
 # claim firstmate makes. A table entry with nonempty options keeps them verbatim;
-# only a decision entry then omits `ask`, while an "etat" entry retains its
+# only a decision entry then sets `ask` to null, while an "etat" entry retains its
 # admission. Without configured options, a decision's `ask` is "on le fait, ou
 # on ne le fait pas ?". The composer emits both fields; older payloads may omit
 # them, and a click without `nature` sends "decision". The validator requires a
