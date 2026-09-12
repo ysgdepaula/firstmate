@@ -1,25 +1,18 @@
 {
   "schema": "fm-bearings.v1",
-  "home": "test/home",
+  "home": "test",
   "generated": "2026-09-12T10:00:00Z",
-  "prs": "not_requested",
   "in_flight": [],
   "secondmates": [],
-  "secondmate_reconcile": [],
-  "landed": [],
-  "gates": [],
-  "reports": [],
-  "recorded_prs": [],
-  "omitted": [],
   "decisions_open": [
     {
       "id": "torre-relance",
       "key": "torre-relance",
       "verb": "captain-hold",
-      "title": "Relancer le fournisseur de la boutique pilote",
-      "summary": "Relancer le fournisseur de la boutique pilote",
+      "title": "Relancer le fournisseur avant le pilote",
+      "summary": "Relancer le fournisseur avant le pilote",
       "owner": "(main)",
-      "repo": "boutique"
+      "repo": "torre"
     },
     {
       "id": "torre-domaine",
@@ -28,7 +21,7 @@
       "title": "Le domaine de la boutique est basculé ?",
       "summary": "Le domaine de la boutique est basculé ?",
       "owner": "(main)",
-      "repo": "boutique"
+      "repo": "torre"
     },
     {
       "id": "torre-hebergement",
@@ -37,16 +30,12 @@
       "title": "Hébergement : chez toi ou chez Torre ?",
       "summary": "Hébergement : chez toi ou chez Torre ?",
       "owner": "(main)",
-      "repo": "boutique"
-    },
-    {
-      "id": "torre-commande",
-      "key": "torre-commande",
-      "verb": "captain-hold",
-      "title": "La commande de matériel est passée ?",
-      "summary": "La commande de matériel est passée ?",
-      "owner": "(main)",
-      "repo": "boutique"
+      "repo": "torre"
     }
-  ]
+  ],
+  "landed": [],
+  "gates": [],
+  "reports": [],
+  "recorded_prs": [],
+  "omitted": []
 }

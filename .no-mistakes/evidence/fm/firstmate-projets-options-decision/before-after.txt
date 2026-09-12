@@ -1,0 +1,19 @@
+Same fleet and correspondence table, before and after the fix.
+BASE | Relancer le fournisseur avant le pilote
+  (no explanation)
+  c’est fait / on en parle / plus tard
+BASE | Le domaine de la boutique est basculé ?
+  (no explanation)
+  c’est fait / on en parle / plus tard
+BASE | Hébergement : chez toi ou chez Torre ?
+  (no explanation)
+  chez toi / chez Torre
+TARGET | Relancer le fournisseur avant le pilote
+  on le fait, ou on ne le fait pas ?
+  on y va / on ne le fait pas / pas maintenant / on en parle
+TARGET | Le domaine de la boutique est basculé ?
+  je ne sais pas si c’est déjà fait
+  je l’ai fait / pas encore / on en parle
+TARGET | Hébergement : chez toi ou chez Torre ?
+  (no explanation)
+  chez toi / chez Torre

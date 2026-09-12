@@ -12,7 +12,6 @@
           "nature": "etat"
         },
         "torre-hebergement": {
-          "question": "Hébergement : chez toi ou chez Torre ?",
           "options": [
             {
               "value": "chez-toi",
@@ -21,19 +20,6 @@
             {
               "value": "chez-torre",
               "label": "chez Torre"
-            }
-          ]
-        },
-        "torre-commande": {
-          "nature": "etat",
-          "options": [
-            {
-              "value": "commandee",
-              "label": "je l’ai commandé"
-            },
-            {
-              "value": "pas-encore",
-              "label": "pas encore"
             }
           ]
         }

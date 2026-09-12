@@ -1,0 +1,63 @@
+{
+  "adapter": "Local test adapter captures real renderer queuePrompt/sendQueuedPrompts calls; no live supervisor messages sent.",
+  "visible": [
+    {
+      "key": "torre-relance",
+      "nature": "decision",
+      "text": "Relancer le fournisseur avant le pilote\non le fait, ou on ne le fait pas ?\non y va\non ne le fait pas\npas maintenant\non en parle",
+      "buttons": [
+        "on y va",
+        "on ne le fait pas",
+        "pas maintenant",
+        "on en parle"
+      ]
+    },
+    {
+      "key": "torre-domaine",
+      "nature": "etat",
+      "text": "Le domaine de la boutique est basculé ?\nje ne sais pas si c’est déjà fait\nje l’ai fait\npas encore\non en parle",
+      "buttons": [
+        "je l’ai fait",
+        "pas encore",
+        "on en parle"
+      ]
+    },
+    {
+      "key": "torre-hebergement",
+      "nature": "decision",
+      "text": "Hébergement : chez toi ou chez Torre ?\nchez toi\nchez Torre",
+      "buttons": [
+        "chez toi",
+        "chez Torre"
+      ]
+    }
+  ],
+  "sent": [
+    {
+      "text": "Projets · Torre · Relancer le fournisseur avant le pilote : on ne le fait pas",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-relance",
+        "choix": "on-ne-le-fait-pas",
+        "nature": "decision"
+      }
+    },
+    {
+      "text": "Projets · Torre · Le domaine de la boutique est basculé ? : pas encore",
+      "data": {
+        "projet": "torre",
+        "decision": "torre-domaine",
+        "choix": "pas-encore",
+        "nature": "etat"
+      }
+    }
+  ],
+  "statuses": [
+    "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir.",
+    "envoyé à firstmate : pas encore. Firstmate te reposera la question en chat avant d'agir.",
+    ""
+  ],
+  "cardsRemain": 3,
+  "phoneWidth": 390,
+  "phoneScrollWidth": 390
+}
