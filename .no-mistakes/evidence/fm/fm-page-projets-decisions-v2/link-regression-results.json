@@ -1,0 +1,77 @@
+[
+  {
+    "path": "main",
+    "interface": [
+      "fm-bearings-snapshot.sh",
+      "--json",
+      "--all-decisions"
+    ],
+    "without_newest_status_fix": {
+      "id": "club-rose",
+      "key": "club-rose",
+      "verb": "captain-hold",
+      "summary": "Les quatre arbitrages du rosé Anglades: http://localhost:4387/session/draft choisir",
+      "title": "Les quatre arbitrages du rosé Anglades",
+      "owner": "(main)",
+      "repo": "sample",
+      "since": "2026-09-12",
+      "links": "http://localhost:4387/session/draft http://localhost:4387/session/final"
+    },
+    "with_fix": {
+      "id": "club-rose",
+      "key": "club-rose",
+      "verb": "captain-hold",
+      "summary": "Les quatre arbitrages du rosé Anglades: http://localhost:4387/session/draft choisir",
+      "title": "Les quatre arbitrages du rosé Anglades",
+      "owner": "(main)",
+      "repo": "sample",
+      "since": "2026-09-12",
+      "links": "http://localhost:4387/session/final http://localhost:4387/session/draft"
+    },
+    "restored_result_identical": true
+  },
+  {
+    "path": "secondmate",
+    "interface": [
+      "fm-fleet-snapshot.sh",
+      "--secondmate-home-summary"
+    ],
+    "without_newest_status_fix": {
+      "id": "club-rose",
+      "repo": "sample",
+      "key": "club-rose",
+      "verb": "captain-hold",
+      "summary": "Les quatre arbitrages du rosé Anglades",
+      "reason": "http://localhost:4387/session/draft choisir",
+      "links": [
+        "http://localhost:4387/session/draft",
+        "http://localhost:4387/session/final"
+      ],
+      "hold_set": "2026-09-12T11:30:54Z",
+      "since": "2026-09-12",
+      "hold_until": null,
+      "hold_bucket": "live",
+      "hold_age_days": 0,
+      "source": "backlog"
+    },
+    "with_fix": {
+      "id": "club-rose",
+      "repo": "sample",
+      "key": "club-rose",
+      "verb": "captain-hold",
+      "summary": "Les quatre arbitrages du rosé Anglades",
+      "reason": "http://localhost:4387/session/draft choisir",
+      "links": [
+        "http://localhost:4387/session/final",
+        "http://localhost:4387/session/draft"
+      ],
+      "hold_set": "2026-09-12T11:30:54Z",
+      "since": "2026-09-12",
+      "hold_until": null,
+      "hold_bucket": "live",
+      "hold_age_days": 0,
+      "source": "backlog"
+    },
+    "restored_result_identical": true
+  }
+]

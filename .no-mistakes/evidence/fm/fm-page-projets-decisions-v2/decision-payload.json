@@ -1,0 +1,229 @@
+{
+  "schema": "fm-projets-board.v1",
+  "home": "manual/home",
+  "generated": "2026-09-12T11:31:14Z",
+  "updated_label": "12/09 11h31",
+  "badges": {
+    "workers": 0,
+    "decisions": 4,
+    "subscriptions": null
+  },
+  "projects": [
+    {
+      "id": "club",
+      "name": "Club",
+      "brain": false,
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "scouts": [
+        {
+          "id": "club-origine",
+          "result": "origine",
+          "status": "état inconnu",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "club-origine"
+        },
+        {
+          "id": "club-rose",
+          "result": "Les quatre arbitrages du rosé Anglades",
+          "status": "état inconnu",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "club-rose"
+        }
+      ],
+      "missing_from_you": [
+        {
+          "key": "club-rose",
+          "question": "Les quatre arbitrages du rosé Anglades",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": {
+            "url": "http://localhost:4387/session/final"
+          },
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-rose"
+        },
+        {
+          "key": "club-audit",
+          "question": "Audit de Chef : six questions",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": {
+            "url": "http://localhost:4387/session/final"
+          },
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-audit"
+        },
+        {
+          "key": "club-sans-page",
+          "question": "Choisir la suite",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": null,
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-sans-page"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "creations": [],
+      "unlinked": [],
+      "quick_wins": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer",
+        "3 questions sans choix fermés : la page propose les choix par défaut"
+      ]
+    },
+    {
+      "id": "cerveau",
+      "name": "Cerveau",
+      "brain": true,
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "scouts": [],
+      "missing_from_you": [
+        {
+          "key": "hors-projet",
+          "question": "Une question à rattacher",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": null,
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "hors-projet"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "creations": [],
+      "unlinked": [],
+      "quick_wins": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "aucune page du cerveau enregistrée",
+        "aucune recommandation enregistrée pour le cerveau",
+        "aucun quick win enregistré pour le cerveau",
+        "coûts à mesurer",
+        "1 question sans choix fermés : la page propose les choix par défaut"
+      ]
+    }
+  ],
+  "unassigned": [],
+  "warnings": [],
+  "table_missing": false
+}

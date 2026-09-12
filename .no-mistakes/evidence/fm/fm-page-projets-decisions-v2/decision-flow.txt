@@ -1,0 +1,356 @@
+$ fm-captain-hold.sh hold club-rose --title Les quatre arbitrages du rosé Anglades --reason choisir --repo sample
+club-rose
+
+$ fm-captain-hold.sh hold club-audit --title Audit de Chef : six questions --reason voir http://localhost:4387/session/final --repo sample --origin club-origine
+club-audit
+
+$ fm-captain-hold.sh hold club-sans-page --title Choisir la suite --reason choisir --repo sample --origin club-origine
+club-sans-page
+
+$ fm-captain-hold.sh hold hors-projet --title Une question à rattacher --reason choisir
+hors-projet
+
+$ fm-captain-hold.sh complete club-rose club-rose
+complete: club-rose captain-call inventory reviewed (club-rose)
+
+$ fm-bearings-snapshot.sh --json --all-decisions
+{
+  "schema": "fm-bearings.v1",
+  "home": "manual/home",
+  "generated": "2026-09-12T11:31:13Z",
+  "prs": "not_requested (run: /bearings include PRs)",
+  "events": [],
+  "in_flight": [
+    {
+      "id": "club-origine",
+      "kind": "scout",
+      "state": "unknown",
+      "repo": "/Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/projects/sample",
+      "title": null,
+      "doing": "worktree gone (torn down?)"
+    },
+    {
+      "id": "club-rose",
+      "kind": "scout",
+      "state": "unknown",
+      "repo": "sample",
+      "title": "Les quatre arbitrages du rosé Anglades",
+      "doing": "worktree gone (torn down?)"
+    }
+  ],
+  "secondmates": [],
+  "secondmate_reconcile": [],
+  "decisions_open": [
+    {
+      "id": "club-rose",
+      "key": "club-rose",
+      "verb": "captain-hold",
+      "summary": "Les quatre arbitrages du rosé Anglades: http://localhost:4387/session/draft choisir",
+      "title": "Les quatre arbitrages du rosé Anglades",
+      "owner": "(main)",
+      "repo": "sample",
+      "since": "2026-09-12",
+      "links": "http://localhost:4387/session/final http://localhost:4387/session/draft"
+    },
+    {
+      "id": "club-audit",
+      "key": "club-audit",
+      "verb": "captain-hold",
+      "summary": "Audit de Chef : six questions: voir http://localhost:4387/session/final",
+      "title": "Audit de Chef : six questions",
+      "owner": "(main)",
+      "repo": "sample",
+      "since": "2026-09-12",
+      "links": "http://localhost:4387/session/final"
+    },
+    {
+      "id": "club-sans-page",
+      "key": "club-sans-page",
+      "verb": "captain-hold",
+      "summary": "Choisir la suite: choisir",
+      "title": "Choisir la suite",
+      "owner": "(main)",
+      "repo": "sample",
+      "since": "2026-09-12",
+      "links": ""
+    },
+    {
+      "id": "hors-projet",
+      "key": "hors-projet",
+      "verb": "captain-hold",
+      "summary": "Une question à rattacher: choisir",
+      "title": "Une question à rattacher",
+      "owner": "(main)",
+      "repo": "firstmate",
+      "since": "2026-09-12",
+      "links": ""
+    }
+  ],
+  "landed": [],
+  "gates": [],
+  "reports": [],
+  "recorded_prs": [],
+  "omitted": [
+    {
+      "surface": "backlog item bodies",
+      "reveal": "--fields bodies"
+    },
+    {
+      "surface": "task paths",
+      "reveal": "--fields paths"
+    },
+    {
+      "surface": "watch/steer actions",
+      "reveal": "--fields actions"
+    },
+    {
+      "surface": "healthy endpoint detail",
+      "reveal": "--fields endpoints"
+    },
+    {
+      "surface": "full scout-report inventory",
+      "reveal": "--all-reports"
+    },
+    {
+      "surface": "live PR discovery + checks",
+      "reveal": "--include-prs"
+    }
+  ]
+}
+
+$ fm-projets-board.sh compose --snapshot /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/snapshot.json --no-quota
+{
+  "schema": "fm-projets-board.v1",
+  "home": "manual/home",
+  "generated": "2026-09-12T11:31:14Z",
+  "updated_label": "12/09 11h31",
+  "badges": {
+    "workers": 0,
+    "decisions": 4,
+    "subscriptions": null
+  },
+  "projects": [
+    {
+      "id": "club",
+      "name": "Club",
+      "brain": false,
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "scouts": [
+        {
+          "id": "club-origine",
+          "result": "origine",
+          "status": "état inconnu",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "club-origine"
+        },
+        {
+          "id": "club-rose",
+          "result": "Les quatre arbitrages du rosé Anglades",
+          "status": "état inconnu",
+          "next": null,
+          "url": null,
+          "owner": "(main)",
+          "local_id": "club-rose"
+        }
+      ],
+      "missing_from_you": [
+        {
+          "key": "club-rose",
+          "question": "Les quatre arbitrages du rosé Anglades",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": {
+            "url": "http://localhost:4387/session/final"
+          },
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-rose"
+        },
+        {
+          "key": "club-audit",
+          "question": "Audit de Chef : six questions",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": {
+            "url": "http://localhost:4387/session/final"
+          },
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-audit"
+        },
+        {
+          "key": "club-sans-page",
+          "question": "Choisir la suite",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": null,
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "club-sans-page"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "creations": [],
+      "unlinked": [],
+      "quick_wins": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "prochaine échéance non enregistrée",
+        "équipe non enregistrée",
+        "aucune page de gestion enregistrée",
+        "aucune attente des autres enregistrée",
+        "aucune réunion enregistrée, agenda non connecté",
+        "coûts à mesurer",
+        "3 questions sans choix fermés : la page propose les choix par défaut"
+      ]
+    },
+    {
+      "id": "cerveau",
+      "name": "Cerveau",
+      "brain": true,
+      "headline": null,
+      "team": null,
+      "deadline": null,
+      "partial": false,
+      "meetings": [],
+      "agenda_available": false,
+      "meeting_warning": "Agenda non lu : fichier absent ou vieux de plus d’un jour",
+      "doing": [],
+      "scouts": [],
+      "missing_from_you": [
+        {
+          "key": "hors-projet",
+          "question": "Une question à rattacher",
+          "nature": "decision",
+          "ask": "on le fait, ou on ne le fait pas ?",
+          "options": [
+            {
+              "value": "on-y-va",
+              "label": "on y va"
+            },
+            {
+              "value": "on-ne-le-fait-pas",
+              "label": "on ne le fait pas"
+            },
+            {
+              "value": "pas-maintenant",
+              "label": "pas maintenant"
+            },
+            {
+              "value": "on-en-parle",
+              "label": "on en parle"
+            }
+          ],
+          "url": null,
+          "page": null,
+          "since": "2026-09-12",
+          "owner": "(main)",
+          "local_id": "hors-projet"
+        }
+      ],
+      "missing_from_others": [],
+      "pages": [],
+      "creations": [],
+      "unlinked": [],
+      "quick_wins": [],
+      "costs": {
+        "period": "septembre",
+        "tokens_api": null,
+        "subscription_share": null,
+        "source": "Claude : journaux non mesurés · Codex : journaux non lus"
+      },
+      "journal": [],
+      "meeting": null,
+      "gaps": [
+        "aucune page du cerveau enregistrée",
+        "aucune recommandation enregistrée pour le cerveau",
+        "aucun quick win enregistré pour le cerveau",
+        "coûts à mesurer",
+        "1 question sans choix fermés : la page propose les choix par défaut"
+      ]
+    }
+  ],
+  "unassigned": [],
+  "warnings": [],
+  "table_missing": false
+}
+
+$ fm-projets-board.sh render --page projets /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/payload.json
+board: /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/.lavish/projets.html
+
+$ fm-projets-board.sh render --page a-valider /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/payload.json
+board: /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AHYGDWFP4QQX2P2NXZP0HJ/.test-tmp/manual/home/.lavish/a-valider.html

@@ -1,0 +1,163 @@
+{
+  "setup": "Real generated pages in Chrome; Lavish queue API instrumented in-memory. No live session or message sent.",
+  "results": [
+    {
+      "page": "projets",
+      "viewportChecks": [
+        1440,
+        390
+      ],
+      "before": {
+        "title": "Projets",
+        "rows": [
+          {
+            "key": "club-rose",
+            "page": "ouvrir la page",
+            "url": "http://localhost:4387/session/final"
+          },
+          {
+            "key": "club-audit",
+            "page": "ouvrir la page",
+            "url": "http://localhost:4387/session/final"
+          },
+          {
+            "key": "club-sans-page",
+            "page": "pas de page dédiée",
+            "url": null
+          },
+          {
+            "key": "hors-projet",
+            "page": "pas de page dédiée",
+            "url": null
+          }
+        ]
+      },
+      "queue": [
+        {
+          "prompt": "Projets · Club · Les quatre arbitrages du rosé Anglades : on y va",
+          "tag": "choice",
+          "queueKey": "projets:club:club-rose",
+          "data": {
+            "projet": "club",
+            "decision": "club-rose",
+            "choix": "on-y-va",
+            "nature": "decision"
+          }
+        },
+        {
+          "prompt": "Projets · Club · Audit de Chef : six questions : pas maintenant",
+          "tag": "choice",
+          "queueKey": "projets:club:club-audit",
+          "data": {
+            "projet": "club",
+            "decision": "club-audit",
+            "choix": "pas-maintenant",
+            "nature": "decision"
+          }
+        },
+        {
+          "prompt": "Projets · Club · créer une page Lavish pour : Les quatre arbitrages du rosé Anglades ; Audit de Chef : six questions",
+          "tag": "create-lavish",
+          "queueKey": "projets:create-lavish:club",
+          "data": {
+            "projet": "club",
+            "decisions": [
+              "club-rose",
+              "club-audit"
+            ],
+            "titres": [
+              "Les quatre arbitrages du rosé Anglades",
+              "Audit de Chef : six questions"
+            ]
+          }
+        }
+      ],
+      "sendCalls": 0,
+      "pendingRows": 4,
+      "messages": [
+        "en file : on y va. Rien n'est envoyé tant que tu n'envoies pas la file depuis Lavish, et rien n'est clos tant que firstmate ne te l'a pas reconfirmé en chat.",
+        "en file : pas maintenant. Rien n'est envoyé tant que tu n'envoies pas la file depuis Lavish, et rien n'est clos tant que firstmate ne te l'a pas reconfirmé en chat.",
+        "demande en file pour 2 décisions. Rien n'est fabriqué tant que tu n'envoies pas la file depuis Lavish, et firstmate te reposera la question en chat avant de lancer le travail."
+      ]
+    },
+    {
+      "page": "a-valider",
+      "viewportChecks": [
+        1440,
+        390
+      ],
+      "before": {
+        "title": "À valider",
+        "rows": [
+          {
+            "key": "club-rose",
+            "page": "ouvrir la page",
+            "url": "http://localhost:4387/session/final"
+          },
+          {
+            "key": "club-audit",
+            "page": "ouvrir la page",
+            "url": "http://localhost:4387/session/final"
+          },
+          {
+            "key": "club-sans-page",
+            "page": "pas de page dédiée",
+            "url": null
+          },
+          {
+            "key": "hors-projet",
+            "page": "pas de page dédiée",
+            "url": null
+          }
+        ]
+      },
+      "queue": [
+        {
+          "prompt": "Projets · Club · Les quatre arbitrages du rosé Anglades : on y va",
+          "tag": "choice",
+          "queueKey": "projets:club:club-rose",
+          "data": {
+            "projet": "club",
+            "decision": "club-rose",
+            "choix": "on-y-va",
+            "nature": "decision"
+          }
+        },
+        {
+          "prompt": "Projets · Club · Audit de Chef : six questions : pas maintenant",
+          "tag": "choice",
+          "queueKey": "projets:club:club-audit",
+          "data": {
+            "projet": "club",
+            "decision": "club-audit",
+            "choix": "pas-maintenant",
+            "nature": "decision"
+          }
+        },
+        {
+          "prompt": "Projets · Club · créer une page Lavish pour : Les quatre arbitrages du rosé Anglades ; Audit de Chef : six questions",
+          "tag": "create-lavish",
+          "queueKey": "projets:create-lavish:club",
+          "data": {
+            "projet": "club",
+            "decisions": [
+              "club-rose",
+              "club-audit"
+            ],
+            "titres": [
+              "Les quatre arbitrages du rosé Anglades",
+              "Audit de Chef : six questions"
+            ]
+          }
+        }
+      ],
+      "sendCalls": 0,
+      "pendingRows": 4,
+      "messages": [
+        "en file : on y va. Rien n'est envoyé tant que tu n'envoies pas la file depuis Lavish, et rien n'est clos tant que firstmate ne te l'a pas reconfirmé en chat.",
+        "en file : pas maintenant. Rien n'est envoyé tant que tu n'envoies pas la file depuis Lavish, et rien n'est clos tant que firstmate ne te l'a pas reconfirmé en chat.",
+        "demande en file pour 2 décisions. Rien n'est fabriqué tant que tu n'envoies pas la file depuis Lavish, et firstmate te reposera la question en chat avant de lancer le travail."
+      ]
+    }
+  ]
+}
