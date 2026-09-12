@@ -242,7 +242,10 @@ __FM_PROJETS_DECISIONS_JS__
 
   var main = document.getElementById("pj-main");
   if (!projects.length) {
-    main.appendChild(el("p", "empty", "Rien n'attend de toi en ce moment."));
+    var partial = (data.warnings && data.warnings.length) || data.projects.some(function (p) { return p.partial; });
+    main.appendChild(el("p", "empty", partial
+      ? "État partiel : impossible de confirmer si quelque chose attend ta réponse."
+      : "Rien n'attend de toi en ce moment."));
   }
   projects.forEach(function (p) {
     var c = el("section", "card");

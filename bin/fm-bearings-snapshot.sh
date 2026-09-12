@@ -393,7 +393,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
     | if $note == null then $base else ($note + ": " + $base) end;
   # Every URL one held captain call has on record, best first: the ones written
   # on its backlog row (the hold reason among them) and then the ones in the
-  # latest recorded status line of that same task. Candidates only, with no
+  # recorded status lines of that same task. Candidates only, with no
   # policy about what they point at: each consumer decides which link it uses.
   def call_links($row_links; $status_text):
     call_link_candidates($row_links; $status_text) | join(" ");
@@ -511,8 +511,8 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
          | {id,key:.id,verb:"captain-hold",
             summary:hold_summary(.title; .hold_reason),title:(.title // null),owner:"(main)",repo:(.repo // null),
             since:((.hold_set // .since) | hold_day),
-            links:call_links(.links;
-                             ([ $fleet_tasks[] | select(.id == $record.id) | .hints.last_event_text ] | .[0]))} ]
+            links:call_links((.links // []) +
+                             ([ $fleet_tasks[] | select(.id == $record.id) | .links[]? ]); null)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")

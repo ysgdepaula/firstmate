@@ -447,3 +447,21 @@ test_filled_blocks_render_their_content_and_gaps
 test_unassigned_rows_get_their_own_rail_entry
 test_a_narrow_screen_keeps_only_il_manque_de_toi_open
 test_unreadable_data_refuses_instead_of_showing_an_empty_fleet
+
+
+test_a_valider_empty_state_distinguishes_partial_collection() {
+  local home mode
+  home=$(make_home valider-partial)
+  render "$home" "[$(empty_project torre Torre)]" '{"workers":0,"decisions":0,"subscriptions":null}' '[]' page=a-valider > "$home/complete.json"
+  jq -e '.empty == "Rien n\u0027attend de toi en ce moment." and .error == ""' "$home/complete.json" >/dev/null || fail "complete empty collection was not confirmed"
+  cp "$home/payload.json" "$home/base.json"
+  for mode in warnings partial; do
+    jq --arg mode "$mode" 'if $mode == "warnings" then .projects = [] | .warnings = ["Collecte partielle"] else .projects[0].partial = true end' "$home/base.json" > "$home/payload.json"
+    FM_HOME="$home" "$BOARD" render "$home/payload.json" --page a-valider >/dev/null || fail "partial payload render failed"
+    node "$HARNESS" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+    jq -e '.empty == "État partiel : impossible de confirmer si quelque chose attend ta réponse." and .error == "" and .cards == []' "$home/rendered.json" >/dev/null || fail "partial collection claimed there were no decisions ($mode)"
+  done
+  pass "a valider distinguishes unknown decisions from a confirmed empty collection"
+}
+
+test_a_valider_empty_state_distinguishes_partial_collection

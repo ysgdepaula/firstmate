@@ -2944,6 +2944,45 @@ EOF
   pass "a purged pre-collapse call passes on the status close recorded under its composed key"
 }
 
+test_completion_preserves_review_pages_after_status_cleanup() {
+  local home id show before after page
+  home=$(make_home completion-pages)
+  id=sample-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold sample-page-call --title "Choisir la suite" --reason "choisir" --repo sample --origin "$id" --until 2026-12-31 >/dev/null || fail "could not hold review"
+  before=$(tasks_in "$home" show sample-page-call --full)
+  cat > "$home/state/$id.status" <<'EOF'
+paused: voir `http://localhost:4387/session/durable`.
+needs-decision [key=route]: choisir la suite
+EOF
+  run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion did not retain page"
+  assert_grep 'captain-held [key=route]: tracked by sample-page-call' "$home/state/$id.status" "completion did not record its transfer"
+  show=$(tasks_in "$home" show sample-page-call --full)
+  assert_contains "$show" "http://localhost:4387/session/durable" "held task lost its review page"
+  run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion retry failed"
+  after=$(tasks_in "$home" show sample-page-call --full)
+  [ "$show" = "$after" ] || fail "completion retry changed the held task"
+  assert_contains "$after" '2026-12-31' "completion lost the hold date"
+  [ "$(printf '%s\n' "$before" | sed -n '/Captain hold set:/p')" = "$(printf '%s\n' "$after" | sed -n '/Captain hold set:/p')" ] || fail "completion changed the hold timestamp"
+  rm "$home/state/$id.status" "$home/state/$id.meta"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "post-cleanup projection failed"
+  jq -e '.decisions_open[] | select(.id == "sample-page-call") | .links == "http://localhost:4387/session/durable"' "$home/snapshot.json" >/dev/null || fail "durable backlog links lost the page after cleanup"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "post-cleanup composition failed"
+  for page in projets a-valider; do
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "post-cleanup rendering failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "sample-page-call")
+      | .pageHref == "http://localhost:4387/session/durable" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "page link vanished after cleanup ($page)"
+  done
+  pass "completion retains review URLs in the held task across retries and status cleanup"
+}
+
+if [ "${1:-}" = --completion-pages ]; then
+  test_completion_preserves_review_pages_after_status_cleanup
+  exit 0
+fi
+
+test_completion_preserves_review_pages_after_status_cleanup
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes

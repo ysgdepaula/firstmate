@@ -1287,15 +1287,18 @@ EOF
       "window=firstmate:fm-$id" "endpoint_task_id=$id" \
       "worktree=$mate/projects/mate" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
   done
+  fm_write_meta "$home/state/newer-main.meta" \
+    "window=firstmate:fm-newer-main" "worktree=$home/projects/ship-wt" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  printf 'done: http://localhost:4387/session/newer-main\ncaptain-held [key=main]: tracked by newer-main\n' > "$home/state/newer-main.status"
   python3 - "$mate/state" <<'PYFIX'
 from pathlib import Path
 import sys
 state = Path(sys.argv[1])
 (state / 'older-live.status').write_text(
     'working: lecture\ndone: ' + 'contexte ' * 250 +
-    'https://example.test/document http://localhost:4387/session/older-live\n')
+    'https://example.test/document http://localhost:4387/session/older-live\ncaptain-held [key=live]: tracked by older-live\n')
 (state / 'older-deferred.status').write_text(
-    'paused: revue http://localhost:4387/session/older-deferred\n')
+    'paused: revue http://localhost:4387/session/older-deferred\ncaptain-held [key=deferred]: tracked by older-deferred\n')
 (state / 'clipped-status.status').write_text(
     'done: http://localhost:4387/session/incomplete… '
     'http://localhost:4387/session/incomplete... '
@@ -1331,6 +1334,7 @@ PYFIX
        | .page.url == "http://localhost:4387/session/older-live" and .since == "2026-07-01")
     and ($rows[] | select(.key == "mate__older-deferred")
        | .page.url == "http://localhost:4387/session/older-deferred" and .since == "2026-07-02")
+    and ($rows[] | select(.key == "newer-main") | .page.url == "http://localhost:4387/session/newer-main")
     and ($rows[] | select(.key == "mate__clipped-status") | .page == null)
   ' "$home/page.json" >/dev/null || fail "secondmate status-only review pages were not composed"
   for page in projets a-valider; do
@@ -1344,10 +1348,39 @@ PYFIX
                | .pageHref == "http://localhost:4387/session/older-live" and .page == "ouvrir la page")
           and (.[] | select(.key == "mate__older-deferred")
                | .pageHref == "http://localhost:4387/session/older-deferred" and .page == "ouvrir la page")
+          and (.[] | select(.key == "newer-main")
+               | .pageHref == "http://localhost:4387/session/newer-main" and .page == "ouvrir la page")
           and (.[] | select(.key == "mate__clipped-status") | .pageHref == null))
     ' "$home/rendered.json" >/dev/null || fail "secondmate review links or oldest-first order did not render ($page)"
   done
   pass "secondmate status-only review links render and older holds precede main-home calls"
+}
+
+test_page_candidates_strip_prose_delimiters() {
+  local home fakebin
+  home=$(make_home prose-links)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] row-page - Revue (repo: firstmate) (kind: captain) (hold: voir `http://localhost:4387/session/row`.) (hold-kind: captain)
+- [ ] status-page - Revue (repo: firstmate) (kind: captain) (hold: choisir) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$home/state/status-page.meta" "window=firstmate:fm-status-page" "worktree=$home/wt" "project=firstmate" "harness=echo" "kind=scout" "mode=scout"
+  cat > "$home/state/status-page.status" <<'EOF'
+done: revue `http://localhost:4387/session/status`, puis <http://localhost:4387/session/status>. [page](http://localhost:4387/session/status); 'http://localhost:4387/session/status' et http://localhost:4387/session/status! http://localhost:4387/session/cut…`.
+EOF
+  fakebin=$(make_fakebin "$home")
+  run "$home" "$fakebin" --json > "$home/snapshot.json" || fail "prose URL projection failed"
+  jq -e '(.decisions_open[] | select(.id == "row-page") | .links == "http://localhost:4387/session/row")
+    and (.decisions_open[] | select(.id == "status-page") | .links == "http://localhost:4387/session/status")' "$home/snapshot.json" >/dev/null || fail "candidate delimiters were retained"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "prose page composition failed"
+  FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "prose page rendering failed"
+  node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+  jq -e '[.cards[].blocs[].decisions[].pageHref] | sort == ["http://localhost:4387/session/row", "http://localhost:4387/session/status"]' "$home/rendered.json" >/dev/null || fail "rendered links retain prose punctuation"
+  pass "backlog and status URL delimiters never enter rendered page links"
 }
 
 test_undated_hold_phrasing_and_aging_projection() {
@@ -3100,6 +3133,7 @@ if [ "${1:-}" = --captain-links ]; then
   test_a_captain_call_carries_its_recorded_links_and_date
   test_secondmate_call_links_survive_summary_truncation
   test_secondmate_status_pages_and_dates_reach_the_board
+  test_page_candidates_strip_prose_delimiters
   exit 0
 fi
 
@@ -3153,6 +3187,7 @@ test_collapsed_captain_call_deferral_and_landed
 test_a_captain_call_carries_its_recorded_links_and_date
 test_secondmate_call_links_survive_summary_truncation
 test_secondmate_status_pages_and_dates_reach_the_board
+test_page_candidates_strip_prose_delimiters
 test_undated_hold_phrasing_and_aging_projection
 test_blocked_deferred_hold_has_concrete_disclosure
 test_revealed_deferred_holds_show_their_deferral_reason

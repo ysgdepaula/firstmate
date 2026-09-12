@@ -222,6 +222,7 @@ const notice = byId.get("pj-notice");
 
 process.stdout.write(JSON.stringify({
   error: errorText,
+  empty: main.children.find((n) => n.className === "empty")?.textContent ?? null,
   meta: (byId.get("pj-meta") || new Node("div")).textContent,
   notice: notice && !notice.hidden ? notice.textContent : null,
   badges, rail, cards, queued, calls,

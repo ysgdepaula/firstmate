@@ -1569,7 +1569,7 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  local attested_by_prefix=''
+  local attested_by_prefix='' page_urls='[]' show reason extra until
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1597,12 +1597,37 @@ command_complete() {
     previous=$(meta_value "$meta" decision_keys)
   fi
   keys=$(sorted_key_union "$previous" "$supplied")
+  status_file="$STATE/$origin.status"
+  if [ -n "$keys" ] && [ -f "$status_file" ]; then
+    page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
+      include "fm-call-links"; include "fm-projets-data";
+      call_link_candidates([]; .) | map(select(project_page_url))
+    ' "$status_file") || fail "cannot collect recorded pages for $origin"
+  fi
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
       verify_inventory_entry "$origin" "$entry"
       if [ "$CAPTAIN_RESOLVED_HOW" = migrated-prefix ]; then
         attested_by_prefix="${attested_by_prefix}${attested_by_prefix:+ }$entry=$CAPTAIN_RESOLVED_ID"
+      fi
+      if [ -n "$CAPTAIN_RESOLVED_ID" ] && [ "$page_urls" != '[]' ]; then
+        acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
+        show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
+        if [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
+          reason=$(show_field_value "$show" hold_reason)
+          extra=$(jq -L "$SCRIPT_DIR" -nr --arg reason "$reason" --argjson urls "$page_urls" '
+            include "fm-call-links";
+            ($urls - call_link_candidates([]; $reason)) | join(" ")
+          ') || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          if [ -n "$extra" ]; then
+            until=$(show_field_value "$show" hold_until)
+            tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$reason $extra" ${until:+--until "$until"} >/dev/null \
+              || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          fi
+        fi
+        fm_lock_release "$CAPTAIN_CONTROL_LOCK"
+        CAPTAIN_CONTROL_LOCK_HELD=0
       fi
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
