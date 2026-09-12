@@ -19,6 +19,8 @@ The shared action reads the live PR body and head through the GitHub API, so rer
 The workflow grants `pull-requests: read`; if the live lookup fails, the check fails closed instead of trusting the archived event.
 Inside an active run, return a stale-attestation failure to the outer executor that owns PR publication instead of starting a nested pipeline or changing the head-binding check.
 After each CI-fix push, that executor must refresh the existing PR attestation for the final head before rerunning compliance; rerunning while the live body still attests the previous head will fail again.
+If the live attestation already matches the current head but the failed run logged an older attestation, the outer executor must rerun that failed compliance check against the refreshed metadata.
+Refreshing the PR body does not change the conclusion of an already completed run.
 Repository file changes alone cannot repair stale PR metadata and advance the head again when committed.
 The executable recovery regression is `bin/fm-test-run.sh tests/fm-no-mistakes-required.test.sh`.
 

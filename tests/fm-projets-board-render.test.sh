@@ -119,7 +119,7 @@ test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
     and (.queued | length) == 1
     and .queued[0].tag == "choice"
     and (.queued[0].prompt | test("Torre") and test("Hébergement") and test("chez Torre"))
-    and .queued[0].data == {"projet": "torre", "decision": "torre-hebergement", "choix": "chez-torre"}
+    and .queued[0].data == {"projet": "torre", "decision": "torre-hebergement", "choix": "chez-torre", "nature": "decision"}
     and (.queued[0].data | has("question") | not) and (.queued[0].data | has("answer") | not)
     and .cards[0].blocs[1].decisions[0].sent == true and .cards[0].blocs[1].decisions[0].refused == false
     and (.cards[0].blocs[1].decisions[0].choices == ["chez-toi", "chez-torre"])
@@ -130,6 +130,28 @@ test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
   done
   pass "a choice button queues a prompt for firstmate and never a keyed answer that could close a task"
 }
+
+test_a_card_says_what_it_asks_and_admits_a_state_it_does_not_know() {
+  local home out projects
+  home=$(make_home natures)
+  projects=$(jq -n --argjson p "$(empty_project torre Torre)" '
+    [ ($p | .missing_from_you = [
+        {key: "torre-hebergement", question: "Hébergement : chez toi ou chez Torre ?", nature: "decision", ask: null,
+         options: [{value: "chez-toi", label: "chez toi"}, {value: "chez-torre", label: "chez Torre"}], url: null},
+        {key: "torre-relance", question: "relancer le fournisseur", nature: "decision", ask: "on le fait, ou on ne le fait pas ?",
+         options: [{value: "on-y-va", label: "on y va"}, {value: "on-ne-le-fait-pas", label: "on ne le fait pas"}], url: null},
+        {key: "torre-domaine", question: "Le domaine est basculé ?", nature: "etat", ask: "je ne sais pas si c\u2019est déjà fait",
+         options: [{value: "je-l-ai-fait", label: "je l\u2019ai fait"}, {value: "pas-encore", label: "pas encore"}], url: null}]) ]')
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":3,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '
+    (.cards[0].blocs[1].decisions | map({key, nature, ask})) == [
+      {key: "torre-hebergement", nature: "decision", ask: null},
+      {key: "torre-relance", nature: "decision", ask: "on le fait, ou on ne le fait pas ?"},
+      {key: "torre-domaine", nature: "etat", ask: "je ne sais pas si c\u2019est déjà fait"}]
+  ' >/dev/null || fail "the card did not show what it asks beside the question: $out"
+  pass "a card shows the question it asks, and a state it cannot establish says so on the page"
+}
+test_a_card_says_what_it_asks_and_admits_a_state_it_does_not_know
 
 test_filled_blocks_render_their_content_and_gaps() {
   local home out projects
