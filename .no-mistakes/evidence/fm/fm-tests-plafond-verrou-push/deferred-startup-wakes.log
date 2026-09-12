@@ -1,0 +1,9 @@
+
+inactive-reconcile-deferred
+1789215331	1	check	inactive-outcome:d19309b0445fc62d0590b0f5b35a8d7b	inactive terminal outcome awaiting captain presentation: child=slow-child state=done
+
+secondmate-slow-network
+1789215359	1	check	startup-network	check: startup-network: deferred startup network checks finished (done); read them with /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/tmp/fm-session-start-tests.MIPTge/secondmate-slow-network/root/bin/fm-startup-network.sh report
+
+secondmate-wake-once
+1789215382	1	check	startup-network	check: startup-network: deferred startup network checks finished (done); read them with /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/tmp/fm-session-start-tests.MIPTge/secondmate-wake-once/root/bin/fm-startup-network.sh report

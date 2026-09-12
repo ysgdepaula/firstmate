@@ -1,0 +1,17 @@
+Executable sequence: acquire; reentrant acquire; release; independent publication while original owner shell is alive.
+
+before fix (6024af4)
+first acquire returned
+reentrant acquire returned
+release returned; original owner shell is still alive
+fm-push-lock: another push or merge is in flight on this machine (pid 43496); waiting up to 1s before running printf
+fm-push-lock: gave up after 1s waiting for the machine push lock (held by pid 43496) before running printf; retry when that push or merge finishes, or raise --timeout
+exit=124
+
+target (4e1975b7)
+first acquire returned
+reentrant acquire returned
+release returned; original owner shell is still alive
+independent publication acquired without waiting
+original owner shell resumed after the independent publication
+exit=0

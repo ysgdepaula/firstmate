@@ -1,0 +1,39 @@
+Two independent repositories push through the real wrapper to a local bare Git remote. The first receive hook is held open until the second caller reports waiting.
+
+$ bin/fm-push-lock.sh -- git push <fixture-remote> HEAD:refs/heads/worker-a
+To /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/remote.git
+ * [new branch]      HEAD -> worker-a
+
+$ bin/fm-push-lock.sh --timeout 15 --label "second fixture push" -- git push <fixture-remote> HEAD:refs/heads/worker-b
+fm-push-lock: another push or merge is in flight on this machine (pid 36136); waiting up to 15s before second fixture push
+To /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/remote.git
+ * [new branch]      HEAD -> worker-b
+
+Receive-hook witness (asserted order):
+receive begin refs/heads/worker-a
+receive end refs/heads/worker-a
+receive begin refs/heads/worker-b
+receive end refs/heads/worker-b
+
+Persisted remote refs (verified against each publisher HEAD):
+e949c9e0cb1ec8136bc46c07b82e2104b2329331 refs/heads/worker-a
+eff302922e02a4f47e4827aed682cb4bf6e422af refs/heads/worker-b
+
+$ bin/fm-merge-local.sh fixture (while a publication holds the same lock)
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+fm-push-lock: another push or merge is in flight on this machine (pid 58920); waiting up to 900s before local merge of fm/fixture in /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/local-merge-repo
+merged fm/fixture into local main (a82e19a -> 81643e1) in /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/local-merge-repo
+
+Observed main unchanged while waiting: a82e19aeb2f4a39ff0cec9d4e4c5698cf9b35424
+Observed main after release, matching fm/fixture: 81643e1c86b1d381f6a5f018bb0d38f7893a9b93
+
+$ git push <fixture-remote> HEAD:refs/heads/unwrapped
+To /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/remote.git
+ * [new branch]      HEAD -> unwrapped
+Unwrapped push completed and its persisted remote ref matches the source HEAD.

@@ -1,0 +1,57 @@
+IN PROGRESS - the deferred network checks have not finished yet.
+NOT yet confirmed: GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+Started 10s ago, bounded at 120s.
+Only a FAILED or otherwise actionable result arrives as a `check: startup-network` wake; a clean success stays silent.
+The durable result is readable on demand with /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/tmp/fm-session-start-tests.MIPTge/inactive-reconcile-deferred/root/bin/fm-startup-network.sh report; until it finishes, treat none of it as confirmed.
+completed off the startup path in 22s: GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+NEEDS_GH_AUTH
+BOOTSTRAP_INFO: secondmate fmtest-sm-MIPTge relaunched after recorded endpoint confidently missing (backend=tmux)
+SECONDMATE_SYNC: secondmate fmtest-sm-MIPTge: skipped: cannot determine default branch
+These ran AFTER the sections above were composed, so re-read any record a line here names.
+TIMINGS - where the deferred network checks spent their time (ms):
+  phase       gh-auth                                    start=+1000    elapsed=13000
+  phase       fleet-sync                                 start=+14000   elapsed=0
+  secondmate  liveness fmtest-sm-MIPTge                  start=+14000   elapsed=6000
+  phase       secondmate-liveness                        start=+14000   elapsed=6000
+  phase       secondmate-sync                            start=+20000   elapsed=1000
+  phase       handoff-delivery                           start=+21000   elapsed=0
+  stage       network-checks probe_sweeps                start=+0       elapsed=21000
+  slowest: stage network-checks probe_sweeps 21000ms, phase gh-auth 13000ms, phase secondmate-liveness 6000ms
+completed off the startup path in 12s: GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+(silent - no problems found)
+TIMINGS - where the deferred network checks spent their time (ms):
+  phase       gh-auth                                    start=+11000   elapsed=0
+  phase       fleet-sync                                 start=+11000   elapsed=0
+  phase       secondmate-liveness                        start=+11000   elapsed=0
+  phase       secondmate-sync                            start=+11000   elapsed=0
+  phase       handoff-delivery                           start=+11000   elapsed=0
+  stage       network-checks probe_sweeps                start=+0       elapsed=11000
+  slowest: stage network-checks probe_sweeps 11000ms, phase fleet-sync 0ms, phase secondmate-liveness 0ms
+completed off the startup path in 22s: GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+NEEDS_GH_AUTH
+BOOTSTRAP_INFO: secondmate fmtest-sm-MIPTge relaunched after recorded endpoint confidently missing (backend=tmux)
+SECONDMATE_SYNC: secondmate fmtest-sm-MIPTge: skipped: cannot determine default branch
+These ran AFTER the sections above were composed, so re-read any record a line here names.
+TIMINGS - where the deferred network checks spent their time (ms):
+  phase       gh-auth                                    start=+1000    elapsed=13000
+  phase       fleet-sync                                 start=+14000   elapsed=0
+  secondmate  liveness fmtest-sm-MIPTge                  start=+14000   elapsed=6000
+  phase       secondmate-liveness                        start=+14000   elapsed=6000
+  phase       secondmate-sync                            start=+20000   elapsed=1000
+  phase       handoff-delivery                           start=+21000   elapsed=0
+  stage       network-checks probe_sweeps                start=+0       elapsed=21000
+  slowest: stage network-checks probe_sweeps 21000ms, phase gh-auth 13000ms, phase secondmate-liveness 6000ms
+completed off the startup path in 17s: GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, project clone refresh with its drift reporting, and inactive terminal-outcome reconciliation.
+NEEDS_GH_AUTH
+BOOTSTRAP_INFO: secondmate fmtest-sm-MIPTge relaunched after recorded endpoint confidently missing (backend=tmux)
+SECONDMATE_SYNC: secondmate fmtest-sm-MIPTge: skipped: cannot determine default branch
+These ran AFTER the sections above were composed, so re-read any record a line here names.
+TIMINGS - where the deferred network checks spent their time (ms):
+  phase       gh-auth                                    start=+1000    elapsed=9000
+  phase       fleet-sync                                 start=+10000   elapsed=0
+  secondmate  liveness fmtest-sm-MIPTge                  start=+10000   elapsed=5000
+  phase       secondmate-liveness                        start=+10000   elapsed=5000
+  phase       secondmate-sync                            start=+15000   elapsed=2000
+  phase       handoff-delivery                           start=+17000   elapsed=0
+  stage       network-checks probe_sweeps                start=+0       elapsed=17000
+  slowest: stage network-checks probe_sweeps 17000ms, phase gh-auth 9000ms, phase secondmate-liveness 5000ms

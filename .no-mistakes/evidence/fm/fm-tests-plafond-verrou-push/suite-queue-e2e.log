@@ -1,0 +1,56 @@
+Two separate fixture checkouts share only XDG_STATE_HOME. CPU probe=6. Three real test subprocesses per run record entry and exit.
+
+$ bin/fm-test-run.sh tests/fm-lint.test.sh tests/fm-review-diff.test.sh tests/fm-crew-state.test.sh --json timing-a.json
+FM_TEST_BEGIN 2026-09-12T12:16:19Z tests/fm-crew-state.test.sh family=pure-contract-unit expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-12T12:16:19Z tests/fm-lint.test.sh family=pure-contract-unit expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-12T12:16:19Z tests/fm-review-diff.test.sh family=pr-forge expected_gate_skip=none
+completed a/fm-crew-state
+FM_TEST_END 2026-09-12T12:16:21Z tests/fm-crew-state.test.sh exit=0 duration_ms=1849 gate_skip=false
+completed a/fm-lint
+FM_TEST_END 2026-09-12T12:16:21Z tests/fm-lint.test.sh exit=0 duration_ms=1829 gate_skip=false
+completed a/fm-review-diff
+FM_TEST_END 2026-09-12T12:16:22Z tests/fm-review-diff.test.sh exit=0 duration_ms=1803 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=3102
+FM_TEST_SUMMARY_FAMILY family=pr-forge count=1 duration_ms=1803 failed=0
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=3678 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-crew-state.test.sh duration_ms=1849
+FM_TEST_SLOWEST rank=2 script=tests/fm-lint.test.sh duration_ms=1829
+FM_TEST_SLOWEST rank=3 script=tests/fm-review-diff.test.sh duration_ms=1803
+fm-test-run: wrote timing artifact: /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/timing-0.json
+
+$ FM_TEST_JOBS=2 bin/fm-test-run.sh tests/fm-lint.test.sh tests/fm-review-diff.test.sh tests/fm-crew-state.test.sh --json timing-b.json
+fm-test-run: FM_TEST_JOBS=2 lowers this run from 3 workers
+fm-test-run: another suite run is already using this machine (pid 44163); waiting up to 3600s for it to finish (--no-queue runs beside it)
+FM_TEST_BEGIN 2026-09-12T12:16:22Z tests/fm-crew-state.test.sh family=pure-contract-unit expected_gate_skip=none
+FM_TEST_BEGIN 2026-09-12T12:16:22Z tests/fm-lint.test.sh family=pure-contract-unit expected_gate_skip=none
+completed b/fm-crew-state
+FM_TEST_END 2026-09-12T12:16:24Z tests/fm-crew-state.test.sh exit=0 duration_ms=1815 gate_skip=false
+FM_TEST_BEGIN 2026-09-12T12:16:24Z tests/fm-review-diff.test.sh family=pr-forge expected_gate_skip=none
+completed b/fm-lint
+FM_TEST_END 2026-09-12T12:16:24Z tests/fm-lint.test.sh exit=0 duration_ms=1817 gate_skip=false
+completed b/fm-review-diff
+FM_TEST_END 2026-09-12T12:16:26Z tests/fm-review-diff.test.sh exit=0 duration_ms=1831 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=6129
+FM_TEST_SUMMARY_FAMILY family=pr-forge count=1 duration_ms=1831 failed=0
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=3632 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-review-diff.test.sh duration_ms=1831
+FM_TEST_SLOWEST rank=2 script=tests/fm-lint.test.sh duration_ms=1817
+FM_TEST_SLOWEST rank=3 script=tests/fm-crew-state.test.sh duration_ms=1815
+fm-test-run: wrote timing artifact: /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2AQF4ETK5BPZWSBXHZNW33J/.phase-test/e2e/timing-1.json
+
+Measured maximum concurrent test subprocesses: {"a": 3, "b": 2}
+All suite-a subprocesses exited before any suite-b subprocess entered.
+
+Actual event order:
+a fm-crew-state enter
+a fm-lint enter
+a fm-review-diff enter
+a fm-crew-state exit
+a fm-lint exit
+a fm-review-diff exit
+b fm-crew-state enter
+b fm-lint enter
+b fm-crew-state exit
+b fm-lint exit
+b fm-review-diff enter
+b fm-review-diff exit
