@@ -1,34 +1,31 @@
 #!/usr/bin/env bash
-# fm-push-lock.sh - machine-wide serialization for the git operations that
-# publish work: `git push`, and the merge commands that land a branch.
+# fm-push-lock.sh - shared serialization for participating Firstmate pushes
+# and merge commands on one machine.
 #
-# WHY. Firstmate runs many workers at once, each in its own worktree, and
-# nothing coordinated the moment two of them reached the forge together. The
-# fleet has paid for that twice already: a validation attestation is taken
-# against one head, and a concurrent push moves the branch before the merge
-# lands, so the attestation no longer describes what shipped
-# (data/learnings.md). Publication is the one step where concurrency buys
-# nothing - it is seconds of work - so it is cheap to make it strictly one at a
-# time.
+# WHY. Interleaved publication can move a validated head before it lands, so
+# participating callers share one lock across Firstmate homes and worktrees.
 #
 # SCOPE, deliberately minimal. One lock, machine-wide, held only across the
-# publishing command itself. No priority queue, no daemon, no fairness beyond
-# first-come. It covers what firstmate controls: bin/fm-pr-merge.sh,
+# publishing command itself. No priority queue, daemon, fairness, or ordering
+# guarantee. It covers bin/fm-pr-merge.sh,
 # bin/fm-merge-local.sh, and any push a crewmate runs through the wrapper below.
-# A push made from inside another tool's own pipeline is outside this lock, and
-# nothing here pretends otherwise.
+# Unwrapped pushes, including pushes inside another tool's pipeline, remain
+# allowed and outside this lock; serialization is not strictly machine-wide.
+# Callers must resolve the same lock path to serialize with one another.
+# A background publishing process that survives its launcher can outlive the
+# lock; tracking surviving processes is separate work, not covered here.
 #
 # WHY NOT AN EXISTING LIB. bin/fm-wake-lib.sh owns the portable lock primitive
-# this builds on (flock is absent on macOS), but every lock it takes is
-# home-scoped, and this one must be machine-scoped so separate firstmate homes
-# on one machine still serialize against each other. It also has to be directly
-# runnable, because a crewmate brief hands the worker a command to type; a
+# this builds on (flock is absent on macOS); this wrapper selects a shared path
+# so separate firstmate homes can serialize against each other.
+# It also has to be directly runnable, because a crewmate brief hands the
+# worker a command to type; a
 # sourced library cannot be that. So this file is both: a wrapper when
 # executed, and the acquire/release pair when sourced by firstmate's own merge
 # scripts.
 #
 # LOCATION. The lock lives outside any home, next to the other machine-wide
-# firstmate records, at $XDG_STATE_HOME/firstmate (default ~/.local/state).
+# firstmate records, at ${XDG_STATE_HOME:-$HOME/.local/state}/firstmate.
 #
 # Usage (wrapper - the form a brief hands a worker):
 #   bin/fm-push-lock.sh -- git push -u origin fm/<task-id>
@@ -55,9 +52,10 @@
 #                              acquires the same lock proceeds instead of
 #                              waiting on its own parent
 #
-# Exit status is the wrapped command's own, except 2 for a usage error and 124
-# when the wait bound elapsed with another process still holding the lock. The
-# refusal names the holding pid so the operator can see what to wait for.
+# Exit status is the wrapped command's own, except 2 for unknown options or
+# missing arguments, 1 for an invalid timeout or lock preparation failure, and
+# 124 when the wait bound elapsed with another process still holding the lock.
+# The wait refusal names the holding pid so the operator can see what to wait for.
 
 FM_PUSH_LOCK_DIR_DEFAULT="${XDG_STATE_HOME:-$HOME/.local/state}/firstmate"
 FM_PUSH_LOCK_TIMEOUT_DEFAULT=900
@@ -90,7 +88,7 @@ _fm_push_lock_timeout() {
 #
 # 0 = the caller may publish (either it took the lock, or an ancestor already
 # holds it); 124 = the wait bound elapsed with a live holder; 1 = the lock
-# could not be prepared at all.
+# could not be prepared or the timeout was invalid.
 fm_push_lock_acquire() {
   local label=${1:-publish} timeout lock parent deadline now holder announced=0
   lock=$(fm_push_lock_path) || return 1

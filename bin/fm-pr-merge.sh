@@ -65,9 +65,8 @@
 # misreported as a failed merge.
 #
 # The forge merge call and the outcome read that follows it run under the
-# machine-wide publication lock (bin/fm-push-lock.sh), so this merge and a
-# concurrent push or merge from another worker cannot interleave. The lock is
-# taken after every refusal above it, so an invalid request never queues.
+# publication lock; bin/fm-push-lock.sh's header owns its coverage limits.
+# The lock is taken after argument and role checks, so those refusals never queue.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra forge merge args>]
 set -eu
 
@@ -630,10 +629,9 @@ gitlab_confirm_merged() {
   [ "$state" = merged ]
 }
 
-# One publication at a time on this machine. Taken here, after every argument
-# and role refusal above, so only a request that is actually going to reach the
-# forge ever waits, and held across the merge call and its outcome read so a
-# concurrent push cannot move the head between them.
+# Taken here, after every argument and role refusal above, so only a request
+# that is actually going to reach the
+# forge ever waits, and held across the merge call and its outcome read.
 fm_push_lock_acquire "merge $URL" || exit $?
 trap 'fm_push_lock_release' EXIT
 

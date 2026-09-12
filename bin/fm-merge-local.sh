@@ -11,8 +11,7 @@
 # project management, and task lifecycle.
 #
 # The fast-forward check and the merge itself run under the machine-wide
-# publication lock (bin/fm-push-lock.sh), so a concurrent push or merge from
-# another worker cannot move the default branch between the two.
+# publication lock; bin/fm-push-lock.sh's header owns its coverage limits.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -67,8 +66,7 @@ if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   exit 1
 fi
 
-# One publication at a time on this machine: the ancestry check below and the
-# fast-forward it authorizes must not straddle another worker's push or merge.
+# Keep the ancestry check and fast-forward in one publication hold.
 fm_push_lock_acquire "local merge of $BRANCH in $PROJ" || exit $?
 trap 'fm_push_lock_release' EXIT
 
