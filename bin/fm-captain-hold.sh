@@ -1569,7 +1569,7 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  local attested_by_prefix='' page_urls='[]' show reason extra until
+  local attested_by_prefix='' page_urls='[]' show reason updated_reason until
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1611,13 +1611,13 @@ command_complete() {
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
         if [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
-          extra=$(jq -L "$SCRIPT_DIR" -nr --arg reason "$reason" --argjson urls "$page_urls" '
-            include "fm-call-links";
-            ($urls - call_link_candidates([]; $reason)) | join(" ")
+          updated_reason=$(jq -nr --arg reason "$reason" --argjson urls "$page_urls" '
+            ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
+            | ($urls + $remaining) | join(" ")
           ') || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
-          if [ -n "$extra" ]; then
+          if [ "$updated_reason" != "$reason" ]; then
             until=$(show_field_value "$show" hold_until)
-            tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$reason $extra" ${until:+--until "$until"} >/dev/null \
+            tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$updated_reason" ${until:+--until "$until"} >/dev/null \
               || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
           fi
         fi

@@ -3102,11 +3102,42 @@ EOF
   pass "newest status page wins while older URLs survive as completion fallbacks"
 }
 
+test_repeated_completion_promotes_latest_page() {
+  local home id version expected page
+  home=$(make_home repeated-pages)
+  id=repeated-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold repeated review"
+  for version in draft final draft final cleaned; do
+    if [ "$version" = cleaned ]; then
+      rm "$home/state/$id.status"
+    else
+      printf 'done: http://localhost:4387/session/%s\n' "$version" >> "$home/state/$id.status"
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "repeated completion failed ($version)"
+      expected="http://localhost:4387/session/$version"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "repeated snapshot failed"
+    jq -e --arg expected "$expected" '.decisions_open[] | select(.id == "repeated-review") | (.links | split(" "))[0] == $expected' "$home/snapshot.json" >/dev/null || fail "completion did not promote latest page ($version)"
+    if [ "$version" = final ] || [ "$version" = cleaned ]; then
+      jq -e '.decisions_open[] | select(.id == "repeated-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "completion lost older page fallback ($version)"
+    fi
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "repeated composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "repeated rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e --arg expected "$expected" '.cards[].blocs[].decisions[] | select(.key == "repeated-review")
+        | .pageHref == $expected and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "page opened superseded review ($page, $version)"
+    done
+  done
+  pass "repeated completion promotes new and previously stored pages through status cleanup"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
   test_completion_preserves_review_pages_after_status_cleanup
   test_completion_keeps_control_before_metadata
   test_ipv6_review_pages_survive_extraction_and_completion
   test_newest_status_page_precedes_older_fallbacks
+  test_repeated_completion_promotes_latest_page
   exit 0
 fi
 
@@ -3114,6 +3145,7 @@ test_completion_preserves_review_pages_after_status_cleanup
 test_completion_keeps_control_before_metadata
 test_ipv6_review_pages_survive_extraction_and_completion
 test_newest_status_page_precedes_older_fallbacks
+test_repeated_completion_promotes_latest_page
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
