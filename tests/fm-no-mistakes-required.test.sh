@@ -68,17 +68,22 @@ test_missing_head_fails() {
 
 test_live_pr_state_overrides_archived_event() {
   # Execute the pinned verifier against its HTTP and GitHub output interfaces.
-  python3 - "$VERIFY" "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" <<'PYTEST' \
+  # The parsed workflow is the executable configuration contract under test.
+  ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV.fetch(0)))' \
+    "$ROOT/.github/workflows/no-mistakes-required.yml" > "$TMP_ROOT/workflow.json" \
+    || fail "could not parse the compliance workflow"
+  python3 - "$VERIFY" "$TMP_ROOT" "$SIGNATURE" "$COMPLETED_STEPS" "$OLD_SHA" "$NEW_SHA" "$ACTION_REF" <<'PYTEST' \
     || fail "live PR attestation contract failed"
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 from threading import Thread
 
-verifier, root, signature, steps, old, new = sys.argv[1:]
+verifier, root, signature, steps, old, new, action_ref = sys.argv[1:]
 event = Path(root) / "pull_request.json"
 output = Path(root) / "action-output"
 requests = []
@@ -152,6 +157,72 @@ try:
         fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
         assert fields["compliant"] == ("true" if expected == 0 else "false"), (label, fields)
         assert fields["exempt"] == "false", (label, fields)
+
+    # Execute the workflow's bounded retry sequence with the actual verifier.
+    # Only sleep is replaced: publication advances at that boundary, with no
+    # real-time scheduling dependency or GitHub writes in this regression.
+    workflow = json.loads((Path(root) / "workflow.json").read_text())
+    sequence = workflow["jobs"]["check"]["steps"]
+    action = f"kunchenguid/no-mistakes/.github/actions/require-no-mistakes@{action_ref}"
+    fakebin = Path(root) / "fakebin"
+    fakebin.mkdir()
+    sleeper = fakebin / "sleep"
+    sleeper.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SLEEP_LOG"\n')
+    sleeper.chmod(0o755)
+    sleep_log = Path(root) / "sleep-log"
+    delay_env = dict(env, PATH=str(fakebin) + os.pathsep + env["PATH"],
+                     SLEEP_LOG=str(sleep_log))
+    for label, initial, published, published_status, expected, count in (
+        ("already current", pr(new, new), pr(new, new), 200, 0, 1),
+        ("publication catches up", pr(new, old), pr(new, new), 200, 0, 2),
+        ("publication remains stale", pr(new, old), pr(new, old), 200, 1, 2),
+        ("publication skips review", pr(new, old), pr(new, new, False), 200, 1, 2),
+        ("retry API fails", pr(new, old), {}, 403, 1, 2),
+        ("head advances again", pr(new, old), pr("3" * 40, new), 200, 1, 2),
+    ):
+        event.write_text(json.dumps({"action": "synchronize", "pull_request": initial}))
+        output.write_text("")
+        sleep_log.write_text("")
+        response, status = initial, 200
+        requests.clear()
+        outcomes = {}
+        job_exit = 0
+        for step in sequence:
+            # Interpret only the small expression subset used by this workflow;
+            # fail loudly if the declarative contract gains unsupported syntax.
+            if "if" in step:
+                reference, operator, value = shlex.split(step["if"])
+                scope, identifier, field = reference.split(".")
+                assert scope == "steps" and operator == "=="
+                assert field in ("outcome", "conclusion")
+                if outcomes[identifier][field] != value:
+                    continue
+            if "uses" in step:
+                assert step["uses"] == action, "must execute the pinned verifier"
+                assert not step.get("with"), "verification must use live facts"
+                output.write_text("")
+                result = subprocess.run([sys.executable, verifier], env=env,
+                                        capture_output=True, text=True, timeout=20)
+            else:
+                assert shlex.split(step["run"]) == ["sleep", "60"]
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                        env=delay_env, capture_output=True, text=True, timeout=5)
+                response, status = published, published_status
+            outcome = "success" if result.returncode == 0 else "failure"
+            tolerated = step.get("continue-on-error", False)
+            if "id" in step:
+                outcomes[step["id"]] = {
+                    "outcome": outcome, "conclusion": "success" if tolerated else outcome,
+                }
+            if result.returncode != 0 and not tolerated:
+                job_exit = result.returncode
+                break
+        assert job_exit == expected, (label, result.stdout, result.stderr)
+        assert len(requests) == count, (label, requests)
+        assert sleep_log.read_text().splitlines() == (["60"] if count == 2 else []), label
+        fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert fields["compliant"] == ("true" if expected == 0 else "false"), (label, fields)
+        print(f"ok - workflow {label}: {count} verification attempt(s), exit {expected}")
 finally:
     server.shutdown()
     thread.join()
