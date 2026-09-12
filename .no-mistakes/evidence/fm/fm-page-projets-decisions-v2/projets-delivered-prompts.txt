@@ -1,0 +1,7 @@
+session:
+  file: /Users/ydeep/.no-mistakes/worktrees/b3a5b8df509f/01M2A9F2W6NHRN57WRE5WWDD73/.test-projets-evidence/home/.lavish/projets.html
+  status: feedback
+prompts[3]{uid,prompt,selector,tag,text}:
+  "1","Projets · Club · Les quatre arbitrages qui débloquent le rosé Anglades : on y va\n\nContext data:\n{\n  \"projet\": \"club\",\n  \"decision\": \"club-rose\",\n  \"choix\": \"on-y-va\",\n  \"nature\": \"decision\"\n}","section:nth-of-type(1) > section:nth-of-type(2) > div > ul > li:nth-of-type(1)",choice,"Club : Les quatre arbitrages qui débloquent le rosé Anglades -> on y va"
+  "2","Projets · Club · Audit de Chef : six questions : on en parle\n\nContext data:\n{\n  \"projet\": \"club\",\n  \"decision\": \"club-audit\",\n  \"choix\": \"on-en-parle\",\n  \"nature\": \"decision\"\n}","section:nth-of-type(1) > section:nth-of-type(2) > div > ul > li:nth-of-type(2)",choice,"Club : Audit de Chef : six questions -> on en parle"
+  "3","Projets · Club · créer une page Lavish pour : Les quatre arbitrages qui débloquent le rosé Anglades ; Audit de Chef : six questions\n\nContext data:\n{\n  \"projet\": \"club\",\n  \"decisions\": [\n    \"club-rose\",\n    \"club-audit\"\n  ],\n  \"titres\": [\n    \"Les quatre arbitrages qui débloquent le rosé Anglades\",\n    \"Audit de Chef : six questions\"\n  ]\n}","main#pj-main > section:nth-of-type(1) > section:nth-of-type(2) > div > div",create-lavish,"Club : page à créer pour 2 décision(s)"

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>À valider</title>
+<style>
+/* ============================================================
+   Page « a valider ». Tout ce qui attend le capitaine, tous projets
+   confondus, sur une seule page : meme systeme monochrome que la page
+   projets, meme bloc de decision, mais une seule question posee - qu'est-ce
+   qui attend Yan, et depuis quand. Les projets restent le regroupement ;
+   dans un projet la plus ancienne demande passe en premier.
+   Sur telephone rien ne defile en largeur : chaque decision devient une
+   liste empilee et tous les boutons restent dans le flux.
+   ============================================================ */
+:root {
+  --paper: #FAFAF8; --surround: #EFEEE9; --ink: #111111; --muted: #8A8A87;
+  --faint: #B8B7B1; --line: #DBDAD4; --fill: #F1F0EB;
+  --f-sans: "Helvetica Neue", Helvetica, "Inter", Arial, sans-serif;
+  --f-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --hair: 1px; --struct: 1.6px;
+  --sh-card: 0 1px 2px rgba(17,17,17,.03), 0 10px 30px rgba(17,17,17,.05);
+  --r: 18px; --r-sm: 10px; --pad: 22px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { max-width: 100%; overflow-x: hidden; }
+body { background: var(--surround); color: var(--ink); font-family: var(--f-sans); font-size: 15px;
+       line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px 96px; min-width: 0; }
+:where(p, h1, h2, h3, h4, li, td, th, span, a, button) { overflow-wrap: anywhere; }
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+       margin-bottom: 20px; }
+.top h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.top .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.badges { display: flex; gap: 10px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.badge { display: flex; align-items: center; gap: 10px; background: var(--paper);
+         border: var(--struct) solid var(--ink); border-radius: 999px; padding: 8px 16px 8px 12px;
+         box-shadow: var(--sh-card); min-width: 0; max-width: 100%; }
+.badge svg { width: 20px; height: 20px; flex: none; stroke: var(--ink); fill: none;
+             stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.badge b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.badge small { display: block; color: var(--muted); font-size: 11px; font-family: var(--f-mono);
+               letter-spacing: .1em; text-transform: uppercase; margin-top: 3px; }
+.badge.soft { border-style: dashed; border-color: var(--faint); }
+.notice { border: var(--hair) dashed var(--faint); border-radius: var(--r-sm); padding: 10px 14px;
+          color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+
+/* --- un projet, une carte, une seule section : ce qui attend le capitaine --- */
+.list { display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--paper); border: var(--struct) solid var(--ink); border-radius: var(--r);
+        padding: var(--pad); box-shadow: var(--sh-card); min-width: 0; }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px 24px; flex-wrap: wrap;
+        border-bottom: var(--hair) solid var(--line); padding-bottom: 14px; margin-bottom: 8px; }
+.head h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.head .n { font-family: var(--f-mono); font-size: 12px; border: var(--hair) solid var(--ink); border-radius: 999px;
+           padding: 1px 8px; flex: none; font-variant-numeric: tabular-nums; }
+.bloc { padding: 18px 0 6px; }
+.bloc h3 { font-family: var(--f-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+           color: var(--muted); font-weight: 400; line-height: 1.5; }
+.bloc .body { margin-top: 14px; }
+.empty { color: var(--muted); font-style: italic; font-size: 14px; }
+.tag { display: inline-block; font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; border: var(--hair) solid var(--line);
+       border-radius: 4px; padding: 0 6px; margin-left: 8px; color: var(--muted); vertical-align: 1px; }
+.src { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+.you { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.you li { border: var(--struct) solid var(--ink); border-radius: var(--r-sm); padding: 10px 12px;
+          display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.you .q { flex: 1 1 260px; min-width: 0; }
+.you .ask { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+.you li[data-nature="etat"] .ask { width: fit-content; max-width: 100%; color: var(--ink);
+                                   border-bottom: var(--hair) dashed var(--faint); padding-bottom: 2px; }
+.you .pick { width: 15px; height: 15px; margin: 0 8px 0 0; vertical-align: -2px; accent-color: var(--ink); }
+.you .btns { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--paper);
+       text-align: left; max-width: 100%; }
+.btn:hover { background: var(--ink); color: var(--paper); }
+.btn.on { background: var(--ink); color: var(--paper); }
+.btn:disabled { border-color: var(--line); color: var(--faint); cursor: default; background: var(--paper); }
+.you li.queued { border-style: dashed; }
+.you li.queued .btn { border-color: var(--line); color: var(--muted); }
+.you li.queued .btn.on { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.you .ok { flex-basis: 100%; color: var(--muted); font-size: 13px; display: none; }
+.you li.refused { border-style: dotted; }
+.you li.queued .ok, .you li.refused .ok { display: block; }
+.you .page { flex: 0 0 auto; font-size: 13px; }
+.you .page .go { text-decoration: underline; text-underline-offset: 3px; }
+.you .page .dim { color: var(--faint); font-style: italic; }
+.group { margin-top: 12px; display: flex; align-items: baseline; gap: 10px 12px; flex-wrap: wrap; }
+.group .make { border-width: var(--struct); }
+.group .src { margin-top: 0; flex: 1 1 240px; min-width: 0; }
+.group.queued .src, .group.refused .src { color: var(--ink); }
+
+.limit { margin-top: 22px; color: var(--muted); font-size: 13px; max-width: 78ch; }
+.err { border: var(--struct) solid var(--ink); border-radius: var(--r); padding: var(--pad); background: var(--paper); }
+.err h2 { font-size: 20px; margin-bottom: 8px; }
+
+@media (max-width: 720px) {
+  .wrap { padding: 16px 12px 64px; }
+  .top { align-items: flex-start; }
+  .top h1 { font-size: 20px; }
+  .badge { padding: 6px 12px 6px 10px; } .badge b { font-size: 17px; }
+  .card { padding: 16px; border-radius: 14px; }
+  .head { flex-direction: column; align-items: stretch; gap: 6px; }
+  .head h2 { font-size: 20px; }
+  /* le compte reste une pastille, il ne s'etire pas en bandeau */
+  .head .n { align-self: flex-start; }
+  .tag { display: inline-block; margin: 4px 6px 0 0; }
+  .you li { align-items: stretch; }
+  .you .q, .you .btns, .you .ok, .you .page { flex-basis: 100%; }
+  .group { flex-direction: column; align-items: stretch; }
+  .group .make { text-align: center; }
+  /* en colonne, une base flex devient une HAUTEUR : la note reprend la sienne */
+  .group .src { flex: 0 0 auto; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>À valider</h1>
+      <div class="meta" id="pj-meta"></div>
+    </div>
+    <div class="badges" id="pj-badges"></div>
+  </header>
+  <div id="pj-notice" class="notice" hidden></div>
+  <main class="list" id="pj-main"></main>
+  <footer class="limit">Cette page vit sur le réseau privé de Yan (tailnet) : seules ses machines la voient, un client extérieur n'y a pas accès. Les pages client passent par un sous-domaine dédié, chantier séparé.</footer>
+</div>
+
+<script id="projets-data" type="application/json">
+{"schema":"fm-projets-board.v1","home":".test-projets-evidence/home","generated":"2026-09-12T09:13:46Z","updated_label":"12/09 09h13","badges":{"workers":0,"decisions":3,"subscriptions":null},"projects":[{"id":"club","name":"Club","brain":false,"headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":false,"meeting_warning":"Agenda non lu : fichier absent ou vieux de plus d’un jour","doing":[],"scouts":[],"missing_from_you":[{"key":"club-rose","question":"Les quatre arbitrages qui débloquent le rosé Anglades","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":{"url":"http://[::1]:4387/session/fe7170837c88da4d"},"since":"2026-09-12","owner":"(main)","local_id":"club-rose"},{"key":"club-audit","question":"Audit de Chef : six questions","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":null,"since":"2026-09-12","owner":"(main)","local_id":"club-audit"}],"missing_from_others":[],"pages":[],"creations":[],"unlinked":[],"quick_wins":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["prochaine échéance non enregistrée","équipe non enregistrée","aucune page de gestion enregistrée","aucune attente des autres enregistrée","aucune réunion enregistrée, agenda non connecté","coûts à mesurer","2 questions sans choix fermés : la page propose les choix par défaut"]},{"id":"cerveau","name":"Cerveau","brain":true,"headline":null,"team":null,"deadline":null,"partial":false,"meetings":[],"agenda_available":false,"meeting_warning":"Agenda non lu : fichier absent ou vieux de plus d’un jour","doing":[],"scouts":[],"missing_from_you":[{"key":"divers-budget","question":"Choisir le budget de septembre","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":null,"since":"2026-09-12","owner":"(main)","local_id":"divers-budget"}],"missing_from_others":[],"pages":[],"creations":[],"unlinked":[],"quick_wins":[],"costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"Claude : journaux non mesurés · Codex : journaux non lus"},"journal":[],"meeting":null,"gaps":["aucune page du cerveau enregistrée","aucune recommandation enregistrée pour le cerveau","aucun quick win enregistré pour le cerveau","coûts à mesurer","1 question sans choix fermés : la page propose les choix par défaut"]}],"unassigned":[],"warnings":[],"table_missing":false}
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  function renderError(msg) {
+    var main = document.getElementById("pj-main");
+    main.innerHTML = "";
+    var box = el("div", "err");
+    box.appendChild(el("h2", "", "Cette page n'a pas pu se charger"));
+    box.appendChild(el("p", "", msg + ". Demande à firstmate de la régénérer."));
+    main.appendChild(box);
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+  function link(text, url, cls, refused) {
+    if (!url) return el("span", cls || "", text + (refused ? " · lien refusé, hors réseau autorisé" : ""));
+    var a = el("a", cls || "", text);
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    return a;
+  }
+  function tag(text, ok) {
+    return el("span", "tag" + (ok ? " ok" : ""), text);
+  }
+  function utf8ByteLength(s) {
+    return typeof TextEncoder === "function" ? new TextEncoder().encode(s).length : s.length;
+  }
+
+  var ICONS = {
+    decisions: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="m16 15 2.2 2.2L22 13"/></svg>',
+    workers: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg>'
+  };
+
+  /* Le bloc de decision est le meme que sur la page projets, injecte ici a
+     l'identique : une seule description de ce que fait un clic. */
+/* « Il manque de toi », le seul endroit ou la page touche a une decision.
+   Les deux pages (projets, a valider) injectent ce meme bloc, donc ce qu'un
+   clic fait est decrit une seule fois.
+
+   Regle du capitaine, inchangee : rien n'agit depuis la page. Un clic MET EN
+   FILE un prompt Lavish et s'arrete la ; c'est le capitaine qui envoie la file
+   quand il a fini, et firstmate lui repose la question en chat avant d'agir.
+   Le contexte porte projet/decision/choix/nature (jamais le couple question/answer que
+   l'entree a cle lit), donc meme une source liee ne pourrait rien clore.
+
+   Deux prompts sortent d'ici :
+     tag "choice"        un choix ferme sur une decision
+     tag "create-lavish" une demande de page dediee pour la selection cochee
+   Les deux sont des demandes, jamais des reponses enregistrees.
+
+   Attend de la page hote : el, link, tag, utf8ByteLength. */
+
+var SELECT_HINT = "coche une ou plusieurs décisions pour demander une page qui les traite ensemble.";
+
+function frDay(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  return m ? m[3] + "/" + m[2] : null;
+}
+
+/* Une seule porte vers Lavish : rend true quand le prompt est bien entre dans
+   la file, false sinon. La page ouverte hors Lavish n'a pas de file du tout et
+   doit le dire au lieu de faire croire a un envoi. */
+function queueToLavish(text, context) {
+  if (!window.lavish || typeof window.lavish.queuePrompt !== "function") return false;
+  if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
+  try {
+    return window.lavish.queuePrompt(text, context) !== false;
+  } catch (e) {
+    return false;
+  }
+}
+
+function decisionMessage(current, previous) {
+  var s = "en file : " + current;
+  if (previous && previous !== current) {
+    s += ", à la place de " + previous
+      + " (la page ne peut pas retirer une ligne déjà en file : corrige-la dans Lavish avant d'envoyer)";
+  }
+  return s + ". Rien n'est envoyé tant que tu n'envoies pas la file depuis Lavish, "
+    + "et rien n'est clos tant que firstmate ne te l'a pas reconfirmé en chat.";
+}
+
+/* Le bloc complet d'un projet : une ligne par decision, puis le bouton de
+   groupe qui demande une page dediee pour les cases cochees. */
+function renderDecisions(body, project, rows) {
+  var ul = el("ul", "you");
+  var selected = [];
+
+  rows.forEach(function (r) {
+    var li = el("li", "");
+    li.setAttribute("data-decision", r.key);
+    if (r.kind) li.setAttribute("data-kind", r.kind);
+    if (r.nature) li.setAttribute("data-nature", r.nature);
+
+    var q = el("span", "q");
+    var box = el("input", "pick");
+    box.type = "checkbox";
+    box.setAttribute("data-select", r.key);
+    box.setAttribute("aria-label", "choisir cette décision pour une page dédiée");
+    q.appendChild(box);
+    q.appendChild(link(r.question, r.url, "", r.url_refused));
+    if (r.kind) q.appendChild(tag(r.kind));
+    if (r.ask) q.appendChild(el("span", "ask", r.ask));
+    var since = frDay(r.since);
+    if (since) q.appendChild(tag("depuis le " + since));
+    li.appendChild(q);
+
+    /* Le lien direct vers la page de la decision, ou le trou nomme : appuyer
+       sur un choix sans avoir pu voir la page est exactement ce que le
+       capitaine ne veut plus. */
+    var open = el("span", "page");
+    if (r.page && r.page.url) {
+      var a = link("ouvrir la page", r.page.url, "go");
+      a.setAttribute("data-page", r.key);
+      open.appendChild(a);
+    } else {
+      open.appendChild(el("span", "dim", "pas de page dédiée"));
+    }
+    li.appendChild(open);
+
+    var btns = el("div", "btns");
+    var ok = el("span", "ok");
+    var chosen = null;
+    var buttons = [];
+    r.options.forEach(function (o) {
+      var b = el("button", "btn", o.label);
+      b.type = "button";
+      b.setAttribute("data-choice", o.value);
+      b.addEventListener("click", function () {
+        var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
+        if (!queueToLavish(text, {
+          tag: "choice", text: project.name + " : " + r.question + " -> " + o.label, element: li,
+          queueKey: "projets:" + project.id + ":" + r.key,
+          data: { projet: project.id, decision: r.key, choix: o.value, nature: r.nature || "decision" }
+        })) {
+          li.className = "refused";
+          ok.textContent = "non mis en file : ouvre cette page dans Lavish";
+          return;
+        }
+        li.className = "queued";
+        ok.textContent = decisionMessage(o.label, chosen);
+        chosen = o.label;
+        buttons.forEach(function (other) {
+          other.className = other === b ? "btn on" : "btn";
+        });
+      });
+      buttons.push(b);
+      btns.appendChild(b);
+    });
+    li.appendChild(btns);
+    li.appendChild(ok);
+
+    box.addEventListener("change", function () {
+      var at = selected.indexOf(r);
+      if (box.checked && at < 0) selected.push(r);
+      else if (!box.checked && at >= 0) selected.splice(at, 1);
+      refresh();
+    });
+    ul.appendChild(li);
+  });
+  body.appendChild(ul);
+
+  /* Demander UNE page qui traite plusieurs decisions ensemble. La page ne
+     fabrique rien : elle met la demande en file, firstmate la reprend en chat. */
+  var group = el("div", "group");
+  var make = el("button", "btn make", "créer une page Lavish pour la sélection");
+  make.type = "button";
+  make.setAttribute("data-create-lavish", project.id);
+  make.disabled = true;
+  var count = el("span", "src", SELECT_HINT);
+  function refresh() {
+    make.disabled = selected.length === 0;
+    count.textContent = selected.length === 0
+      ? SELECT_HINT
+      : selected.length + (selected.length > 1 ? " décisions sélectionnées." : " décision sélectionnée.");
+  }
+  make.addEventListener("click", function () {
+    if (!selected.length) return;
+    var titres = selected.map(function (r) { return r.question; });
+    var text = "Projets · " + project.name + " · créer une page Lavish pour : " + titres.join(" ; ");
+    if (!queueToLavish(text, {
+      tag: "create-lavish", text: project.name + " : page à créer pour " + selected.length + " décision(s)",
+      element: group, queueKey: "projets:create-lavish:" + project.id,
+      data: { projet: project.id, decisions: selected.map(function (r) { return r.key; }), titres: titres }
+    })) {
+      group.className = "group refused";
+      count.textContent = "non mis en file : ouvre cette page dans Lavish";
+      return;
+    }
+    group.className = "group queued";
+    count.textContent = "demande en file pour " + selected.length + (selected.length > 1 ? " décisions" : " décision")
+      + ". Rien n'est fabriqué tant que tu n'envoies pas la file depuis Lavish, "
+      + "et firstmate te reposera la question en chat avant de lancer le travail.";
+  });
+  group.appendChild(make);
+  group.appendChild(count);
+  body.appendChild(group);
+}
+
+  var raw, data;
+  try {
+    raw = document.getElementById("projets-data").textContent;
+    data = JSON.parse(raw);
+  } catch (e) {
+    renderError("Les données de la page sont illisibles");
+    return;
+  }
+  if (!data || data.schema !== "fm-projets-board.v1" || !Array.isArray(data.projects)) {
+    renderError("Les données de la page ne sont pas au format attendu");
+    return;
+  }
+
+  try {
+  document.getElementById("pj-meta").textContent =
+    "mis à jour " + data.updated_label + " · tout ce qui attend ta réponse, tous projets confondus";
+  var badges = document.getElementById("pj-badges");
+  function badge(kind, value, label, soft) {
+    var b = el("div", "badge" + (soft ? " soft" : ""));
+    b.setAttribute("data-badge", kind);
+    var ic = el("span", "ic");
+    ic.innerHTML = ICONS[kind];
+    b.appendChild(ic);
+    var t = el("span", "");
+    t.appendChild(el("b", "", value));
+    t.appendChild(el("small", "", label));
+    b.appendChild(t);
+    badges.appendChild(b);
+  }
+
+  /* L'ordre du rail de la page projets est deja dans le payload : on le garde,
+     on laisse tomber les projets qui n'attendent rien, et dans un projet la
+     plus ancienne demande passe devant quand sa date est connue. */
+  var projects = data.projects.filter(function (p) {
+    return Array.isArray(p.missing_from_you) && p.missing_from_you.length > 0;
+  }).map(function (p) {
+    var rows = p.missing_from_you.map(function (r, i) { return { r: r, i: i }; });
+    rows.sort(function (a, b) {
+      var da = a.r.since || "", db = b.r.since || "";
+      if (da && db && da !== db) return da < db ? -1 : 1;
+      if (da && !db) return -1;
+      if (!da && db) return 1;
+      return a.i - b.i;
+    });
+    return { id: p.id, name: p.name, rows: rows.map(function (x) { return x.r; }) };
+  });
+  var total = projects.reduce(function (n, p) { return n + p.rows.length; }, 0);
+
+  badge("decisions", String(total), (total === 1 ? "décision à prendre" : "décisions à prendre"));
+  var workers = (data.badges && data.badges.workers) || 0;
+  badge("workers", String(workers), (workers === 1 ? "worker en cours" : "workers en cours"), !workers);
+
+  var notice = document.getElementById("pj-notice");
+  if (data.table_missing) {
+    notice.hidden = false;
+    notice.textContent = "La table des projets n'est pas encore écrite : un projet par dépôt en attendant. Demande à firstmate de la remplir.";
+  }
+  if (data.warnings && data.warnings.length) {
+    notice.hidden = false;
+    notice.textContent += (notice.textContent ? " · " : "") + data.warnings.join(" · ");
+  }
+
+  var main = document.getElementById("pj-main");
+  if (!projects.length) {
+    var partial = (data.warnings && data.warnings.length) || data.projects.some(function (p) { return p.partial; });
+    main.appendChild(el("p", "empty", partial
+      ? "État partiel : impossible de confirmer si quelque chose attend ta réponse."
+      : "Rien n'attend de toi en ce moment."));
+  }
+  projects.forEach(function (p) {
+    var c = el("section", "card");
+    c.setAttribute("data-project", p.id);
+    var head = el("div", "head");
+    head.appendChild(el("h2", "", p.name));
+    head.appendChild(el("span", "n", String(p.rows.length)));
+    c.appendChild(head);
+    var b = el("section", "bloc");
+    b.setAttribute("data-bloc", "2");
+    b.setAttribute("data-open", "true");
+    var h = el("h3", "", "Il manque de toi");
+    b.appendChild(h);
+    var body = el("div", "body");
+    renderDecisions(body, p, p.rows);
+    b.appendChild(body);
+    c.appendChild(b);
+    main.appendChild(c);
+  });
+  } catch (e) {
+    renderError("La page n'a pas pu être dessinée");
+  }
+})();
+</script>
+</body>
+</html>
