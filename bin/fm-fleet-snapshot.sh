@@ -480,7 +480,9 @@ backlog_json() {  # [<backlog-path>] [<archive: 0|1>]
              reported:metadata_word($rest; "reported"),
              done:metadata_word($rest; "done"),
              completion:completion($rest),
-             links:links($rest),
+             links:((if metadata($rest; "hold-kind") == "captain" then links(hold_metadata($rest) // "") else [] end)
+                    + links($rest)
+                    | reduce .[] as $url ([]; if index($url) == null then . + [$url] else . end)),
              pr_url:((links($rest) | map(select(test("/pull/[0-9]+"))) | .[0]) // null),
              report_path:cap($rest; ".*(?<v>data/[^[:space:])]+/report\\.md).*"),
              local_note:local_note($rest),

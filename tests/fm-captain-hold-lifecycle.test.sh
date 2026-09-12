@@ -3132,12 +3132,45 @@ test_repeated_completion_promotes_latest_page() {
   pass "repeated completion promotes new and previously stored pages through status cleanup"
 }
 
+test_completion_preserves_hold_title_identity() {
+  local home id version title page before after
+  for title in 'Choisir la suite' 'Choisir la suite http://localhost:4387/session/draft'; do
+    home=$(make_home "title-retry-${#title}")
+    id=title-review
+    write_origin_meta "$home" "$id"
+    run_captain "$home" hold "$id" --title "$title" --reason choisir --repo sample >/dev/null || fail "could not create titled hold"
+    before=$(tasks_in "$home" show "$id" --full | sed -n '/^  title: /p')
+    for version in draft final; do
+      printf 'done: http://localhost:4387/session/%s\n' "$version" >> "$home/state/$id.status"
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "titled hold completion failed"
+      after=$(tasks_in "$home" show "$id" --full | sed -n '/^  title: /p')
+      [ "$before" = "$after" ] || fail "completion changed the captain title"
+      run_captain "$home" hold "$id" --title "$title" --reason choisir --repo sample >/dev/null || fail "identical hold retry failed after completion"
+    done
+    if run_captain "$home" hold "$id" --title "$title autre" --reason choisir --repo sample > "$home/refused" 2>&1; then
+      fail "different title was accepted after completion"
+    fi
+    assert_grep 'has a different title' "$home/refused" "different title failed for the wrong reason"
+    rm "$home/state/$id.status"
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "title retry snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "title-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "hold retry lost newest-first durable links"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "title retry composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page "$page" >/dev/null || fail "title retry rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/$page.html" > "$home/rendered.json"
+      jq -e '.cards[].blocs[].decisions[] | select(.key == "title-review") | .pageHref == "http://localhost:4387/session/final" and .page == "ouvrir la page"' "$home/rendered.json" >/dev/null || fail "hold retry opened an older page"
+    done
+  done
+  pass "completion preserves strict title identity and ordered links through hold retries"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
   test_completion_preserves_review_pages_after_status_cleanup
   test_completion_keeps_control_before_metadata
   test_ipv6_review_pages_survive_extraction_and_completion
   test_newest_status_page_precedes_older_fallbacks
   test_repeated_completion_promotes_latest_page
+  test_completion_preserves_hold_title_identity
   exit 0
 fi
 
@@ -3146,6 +3179,7 @@ test_completion_keeps_control_before_metadata
 test_ipv6_review_pages_survive_extraction_and_completion
 test_newest_status_page_precedes_older_fallbacks
 test_repeated_completion_promotes_latest_page
+test_completion_preserves_hold_title_identity
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes

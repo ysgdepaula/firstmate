@@ -1122,6 +1122,14 @@ command_hold() {
       existing_title=$(show_field_value "$show" title)
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
+    if [ "$existing_hold_kind" = captain ]; then
+      reason=$(jq -L "$SCRIPT_DIR" -nr --arg previous "$(show_field_value "$show" hold_reason)" --arg reason "$reason" '
+        include "fm-call-links"; include "fm-projets-data";
+        (call_link_candidates([]; $previous) | map(select(project_page_url))) as $urls
+        | ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
+        | ($urls + $remaining) | join(" ")
+      ') || fail "cannot retain recorded pages for $id"
+    fi
   else
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
@@ -1569,7 +1577,7 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  local attested_by_prefix='' page_urls='[]' show reason updated_reason title updated_title until
+  local attested_by_prefix='' page_urls='[]' show reason updated_reason until
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1620,15 +1628,6 @@ command_complete() {
             until=$(show_field_value "$show" hold_until)
             tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$updated_reason" ${until:+--until "$until"} >/dev/null \
               || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
-          fi
-          title=$(show_field_value "$show" title)
-          updated_title=$(jq -nr --arg title "$title" --argjson urls "$page_urls" '
-            ($title | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
-            | ($urls + $remaining) | join(" ")
-          ') || fail "cannot promote recorded pages for $CAPTAIN_RESOLVED_ID"
-          if [ "$updated_title" != "$title" ]; then
-            tasks_axi update "$CAPTAIN_RESOLVED_ID" --title "$updated_title" >/dev/null \
-              || fail "cannot promote recorded pages for $CAPTAIN_RESOLVED_ID"
           fi
         fi
         fm_lock_release "$CAPTAIN_CONTROL_LOCK"
