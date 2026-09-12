@@ -3144,15 +3144,18 @@ test_status_pages_respect_call_ownership() {
 
 ## Queued
 - [ ] call-a - Choisir A (repo: firstmate) (hold: choisir) (hold-kind: captain)
+  Origin: review-origin
 - [ ] call-b - Choisir B (repo: firstmate) (hold: http://localhost:4387/session/b) (hold-kind: captain)
-  Origin: call-a
+  Origin: review-origin
 - [ ] only-call - Choisir seul (repo: firstmate) (hold: choisir) (hold-kind: captain)
+- [ ] extra-call - Autre choix (repo: firstmate) (hold: choisir) (hold-kind: captain) (hold-until: 2000-01-01)
+  Origin: only-call
 
 ## Done
 EOF
-    fm_write_meta "$target/state/call-a.meta" "window=firstmate:fm-call-a" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
+    fm_write_meta "$target/state/review-origin.meta" "window=firstmate:fm-review-origin" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
     fm_write_meta "$target/state/only-call.meta" "window=firstmate:fm-only-call" "worktree=$target/projects/missing" "project=firstmate" "harness=echo" "kind=scout"
-    printf 'done: http://localhost:4387/session/b\n' > "$target/state/call-a.status"
+    printf 'done: http://localhost:4387/session/b\n' > "$target/state/review-origin.status"
     printf 'done: http://localhost:4387/session/only\n' > "$target/state/only-call.status"
     cat > "$home/config/projets.json" <<'EOF'
 {"schema":"fm-projets-config.v1","projects":[{"id":"firstmate","name":"Exemple","brain":true,"repos":["firstmate"]}]}

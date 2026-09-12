@@ -2951,10 +2951,8 @@ test_completion_preserves_review_pages_after_status_cleanup() {
   write_origin_meta "$home" "$id"
   run_captain "$home" hold sample-page-call --title "Choisir la suite" --reason "choisir" --repo sample --origin "$id" --until 2026-12-31 >/dev/null || fail "could not hold review"
   before=$(tasks_in "$home" show sample-page-call --full)
-  cat > "$home/state/$id.status" <<'EOF'
-paused: voir `http://localhost:4387/session/durable`.
-needs-decision [key=route]: choisir la suite
-EOF
+  printf 'needs-decision [key=route]: choisir la suite\n' > "$home/state/$id.status"
+  printf 'paused: voir `http://localhost:4387/session/durable`.\n' > "$home/state/sample-page-call.status"
   run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion did not retain page"
   assert_grep 'captain-held [key=route]: tracked by sample-page-call' "$home/state/$id.status" "completion did not record its transfer"
   show=$(tasks_in "$home" show sample-page-call --full)
@@ -2964,7 +2962,7 @@ EOF
   [ "$show" = "$after" ] || fail "completion retry changed the held task"
   assert_contains "$after" '2026-12-31' "completion lost the hold date"
   [ "$(printf '%s\n' "$before" | sed -n '/Captain hold set:/p')" = "$(printf '%s\n' "$after" | sed -n '/Captain hold set:/p')" ] || fail "completion changed the hold timestamp"
-  rm "$home/state/$id.status" "$home/state/$id.meta"
+  rm "$home/state/$id.status" "$home/state/$id.meta" "$home/state/sample-page-call.status"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "post-cleanup projection failed"
   jq -e '.decisions_open[] | select(.id == "sample-page-call") | .links == "http://localhost:4387/session/durable"' "$home/snapshot.json" >/dev/null || fail "durable backlog links lost the page after cleanup"
   FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "post-cleanup composition failed"
@@ -3239,15 +3237,15 @@ test_completion_promotes_only_associated_status_pages() {
   run_captain "$home" hold call-c --title 'Choisir C' \
     --reason choisir --repo sample --origin "$id" >/dev/null || fail "could not hold call without a page"
   before=$(tasks_in "$home" show call-b --full)
-  cat > "$home/state/$id.status" <<'EOF'
+  cat > "$home/state/call-a.status" <<'EOF'
 paused: http://localhost:4387/session/a-draft
 done: http://localhost:4387/session/a-final
-done: http://localhost:4387/session/unassigned
 EOF
+  printf 'done: http://localhost:4387/session/unassigned\n' > "$home/state/$id.status"
   run_captain "$home" complete "$id" call-a call-b call-c >/dev/null || fail "associated-page completion failed"
   after=$(tasks_in "$home" show call-b --full)
   [ "$before" = "$after" ] || fail "unassociated status pages changed explicit call links"
-  rm "$home/state/$id.status" "$home/state/$id.meta"
+  rm "$home/state/$id.status" "$home/state/$id.meta" "$home/state/call-a.status"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "associated-page snapshot failed"
   jq -e '.decisions_open[] | select(.id == "call-a") | (.links | split(" ")) ==
     ["http://localhost:4387/session/a-final", "http://localhost:4387/session/a-draft"]' "$home/snapshot.json" >/dev/null \
@@ -3260,16 +3258,17 @@ EOF
 test_partial_completion_leaves_unowned_calls_without_pages() {
   local home id page show
   home=$(make_home partial-page-ownership)
-  id=call-a
+  id=review-origin
   write_origin_meta "$home" "$id"
-  run_captain "$home" hold "$id" --title 'Choisir A' --reason choisir --repo sample >/dev/null || fail "could not hold origin call"
+  run_captain "$home" hold call-a --title 'Choisir A' --reason choisir --repo sample --origin "$id" >/dev/null || fail "could not hold first call"
+  tasks_in "$home" add call-b 'Choisir B' --repo sample >/dev/null || fail "could not create existing sibling"
   run_captain "$home" hold call-b --title 'Choisir B' --reason 'http://localhost:4387/session/b' \
-    --repo sample --origin "$id" >/dev/null || fail "could not hold sibling call"
+    --repo sample --origin "$id" --until 2000-01-01 >/dev/null || fail "could not hold sibling call"
   printf 'done: http://localhost:4387/session/b\n' > "$home/state/$id.status"
-  run_captain "$home" complete "$id" "$id" >/dev/null || fail "partial completion failed"
-  show=$(tasks_in "$home" show "$id" --full)
+  run_captain "$home" complete "$id" call-a >/dev/null || fail "partial completion failed"
+  show=$(tasks_in "$home" show call-a --full)
   assert_not_contains "$show" 'http://localhost:4387/session/b' "partial completion claimed a sibling page"
-  run_captain "$home" complete "$id" "$id" call-b >/dev/null || fail "full completion failed"
+  run_captain "$home" complete "$id" call-a call-b >/dev/null || fail "full completion failed"
   rm "$home/state/$id.status" "$home/state/$id.meta"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "ownership snapshot failed"
   jq -e '(.decisions_open[] | select(.id == "call-a") | .links == "")

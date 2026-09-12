@@ -501,7 +501,6 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
             title:(.title // null),
             doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
   | (.tasks // []) as $fleet_tasks
-  | .backlog.records as $call_records
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)
@@ -510,8 +509,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
             summary:hold_summary(.title; .hold_reason),title:(.title // null),owner:"(main)",repo:(.repo // null),
             since:((.hold_set // .since) | hold_day),
             links:call_links((.links // []) +
-                             call_owned_status_links($record; $record.id; $call_records;
-                               [ $fleet_tasks[] | select(.id == $record.id) | .links[]? ]); null)} ]
+                             ([ $fleet_tasks[] | select(.id == $record.id) | .links[]? ]); null)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")

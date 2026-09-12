@@ -113,7 +113,7 @@
 # passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
 # For each still-held inventory task, completion preserves eligible review URLs
-# from the origin's status log in the hold reason before status cleanup.
+# from its own status log in the hold reason before status cleanup.
 # `merge_review_pages` owns promotion for both completion and hold retries;
 # bin/fm-call-links.jq owns extraction and bin/fm-projets-data.jq eligibility.
 # Completion rereads status candidates under the held task's control lock.
@@ -1594,7 +1594,6 @@ command_answers() {
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
   local attested_by_prefix='' page_urls='[]' show reason updated_reason until
-  local held_listing held_ids held_id held_show held_records held_count record
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1627,37 +1626,13 @@ command_complete() {
         acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
         verify_hold_durable "$CAPTAIN_RESOLVED_ID"
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
-        status_file="$STATE/$origin.status"
+        status_file="$STATE/$CAPTAIN_RESOLVED_ID.status"
         page_urls='[]'
         if [ -f "$status_file" ]; then
-          held_listing=$(tasks_axi list --state held --limit 2147483647) || fail "cannot inventory held calls for $origin"
-          held_count=$(printf '%s\n' "$held_listing" | sed -n 's/^count: \([0-9][0-9]*\)$/\1/p')
-          held_ids=$(printf '%s\n' "$held_listing" | awk -F, '/^  [A-Za-z0-9._-]+,/ {sub(/^ +/, "", $1); print $1}')
-          [ -n "$held_count" ] && [ "$held_count" = "$(printf '%s\n' "$held_ids" | awk 'NF {n++} END {print n+0}')" ] \
-            || fail "held-call inventory is incomplete for $origin"
-          held_records=''
-          while IFS= read -r held_id; do
-            [ -n "$held_id" ] || continue
-            held_show=$(task_show "$held_id") || fail "cannot read held call $held_id"
-            record=$(jq -n --arg id "$held_id" --arg state "$(show_field_value "$held_show" state)" \
-              --arg kind "$(show_field_value "$held_show" hold_kind)" --arg body "$(show_field_value "$held_show" body)" \
-              '{id:$id,state:$state,hold_kind:$kind,body_lines:($body | split("\n"))}') \
-              || fail "cannot inspect held call $held_id"
-            held_records="${held_records}${record}"$'\n'
-          done <<EOF
-$held_ids
-EOF
-          held_records=$(printf '%s' "$held_records" | jq -s .) || fail "cannot collect held calls for $origin"
-          page_urls=$(jq -L "$SCRIPT_DIR" -Rs --arg origin "$origin" --arg id "$CAPTAIN_RESOLVED_ID" \
-            --argjson records "$held_records" \
-            --arg reason "$(show_field_value "$show" hold_reason)" \
-            --arg title "$(show_field_value "$show" title)" '
+          page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
             include "fm-call-links"; include "fm-projets-data";
-            call_link_candidates([]; .) as $urls
-            | call_link_candidates([]; $reason + "\n" + $title) as $explicit
-            | call_owned_status_links({id:$id,links:$explicit}; $origin; $records; $urls)
-            | map(select(project_page_url))
-          ' "$status_file") || fail "cannot collect recorded pages for $origin"
+            call_link_candidates([]; .) | map(select(project_page_url))
+          ' "$status_file") || fail "cannot collect recorded pages for $CAPTAIN_RESOLVED_ID"
         fi
         if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != "done" ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
