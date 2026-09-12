@@ -162,11 +162,11 @@ Events default to 5 per task and 20 overall (FM_BEARINGS_EVENTS_PER_TASK /
 FM_BEARINGS_EVENTS), with bounded text; --all-events reveals all available events.
 Raise FM_BEARINGS_PR_LIMIT to expand per-repository open-PR results.
 decisions_open carries, per held captain call, the date it was put to the captain
-  (since, YYYY-MM-DD, null when the row records none) and links: up to five URLs
-  already on record for it, space separated and best first, the backlog row links
-  (its hold reason among them) before the ones in that task's latest recorded
-  status line. They are candidates with no policy attached: each consumer decides
-  which link it can use. links is the empty string when the call records none.
+  (since, YYYY-MM-DD, from hold_set with since as fallback, null when absent)
+  and links: space-separated URL candidates, or the empty string when absent.
+  The hold reason precedes the rest of the backlog row, then the task's status
+  candidates follow. bin/fm-call-links.jq owns extraction and status ordering;
+  consumers decide which candidate they can use.
 EOF
 }
 
@@ -391,10 +391,7 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
     (.hold_reason // .blocked_reason // "-") as $base
     | (hold_note) as $note
     | if $note == null then $base else ($note + ": " + $base) end;
-  # Every URL one held captain call has on record, best first: the ones written
-  # on its backlog row (the hold reason among them) and then the ones in the
-  # recorded status lines of that same task. Candidates only, with no
-  # policy about what they point at: each consumer decides which link it uses.
+  # Format the shared candidates for the public links field documented in help.
   def call_links($row_links; $status_text):
     call_link_candidates($row_links; $status_text) | join(" ");
   def hold_day:

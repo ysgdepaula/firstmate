@@ -31,12 +31,9 @@ def project_epoch:
           (($t.zone[1:3] | tonumber) * 3600 + ($t.zone[4:6] | tonumber) * 60)
           * (if $t.zone[:1] == "+" then 1 else -1 end) end)) catch null) // null
   end;
-# A DECISION PAGE is a review page this home serves itself: a Lavish session
-# (port 4387) or the stable front door (port 4390), on loopback or on the
-# captain's tailnet. That port pair is what distinguishes the page the captain
-# opens to decide from every other link a held call records (a PR, a document).
-# A home that moved its front door keeps its Lavish pages; "Stable page address"
-# in docs/configuration.md owns that port.
+# "Projects page" in docs/configuration.md owns decision-link eligibility and
+# the custom-port limitation; keep this narrower than ordinary project links
+# so a document or PR is not presented as the page for settling the decision.
 def project_page_url:
   if (project_url | not) then false
   else ((try capture("^https?://(?<host>\\[[0-9A-Fa-f:]+\\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(?<port>[0-9]{1,5}))?(?:[/?#].*)?$"; "i") catch null) // null) as $u

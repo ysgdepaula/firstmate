@@ -533,7 +533,7 @@ A budget that is not a whole number from 1 to 120 is still refused outright.
 ## Projects page (config/projets.json, data/projets-couts.json, data/projets-agenda.json)
 
 `config/projets.json` is the optional local, gitignored correspondence table that groups fleet work by the captain's projects for the `/projets` Lavish page and for the `/a-valider` page built from the same payload.
-[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`, matches every task, decision, and landed row first by task-id prefix (longest prefix wins) and then by repo, and sends what matches nothing to the brain card, or to the page's "sans projet" entry when no brain card is configured.
+[`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh) reads it at `compose`; its header owns project matching and the brain or "Sans projet" fallback, which keeps unmatched captain calls actionable on both pages.
 Without the table every repo becomes its own project and the page says the table is missing.
 Run `bin/fm-projets-board.sh init` to seed Torre, Solos, Club Julien Dumas, CRIA, YDEEP, Firstmate and the brain card Cerveau; an existing table is preserved unless `--force` is passed.
 All configured projects remain visible, including those without activity.
@@ -581,8 +581,8 @@ A decision entry's nonempty `options` replace the page's default buttons for tha
 Only this table can declare `etat`, because it is where firstmate records a reason to believe the captain may already have done the thing, and the page then always admits it cannot establish that state.
 `bin/fm-projets-board.sh`'s header owns those default buttons and the wording of that admission.
 The page counts entries with absent or empty options as a brain gap.
-A decision also shows the review page it can be settled on and the day it was put to the captain, both taken from what the held task already records: the URLs on its backlog row, its hold reason among them, then the ones in its latest status line.
-Only a review page this home serves is offered as that link, which means HTTP or HTTPS on loopback, on a `.ts.net` host, or on `localhost`, and on the Lavish port 4387 or the front-door port 4390; any other recorded link, a pull request included, is not a decision page and the page prints "pas de page dediee" instead.
+A decision also shows its recorded review page and the day it was put to the captain; [`bin/fm-bearings-snapshot.sh`](../bin/fm-bearings-snapshot.sh)'s help owns the source fields and candidate precedence.
+The direct review link accepts HTTP or HTTPS on `127.0.0.1`, `::1`, `localhost`, or a `.ts.net` host, and on the Lavish port 4387 or the front-door port 4390; when no candidate qualifies, the page prints "pas de page dédiée".
 A home that moves its front door off 4390 keeps decision links for Lavish sessions and loses them for front-door pages.
 Give a decision its link by recording that link on the held task, never by hand-editing a payload.
 The meeting is what the captain gave in chat; its optional `time` is local calendar time in `HH:MM` form.
@@ -636,9 +636,12 @@ A fresh empty reading says there are no upcoming meetings; an unavailable readin
 Bidirectional calendar synchronization is a following task, disclosed in block 7.
 These files are not inherited by secondmate homes.
 
-`bin/fm-projets-board.sh --page a-valider` renders a second page, `$FM_HOME/.lavish/a-valider.html`, from that same payload: every decision waiting on the captain across every project, grouped by project in the rail order and oldest first inside a project.
+The `a-valider` page presents the pending decisions across projects; [`bin/fm-projets-board.sh`](../bin/fm-projets-board.sh)'s header owns its render/build commands, ordering, and stable file path.
 It reads no fleet state of its own, takes the same validation and the same captain-vocabulary filter, and gets its own Lavish session and its own process-event source.
 On both pages a button only puts a prompt in the Lavish queue, which the captain sends himself; nothing acts from a page.
+To request one review page for several decisions, tick their checkboxes within a project and click "créer une page Lavish pour la sélection", then send the request from Lavish's Conversation panel.
+Changing a quick choice can leave its previous prompt in that queue; review and remove superseded entries before sending.
+The [projets skill](../.agents/skills/projets/SKILL.md#handling-a-page-wake) owns chat confirmation and handling of submitted choices and page requests.
 
 ## Stable page address (config/projets-serve.json)
 

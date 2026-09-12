@@ -112,6 +112,13 @@
 # `captain-held [key=...]` status close naming the inventory. Later review
 # passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
+# For each still-held inventory task, completion preserves eligible review URLs
+# from the origin's status log in the hold reason before status cleanup.
+# `merge_review_pages` owns promotion for both completion and hold retries;
+# bin/fm-call-links.jq owns extraction and bin/fm-projets-data.jq eligibility.
+# Completion rereads status candidates under the held task's control lock.
+# It then takes the origin's control lock before its metadata lock and revalidates
+# the inventory, preserving teardown's lock order even when origin holds itself.
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
 # entry must still be durable and no keyed status decision may be open.
@@ -1074,6 +1081,9 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
   rm -f -- "$tmp"
 }
 
+# Current-operation pages precede retained fallbacks, including already stored
+# URLs that need promotion. Keep ordered links in the hold reason, never in the
+# title: identical hold retries must still pass the strict title identity check.
 merge_review_pages() {
   jq -L "$SCRIPT_DIR" -nr --arg reason "$1" --arg previous "$2" --argjson current "${3:-[]}" '
     include "fm-call-links"; include "fm-projets-data";

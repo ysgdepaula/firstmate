@@ -13,7 +13,9 @@
 #
 # The same payload also makes the SECOND page, `--page a-valider`: everything
 # waiting on the captain, every project at once, grouped by project in the rail
-# order and oldest first inside a project. It reads no fleet state of its own.
+# order and oldest first inside a project, with undated entries last and ties
+# retaining payload order. It reads no fleet state of its own; an empty result
+# with collection warnings or partial projects cannot confirm no calls remain.
 #
 # Usage:
 #   fm-projets-board.sh init [--force]
@@ -95,11 +97,13 @@
 #     missing_from_you[]: {key:slug, owner, local_id, question, nature?:"decision"|"etat",
 #       ask?:string|null, options[]: {value:slug, label}, kind?:string,
 #       url:allowed|null, url_refused?:string,
-#       page:null|{url:decision-page}, since:null|YYYY-MM-DD}
+#       page?:null|{url:decision-page}, since?:null|YYYY-MM-DD}
 #       (kind "recommandation" or "article" marks a table-born entry; `page` is the
 #       review page the captain opens to decide, taken from the links the held
 #       call already records, and null when it records none so the page can say
-#       "pas de page dediee"; `since` is the day the call was put to him),
+#       "pas de page dediee"; `since` is the day the call was put to him.
+#       Table-born entries take page from their configured URL and have no date;
+#       older payloads may omit both fields),
 #     creations[]: {label, kind:string|null, url:allowed|null, url_refused?:string},
 #     unlinked[]: {id, what} (brain card only: rows that match no project),
 #     quick_wins[]: string (brain card only),

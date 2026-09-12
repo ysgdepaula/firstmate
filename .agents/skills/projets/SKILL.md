@@ -73,7 +73,8 @@ Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh sou
 Either page sends the same two kinds of item, both plain prompts the keyed-answer extractor skips by design, so nothing has been closed for you:
 
 - tag `choice`, context data `projet` / `decision` / `choix` / `nature`: one closed choice on one call, handled below.
-- tag `create-lavish`, context data `projet` / `decisions` (the keys) / `titres`: a REQUEST to build one page that settles those calls together, never an answer to any of them. Ask the captain in chat which page he wants and confirm the scope, then do that work as an ordinary task; leave every named call held until he actually rules on it.
+- tag `create-lavish`, context data `projet` / `decisions` (the keys) / `titres`: a REQUEST to build one page that settles those calls together, never an answer to any of them.
+  Ask the captain in chat which page he wants and confirm the scope, then do that work as an ordinary task; leave every named call held until he actually rules on it.
 
 Because the captain now sends the queue himself, several items usually arrive together; read them all before replying so he gets one chat pass, not one per button.
 A `decision` starting with `reco__` answers one of your recommendations and one starting with `article__` rules on a brain article; resolve these against the table's pending lists, not a held task.
