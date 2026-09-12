@@ -2952,6 +2952,8 @@ test_completion_preserves_review_pages_after_status_cleanup() {
   run_captain "$home" hold sample-page-call --title "Choisir la suite" --reason "choisir" --repo sample --origin "$id" --until 2026-12-31 >/dev/null || fail "could not hold review"
   before=$(tasks_in "$home" show sample-page-call --full)
   printf 'needs-decision [key=route]: choisir la suite\n' > "$home/state/$id.status"
+  # Backticks are literal fixture content for the delimiter-trimming test.
+  # shellcheck disable=SC2016
   printf 'paused: voir `http://localhost:4387/session/durable`.\n' > "$home/state/sample-page-call.status"
   run_captain "$home" complete "$id" sample-page-call >/dev/null || fail "completion did not retain page"
   assert_grep 'captain-held [key=route]: tracked by sample-page-call' "$home/state/$id.status" "completion did not record its transfer"
