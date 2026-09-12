@@ -1569,7 +1569,7 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  local attested_by_prefix='' page_urls='[]' show reason updated_reason until
+  local attested_by_prefix='' page_urls='[]' show reason updated_reason title updated_title until
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1591,13 +1591,6 @@ command_complete() {
     previous=$(meta_value "$meta" decision_keys)
   fi
   keys=$(sorted_key_union "$previous" "$supplied")
-  status_file="$STATE/$origin.status"
-  if [ -n "$keys" ] && [ -f "$status_file" ]; then
-    page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
-      include "fm-call-links"; include "fm-projets-data";
-      call_link_candidates([]; .) | map(select(project_page_url))
-    ' "$status_file") || fail "cannot collect recorded pages for $origin"
-  fi
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -1605,11 +1598,19 @@ command_complete() {
       if [ "$CAPTAIN_RESOLVED_HOW" = migrated-prefix ]; then
         attested_by_prefix="${attested_by_prefix}${attested_by_prefix:+ }$entry=$CAPTAIN_RESOLVED_ID"
       fi
-      if [ -n "$CAPTAIN_RESOLVED_ID" ] && [ "$page_urls" != '[]' ]; then
+      if [ -n "$CAPTAIN_RESOLVED_ID" ]; then
         acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
         verify_hold_durable "$CAPTAIN_RESOLVED_ID"
+        status_file="$STATE/$origin.status"
+        page_urls='[]'
+        if [ -f "$status_file" ]; then
+          page_urls=$(jq -L "$SCRIPT_DIR" -Rs '
+            include "fm-call-links"; include "fm-projets-data";
+            call_link_candidates([]; .) | map(select(project_page_url))
+          ' "$status_file") || fail "cannot collect recorded pages for $origin"
+        fi
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
-        if [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
+        if [ "$page_urls" != '[]' ] && [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
           updated_reason=$(jq -nr --arg reason "$reason" --argjson urls "$page_urls" '
             ($reason | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
@@ -1619,6 +1620,15 @@ command_complete() {
             until=$(show_field_value "$show" hold_until)
             tasks_axi hold "$CAPTAIN_RESOLVED_ID" --kind captain --reason "$updated_reason" ${until:+--until "$until"} >/dev/null \
               || fail "cannot retain recorded pages for $CAPTAIN_RESOLVED_ID"
+          fi
+          title=$(show_field_value "$show" title)
+          updated_title=$(jq -nr --arg title "$title" --argjson urls "$page_urls" '
+            ($title | split(" ") | map(select(. as $word | $urls | index($word) | not))) as $remaining
+            | ($urls + $remaining) | join(" ")
+          ') || fail "cannot promote recorded pages for $CAPTAIN_RESOLVED_ID"
+          if [ "$updated_title" != "$title" ]; then
+            tasks_axi update "$CAPTAIN_RESOLVED_ID" --title "$updated_title" >/dev/null \
+              || fail "cannot promote recorded pages for $CAPTAIN_RESOLVED_ID"
           fi
         fi
         fm_lock_release "$CAPTAIN_CONTROL_LOCK"
