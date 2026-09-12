@@ -1178,6 +1178,42 @@ EOF
   pass "captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls"
 }
 
+# A held captain call carries the URLs already on record for it, so a page
+# built from this projection can offer the captain a direct link instead of
+# asking him to answer something he cannot open. Candidates only: the row links
+# first (the hold reason among them), then the latest status line of that task.
+test_a_captain_call_carries_its_recorded_links_and_date() {
+  local home fakebin json
+  home=$(make_home call-links)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] linked-call - Held call with a page (repo: firstmate) (kind: captain) (hold: answer on http://localhost:4387/session/abc) (hold-kind: captain)
+  Captain hold set: 2026-07-09
+- [ ] status-call - Held call whose page is in its status (repo: firstmate) (kind: captain) (hold: six questions) (hold-kind: captain)
+- [ ] bare-call - Held call with nothing on record (repo: firstmate) (kind: captain) (hold: choose) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$home/state/status-call.meta" \
+    "window=firstmate:fm-status-call" "endpoint_task_id=status-call" \
+    "worktree=$home/wt" "project=firstmate" "harness=echo" "kind=scout" "mode=no-mistakes" "yolo=off"
+  printf 'working: reading\ndone: page http://ydeep.ts.net:4387/session/zed and report\n' \
+    > "$home/state/status-call.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open[] | select(.id == "linked-call")
+     | .links == "http://localhost:4387/session/abc" and .since == "2026-07-09")
+    and (.decisions_open[] | select(.id == "status-call")
+         | .links == "http://ydeep.ts.net:4387/session/zed" and .since == null)
+    and (.decisions_open[] | select(.id == "bare-call") | .links == "" and .since == null)
+  ' >/dev/null || fail "a held captain call did not carry the links and date it records: $json"
+  pass "a held captain call carries the URLs and the date already on its record"
+}
+
 test_undated_hold_phrasing_and_aging_projection() {
   local home mate fakebin json
   home=$(make_home undated-aging-proj)
@@ -2971,6 +3007,7 @@ test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
+test_a_captain_call_carries_its_recorded_links_and_date
 test_undated_hold_phrasing_and_aging_projection
 test_blocked_deferred_hold_has_concrete_disclosure
 test_revealed_deferred_holds_show_their_deferral_reason

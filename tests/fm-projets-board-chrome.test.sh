@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Opt-in browser checks of the generated page under a real Chrome: the visible
-# delivery failure without Lavish, and the phone layout at a narrow width where
+# Opt-in browser checks of the generated pages under a real Chrome: the visible
+# queueing failure without Lavish, and the phone layout at a narrow width where
 # no text may be covered by another element, nothing may overflow the viewport,
 # and every button must be reachable on the selected card at exactly 390 px,
 # with the folded and unfolded block states asserted before geometry checks.
 # The decision card fixtures carry both natures, including the four-choice
 # decision fallback and the line admitting an unknown state, because those are
 # the widest rows the captain reads on a phone.
+# The "a valider" page gets the same phone check, selection boxes included.
 set -eu
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
@@ -17,7 +18,7 @@ TMP_ROOT=$(fm_test_tmproot fm-projets-chrome)
 export FM_HOME="$TMP_ROOT/home" FM_STATE_OVERRIDE="$TMP_ROOT/home/state" FM_DATA_OVERRIDE="$TMP_ROOT/home/data" FM_CONFIG_OVERRIDE="$TMP_ROOT/home/config"
 mkdir -p "$FM_HOME/data"
 cat > "$TMP_ROOT/payload.json" <<'DATA'
-{"schema":"fm-projets-board.v1","home":"test","generated":"2026-09-11T12:00:00Z","updated_label":"11/09","badges":{"workers":0,"decisions":1,"subscriptions":null},"projects":[{"id":"torre","name":"Torre","doing":[],"missing_from_you":[{"key":"choix","question":"On continue ?","options":[{"value":"oui","label":"oui"}],"url":null}],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","source":"à mesurer"},"journal":[],"meeting":null,"gaps":[]}],"unassigned":[],"table_missing":false}
+{"schema":"fm-projets-board.v1","home":"test","generated":"2026-09-11T12:00:00Z","updated_label":"11/09","badges":{"workers":0,"decisions":1,"subscriptions":null},"projects":[{"id":"torre","name":"Torre","doing":[],"missing_from_you":[{"key":"choix","question":"On continue ?","options":[{"value":"oui","label":"oui"}],"url":null,"page":null,"since":null}],"missing_from_others":[],"pages":[],"costs":{"period":"septembre","source":"à mesurer"},"journal":[],"meeting":null,"gaps":[]}],"unassigned":[],"table_missing":false}
 DATA
 "$ROOT/bin/fm-projets-board.sh" render "$TMP_ROOT/payload.json" >/dev/null
 python3 - "$FM_HOME/.lavish/projets.html" <<'PY'
@@ -29,8 +30,8 @@ s=s.replace('</body>', '''<script>
 document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){
   document.querySelector('[data-choice]').click();
   var deliveryStatus = document.querySelector('.you .ok');
-  document.body.dataset.deliveryVisible = String(deliveryStatus.textContent.includes('non transmis') && getComputedStyle(deliveryStatus).display !== 'none' && deliveryStatus.getBoundingClientRect().height > 0);
-  document.body.dataset.fallbackMarked = String(document.querySelector('[data-choice]').dataset.transmitted === 'false' && document.querySelector('[role="alert"]').textContent.includes('Ici les boutons ne transmettent rien'));
+  document.body.dataset.deliveryVisible = String(deliveryStatus.textContent.includes('non mis en file') && getComputedStyle(deliveryStatus).display !== 'none' && deliveryStatus.getBoundingClientRect().height > 0);
+  document.body.dataset.fallbackMarked = String(document.querySelector('[data-choice]').dataset.transmitted === 'false' && document.querySelector('[role="alert"]').textContent.includes('Ici les boutons ne mettent rien en file'));
 }, 50); });
 </script></body>''')
 p.write_text(s)
@@ -76,10 +77,10 @@ class Result(HTMLParser):
             self.marked=dict(attrs).get('data-fallback-marked') == 'true'
 r=Result()
 r.feed(Path(sys.argv[1]).read_text())
-assert r.marked, 'the fallback banner and unsent button marker were not rendered'
-assert r.visible, 'delivery refusal is not visible in Chrome: ' + Path(sys.argv[1]).read_text().split('<body', 1)[-1].split('<script', 1)[0]
+assert r.marked, 'the fallback banner and unqueued button marker were not rendered'
+assert r.visible, 'the queueing refusal is not visible in Chrome: ' + Path(sys.argv[1]).read_text().split('<body', 1)[-1].split('<script', 1)[0]
 PY
-pass "Chrome displays the stable-address fallback and marks buttons as unsent without Lavish"
+pass "Chrome displays the stable-address fallback and marks buttons as unqueued without Lavish"
 
 # --- phone layout: nothing covered, nothing overflowing, every button reachable ---
 cat > "$TMP_ROOT/filled.json" <<'DATA'
@@ -91,10 +92,10 @@ cat > "$TMP_ROOT/filled.json" <<'DATA'
             {"id":"t3","result":"agent client WhatsApp v0","status":"en pause, attente extérieure · numéro Meta","next":null,"url":null},
             {"id":"t4","result":"quatrième résultat replié","status":"en cours","next":null,"url":null}],
    "scouts":[{"id":"s1","result":"audit Shopify vs Stripe custom (vs Square Online) pour le site click and collect","status":"état inconnu","next":null,"url":null}],
-   "missing_from_you":[{"key":"torre-hebergement","question":"trancher hebergement et montage de facturation, les deux sont lies","nature":"decision","ask":null,"options":[{"value":"a","label":"hébergé chez toi"},{"value":"b","label":"hébergé chez Torre"},{"value":"c","label":"plus tard"}],"url":null},
-                       {"key":"torre-relance","question":"relancer le fournisseur de la boutique pilote avant le 14/09","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null},
-                       {"key":"torre-domaine","question":"Le domaine de la boutique est basculé chez le registrar ?","nature":"etat","ask":"je ne sais pas si c’est déjà fait","options":[{"value":"je-l-ai-fait","label":"je l’ai fait"},{"value":"pas-encore","label":"pas encore"},{"value":"on-en-parle","label":"on en parle"}],"url":null},
-                       {"key":"reco__meta","question":"Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend","nature":"decision","ask":null,"kind":"recommandation","options":[{"value":"on-y-va","label":"on y va"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null}],
+   "missing_from_you":[{"key":"torre-hebergement","question":"trancher hebergement et montage de facturation, les deux sont lies","nature":"decision","ask":null,"options":[{"value":"a","label":"hébergé chez toi"},{"value":"b","label":"hébergé chez Torre"},{"value":"c","label":"plus tard"}],"url":null,"page":null,"since":null},
+                       {"key":"torre-relance","question":"relancer le fournisseur de la boutique pilote avant le 14/09","nature":"decision","ask":"on le fait, ou on ne le fait pas ?","options":[{"value":"on-y-va","label":"on y va"},{"value":"on-ne-le-fait-pas","label":"on ne le fait pas"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":null,"since":null},
+                       {"key":"torre-domaine","question":"Le domaine de la boutique est basculé chez le registrar ?","nature":"etat","ask":"je ne sais pas si c’est déjà fait","options":[{"value":"je-l-ai-fait","label":"je l’ai fait"},{"value":"pas-encore","label":"pas encore"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":null,"since":null},
+                       {"key":"reco__meta","question":"Brancher Meta dès l accès de Bechir : le pilote du 14/09 en dépend","nature":"decision","ask":null,"kind":"recommandation","options":[{"value":"on-y-va","label":"on y va"},{"value":"pas-maintenant","label":"pas maintenant"},{"value":"on-en-parle","label":"on en parle"}],"url":null,"page":null,"since":null}],
    "missing_from_others":[{"who":"Eli","what":"les factures d un circuit fournisseur","tag":"avant le 11/09"}],
    "pages":[{"label":"Espace client","url":"http://machine.ts.net:4387/session/1","state":"à jour 10/09"}],
    "creations":[{"label":"Démo de l interface de suivi","url":"http://machine.ts.net:4387/session/2","kind":"page"}],
@@ -104,14 +105,17 @@ cat > "$TMP_ROOT/filled.json" <<'DATA'
    "meetings":[{"title":"Pilote sur place","date":"2026-09-14","time":"10:00","source":"agenda et chat","with":"Eli et la boutique pilote","bring":["la démo"],"decide":["l enveloppe"]}],
    "agenda_available":true,"gaps":["coûts à mesurer","2 questions sans choix fermés : la page propose les choix par défaut"]},
   {"id":"cerveau","name":"Cerveau","brain":true,"doing":[],"scouts":[],
-   "missing_from_you":[{"key":"article__x","question":"Article à valider : Doctrine de dépense des modèles","nature":"decision","ask":null,"kind":"article","options":[{"value":"valide","label":"validé"},{"value":"a-revoir","label":"à revoir"}],"url":null}],
+   "missing_from_you":[{"key":"article__x","question":"Article à valider : Doctrine de dépense des modèles","nature":"decision","ask":null,"kind":"article","options":[{"value":"valide","label":"validé"},{"value":"a-revoir","label":"à revoir"}],"url":null,"page":null,"since":null}],
    "missing_from_others":[],"pages":[],"creations":[],"unlinked":[{"id":"u1","what":"SACEM : relancer Sabine Jacob si pas de reponse"}],"quick_wins":["Indexer les rapports de scouts"],
    "costs":{"period":"septembre","tokens_api":null,"subscription_share":null,"source":"à mesurer"},"journal":[],"meeting":null,"gaps":[]}],
  "unassigned":[],"table_missing":false}
 DATA
 "$ROOT/bin/fm-projets-board.sh" render "$TMP_ROOT/filled.json" >/dev/null
-for target in torre cerveau 'torre&open' 'cerveau&open'; do
-  python3 - "$FM_HOME/.lavish/projets.html" "$TMP_ROOT/host.html" "$target" <<'PYHOST'
+"$ROOT/bin/fm-projets-board.sh" render --page a-valider "$TMP_ROOT/filled.json" >/dev/null
+for target in torre cerveau 'torre&open' 'cerveau&open' 'torre&valider' 'cerveau&valider'; do
+  page="$FM_HOME/.lavish/projets.html"
+  case "$target" in *'&valider') page="$FM_HOME/.lavish/a-valider.html" ;; esac
+  python3 - "$page" "$TMP_ROOT/host.html" "$target" <<'PYHOST'
 from pathlib import Path
 import html, json, sys
 source, host, target = sys.argv[1:]
@@ -121,9 +125,12 @@ setTimeout(function(){
   var wanted = __PROJECT__, unfold = __UNFOLD__;
   var rail = document.querySelector('button[data-project="' + wanted + '"]');
   if (rail) rail.click();
-  var card = document.querySelector('.card:not([hidden])');
+  var card = document.querySelector('.card[data-project="' + wanted + '"]') || document.querySelector('.card:not([hidden])');
   var toggles = card ? Array.from(card.querySelectorAll('.bloc .toggle')) : [];
   if (unfold) toggles.forEach(function(button){ if (button.getAttribute('aria-expanded') === 'false') button.click(); });
+  /* cocher une decision ouvre le bouton de groupe : il doit rester dans le flux */
+  var box = card && card.querySelector('input[data-select]');
+  if (box) box.click();
   setTimeout(function(){
     var w = document.documentElement.clientWidth, issues = [];
     Array.prototype.forEach.call(document.querySelectorAll("body *"), function(e){
@@ -194,9 +201,12 @@ a = r.data
 project, _, mode = sys.argv[2].partition('&')
 assert a.get('data-width') == '390' and a.get('data-viewport') == '390', a
 assert a.get('data-card') == project, a
-assert a.get('data-blocks') == '7', a
-assert a.get('data-open') == ('7' if mode == 'open' else '1'), a
+if mode == 'valider':
+    assert a.get('data-blocks') == '0', a
+else:
+    assert a.get('data-blocks') == '7', a
+    assert a.get('data-open') == ('7' if mode == 'open' else '1'), a
 assert a.get('data-issues') == '0', "phone layout issues for %s: %s" % (sys.argv[2], a)
 PY
 done
-pass "Chrome checks both selected cards at 390 px, folded and unfolded, without coverage or overflow"
+pass "Chrome checks both pages and both cards at 390 px, folded and unfolded, without coverage or overflow"

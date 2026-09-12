@@ -121,11 +121,25 @@ td.dim { color: var(--muted); }
 .btn { border: var(--hair) solid var(--ink); border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--paper);
        text-align: left; max-width: 100%; }
 .btn:hover { background: var(--ink); color: var(--paper); }
-.you li.sent { border-style: dashed; }
-.you li.sent .btn { border-color: var(--line); color: var(--muted); }
+.btn.on { background: var(--ink); color: var(--paper); }
+.btn:disabled { border-color: var(--line); color: var(--faint); cursor: default; background: var(--paper); }
+.you li.queued { border-style: dashed; }
+.you li.queued .btn { border-color: var(--line); color: var(--muted); }
+.you li.queued .btn.on { border-color: var(--ink); background: var(--ink); color: var(--paper); }
 .you .ok { flex-basis: 100%; color: var(--muted); font-size: 13px; display: none; }
 .you li.refused { border-style: dotted; }
-.you li.sent .ok, .you li.refused .ok { display: block; }
+.you li.queued .ok, .you li.refused .ok { display: block; }
+/* la case de selection reste dans le flux du titre, jamais flottante */
+.you .pick { width: 15px; height: 15px; margin: 0 8px 0 0; vertical-align: -2px; accent-color: var(--ink); }
+/* le lien direct vers la page d'une decision, ou le trou nomme */
+.you .page { flex: 0 0 auto; font-size: 13px; }
+.you .page .go { text-decoration: underline; text-underline-offset: 3px; }
+.you .page .dim { color: var(--faint); font-style: italic; }
+/* demander une page qui traite plusieurs decisions ensemble */
+.group { margin-top: 12px; display: flex; align-items: baseline; gap: 10px 12px; flex-wrap: wrap; }
+.group .make { border-width: var(--struct); }
+.group .src { margin-top: 0; flex: 1 1 240px; min-width: 0; }
+.group.queued .src, .group.refused .src { color: var(--ink); }
 
 .gaps { margin-top: 22px; border-top: var(--hair) dashed var(--line); padding-top: 14px; }
 .gaps h3 { font-family: var(--f-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 400; margin-bottom: 8px; }
@@ -158,7 +172,11 @@ td.dim { color: var(--muted); }
                                 text-transform: uppercase; color: var(--muted); margin-bottom: 1px; }
   .tag { display: inline-block; margin: 4px 6px 0 0; }
   .you li { align-items: stretch; }
-  .you .q, .you .btns, .you .ok { flex-basis: 100%; }
+  .you .q, .you .btns, .you .ok, .you .page { flex-basis: 100%; }
+  .group { flex-direction: column; align-items: stretch; }
+  .group .make { text-align: center; }
+  /* en colonne, une base flex devient une HAUTEUR : la note reprend la sienne */
+  .group .src { flex: 0 0 auto; }
 }
 </style>
 </head>
@@ -386,64 +404,15 @@ __FM_PROJETS_BOARD_DATA__
     s.appendChild(ul);
   }
 
+  /* Ce que fait une decision - mise en file, lien direct, selection groupee -
+     vit dans le bloc partage ci-dessous, injecte a l'identique dans les deux
+     pages pour qu'un clic veuille dire la meme chose partout. */
+__FM_PROJETS_DECISIONS_JS__
+
   function renderYou(body, project) {
     var rows = project.missing_from_you;
     if (!rows.length) { body.appendChild(el("p", "empty", project.partial ? "État partiel : décisions non confirmées." : "Rien ne manque de toi sur ce projet.")); return; }
-    var ul = el("ul", "you");
-    rows.forEach(function (r) {
-      var li = el("li", "");
-      li.setAttribute("data-decision", r.key);
-      if (r.kind) li.setAttribute("data-kind", r.kind);
-      if (r.nature) li.setAttribute("data-nature", r.nature);
-      var q = el("span", "q");
-      q.appendChild(link(r.question, r.url, "", r.url_refused));
-      if (r.kind) q.appendChild(tag(r.kind));
-      /* La carte dit ce qu'elle demande, a cote de la question : une decision,
-         ou un etat que le cerveau ne sait pas. Le composeur ecrit la phrase ;
-         la page n'en invente aucune et n'en affiche aucune par defaut. */
-      if (r.ask) q.appendChild(el("span", "ask", r.ask));
-      li.appendChild(q);
-      var btns = el("div", "btns");
-      var ok = el("span", "ok");
-      r.options.forEach(function (o) {
-        var b = el("button", "btn", o.label);
-        b.type = "button";
-        b.setAttribute("data-choice", o.value);
-        b.addEventListener("click", function () {
-          /* Un clic ne ferme rien : firstmate repose la question en chat avant d'agir.
-             L'en-tete de bin/fm-projets-board.sh definit le contexte transmis et son exclusion de l'entree a cle. */
-          var text = "Projets · " + project.name + " · " + r.question + " : " + o.label;
-          if (utf8ByteLength(text) > 512) text = text.slice(0, 200);
-          if (!window.lavish || typeof window.lavish.queuePrompt !== "function" || typeof window.lavish.sendQueuedPrompts !== "function") {
-            li.className = "refused";
-            ok.textContent = "non transmis : ouvre cette page dans Lavish";
-            return;
-          }
-          function sent() {
-            li.className = "sent";
-            ok.textContent = "envoyé à firstmate : " + o.label + ". Firstmate te reposera la question en chat avant d'agir.";
-          }
-          function failed() {
-            li.className = "refused";
-            ok.textContent = "non transmis : l’envoi a échoué, réessaie dans Lavish";
-          }
-          try {
-            window.lavish.queuePrompt(text, {
-              tag: "choice", text: project.name + " : " + r.question + " -> " + o.label, element: li,
-              data: { projet: project.id, decision: r.key, choix: o.value, nature: r.nature || "decision" }
-            });
-            var result = window.lavish.sendQueuedPrompts();
-            if (result && typeof result.then === "function") result.then(function (value) { if (value === false) failed(); else sent(); }, failed);
-            else if (result === false) failed(); else sent();
-          } catch (e) { failed(); }
-        });
-        btns.appendChild(b);
-      });
-      li.appendChild(btns);
-      li.appendChild(ok);
-      ul.appendChild(li);
-    });
-    body.appendChild(ul);
+    renderDecisions(body, project, rows);
   }
 
   function renderOthers(body, rows) {

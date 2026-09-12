@@ -5,8 +5,10 @@
 # tests/assets/projets-render-harness.mjs. The assertions are on what the page
 # renders - the three badges, the rail order, the seven blocks and their empty
 # states, the three-line cap, the unassigned card, the brain card, the phone
-# layout (stacked cells, folded blocks that keep no box), and what a choice
-# button queues for firstmate - never on the template's source text.
+# layout (stacked cells, folded blocks that keep no box), what a choice button
+# queues for firstmate and what it deliberately never sends, the direct link to
+# a decision page, and the "a valider" page built from the same payload - never
+# on the template's source text.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -35,17 +37,31 @@ empty_project() {  # <id> <name>
 }
 
 # Render <projects-json> (an array) with the given badges and print what the
-# renderer produced. Extra harness options follow.
-render() {  # <home> <projects-json> <badges-json> <unassigned-json> [harness opts...]
-  local home=$1 projects=$2 badges=$3 unassigned=$4 data="$1/payload.json"
+# renderer produced. Extra harness options follow; `page=a-valider` renders and
+# reads the second page from the very same payload.
+render() {  # <home> <projects-json> <badges-json> <unassigned-json> [page=<name>] [harness opts...]
+  local home=$1 projects=$2 badges=$3 unassigned=$4 data="$1/payload.json" page=projets file
   shift 4
+  case "${1:-}" in page=*) page=${1#page=}; shift ;; esac
   jq -n --argjson projects "$projects" --argjson badges "$badges" --argjson unassigned "$unassigned" '{
     schema: "fm-projets-board.v1", home: "render/home", generated: "2026-09-11T00:30:00Z",
     updated_label: "11/09 00h30", badges: $badges, projects: $projects, unassigned: $unassigned,
     table_missing: false}' > "$data"
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_CONFIG_OVERRIDE="$home/config" "$BOARD" render "$data" >/dev/null || fail "the page did not render"
-  node "$HARNESS" "$home/.lavish/projets.html" "$@" || fail "the built page could not be rendered"
+    FM_CONFIG_OVERRIDE="$home/config" "$BOARD" render --page "$page" "$data" >/dev/null \
+    || fail "the page did not render"
+  file=$(FM_HOME="$home" "$BOARD" path --page "$page")
+  node "$HARNESS" "$file" "$@" || fail "the built page could not be rendered"
+}
+
+# One decision with closed choices, used by the queue and direct-link tests.
+decision() {  # <key> <question> [page-url] [since]
+  jq -n --arg key "$1" --arg q "$2" --arg url "${3:-}" --arg since "${4:-}" '{
+    key: $key, question: $q,
+    options: [{value: "chez-toi", label: "chez toi"}, {value: "chez-torre", label: "chez Torre"}],
+    url: null,
+    page: (if $url == "" then null else {url: $url} end),
+    since: (if $since == "" then null else $since end)}'
 }
 
 test_an_empty_project_renders_all_seven_blocks_with_empty_states() {
@@ -106,29 +122,144 @@ test_doing_shows_three_rows_and_folds_the_rest_behind_voir_tout() {
   pass "the doing block shows three rows and folds the rest behind voir tout"
 }
 
-test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer() {
+# The captain sends the queue himself, so a click must stop at queuePrompt: the
+# shim records EVERY lavish call, so a page that still sent the queue would show
+# a second call here.
+one_decision_project() {  # [page-url] [since]
+  jq -n --argjson p "$(empty_project torre Torre)" \
+        --argjson d "$(decision torre-hebergement "Hébergement : chez toi ou chez Torre ?" "${1:-}" "${2:-}")" \
+    '[ ($p | .missing_from_you = [$d]) ]'
+}
+
+test_a_choice_button_only_queues_and_never_sends_the_queue_itself() {
   local home out projects
   home=$(make_home click)
-  projects=$(jq -n --argjson p "$(empty_project torre Torre)" '
-    [ ($p | .missing_from_you = [{key: "torre-hebergement", question: "Hébergement : chez toi ou chez Torre ?",
-        options: [{value: "chez-toi", label: "chez toi"}, {value: "chez-torre", label: "chez Torre"}], url: null}]) ]')
+  projects=$(one_decision_project)
   out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' click=torre/torre-hebergement/chez-torre)
   printf '%s' "$out" | jq -e '
-    .calls == ["queuePrompt", "sendQueuedPrompts"]
-    and (.cards[0].blocs[1].decisions[0].message | contains("envoyé à firstmate"))
+    .calls == ["queuePrompt"]
     and (.queued | length) == 1
     and .queued[0].tag == "choice"
+    and .queued[0].queueKey == "projets:torre:torre-hebergement"
     and (.queued[0].prompt | test("Torre") and test("Hébergement") and test("chez Torre"))
     and .queued[0].data == {"projet": "torre", "decision": "torre-hebergement", "choix": "chez-torre", "nature": "decision"}
     and (.queued[0].data | has("question") | not) and (.queued[0].data | has("answer") | not)
-    and .cards[0].blocs[1].decisions[0].sent == true and .cards[0].blocs[1].decisions[0].refused == false
-    and (.cards[0].blocs[1].decisions[0].choices == ["chez-toi", "chez-torre"])
-  ' >/dev/null || fail "a choice button did not queue a plain prompt for firstmate: $out"
-  for mode in absent queue-only reject; do
-    out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' click=torre/torre-hebergement/chez-torre "lavish=$mode")
-    printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0] | .sent == false and .refused == true and (.message | contains("non transmis")) and (.message | contains("envoyé") | not)' >/dev/null || fail "unavailable delivery was confirmed: $out"
+    and (.cards[0].blocs[1].decisions[0] | .queued == true and .refused == false
+         and .chosen == ["chez-torre"] and .choices == ["chez-toi", "chez-torre"]
+         and (.message | test("en file") and test("Lavish") and test("rien n.est clos")))
+  ' >/dev/null || fail "a choice button did not stop at putting one prompt in the queue: $out"
+
+  # Changing his mind: the selection moves, the queued line is replaced under the
+  # same key, and the page says plainly that it cannot take a line back.
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' \
+    click=torre/torre-hebergement/chez-torre,torre/torre-hebergement/chez-toi)
+  printf '%s' "$out" | jq -e '
+    .calls == ["queuePrompt", "queuePrompt"]
+    and ([.queued[].queueKey] | unique) == ["projets:torre:torre-hebergement"]
+    and [.queued[].data.choix] == ["chez-torre", "chez-toi"]
+    and (.cards[0].blocs[1].decisions[0] | .chosen == ["chez-toi"]
+         and (.message | test("chez toi") and test("à la place de chez Torre")
+              and test("ne peut pas retirer")))
+  ' >/dev/null || fail "a second choice did not replace the queued one and name what the page cannot undo: $out"
+
+  for mode in absent no-queue queue-throws; do
+    out=$(render "$home" "$projects" '{"workers":0,"decisions":1,"subscriptions":null}' '[]' \
+      click=torre/torre-hebergement/chez-torre "lavish=$mode")
+    printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0]
+      | .queued == false and .refused == true
+      and (.message | test("non mis en file")) and (.message | test("^en file :") | not)' >/dev/null \
+      || fail "a page with no usable queue ($mode) still claimed the choice was kept: $out"
   done
-  pass "a choice button queues a prompt for firstmate and never a keyed answer that could close a task"
+  pass "a choice button only queues, replaces its own queued line, and refuses cleanly without Lavish"
+}
+
+# The captain pressed "c'est fait" on a decision whose page he could not open.
+# Every decision now says where its page is, or that there is none.
+test_a_decision_links_its_page_or_names_the_gap() {
+  local home out
+  home=$(make_home page-link)
+  out=$(render "$home" "$(one_decision_project http://ydeep.ts.net:4387/session/af61 2026-09-03)" \
+    '{"workers":0,"decisions":1,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0]
+    | .pageHref == "http://ydeep.ts.net:4387/session/af61"
+    and (.page | test("ouvrir la page"))' >/dev/null \
+    || fail "a decision with a recorded page did not offer a direct link: $out"
+  out=$(render "$home" "$(one_decision_project)" '{"workers":0,"decisions":1,"subscriptions":null}' '[]')
+  printf '%s' "$out" | jq -e '.cards[0].blocs[1].decisions[0]
+    | .pageHref == null and (.page | test("pas de page dédiée"))' >/dev/null \
+    || fail "a decision with no recorded page hid the gap instead of naming it: $out"
+  pass "a decision offers its page as a direct link, or says there is none"
+}
+
+# Selecting several calls and asking for ONE page that settles them together.
+test_selecting_decisions_queues_one_page_request_and_never_an_answer() {
+  local home out projects
+  home=$(make_home select)
+  projects=$(jq -n --argjson p "$(empty_project torre Torre)" \
+        --argjson a "$(decision torre-hebergement "Hébergement : chez toi ou chez Torre ?")" \
+        --argjson b "$(decision torre-meta "Brancher Meta maintenant ?")" \
+    '[ ($p | .missing_from_you = [$a, $b]) ]')
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":2,"subscriptions":null}' '[]' create=torre)
+  printf '%s' "$out" | jq -e '
+    .calls == [] and .queued == []
+    and (.cards[0].blocs[1].group | .disabled == true and .queued == false
+         and (.label | test("créer une page Lavish")))
+  ' >/dev/null || fail "the group request fired with nothing selected: $out"
+
+  out=$(render "$home" "$projects" '{"workers":0,"decisions":2,"subscriptions":null}' '[]' \
+    pick=torre/torre-hebergement,torre-meta create=torre)
+  printf '%s' "$out" | jq -e '
+    .calls == ["queuePrompt"]
+    and (.queued | length) == 1
+    and .queued[0].tag == "create-lavish"
+    and .queued[0].data == {"projet": "torre",
+        "decisions": ["torre-hebergement", "torre-meta"],
+        "titres": ["Hébergement : chez toi ou chez Torre ?", "Brancher Meta maintenant ?"]}
+    and (.queued[0].data | has("choix") | not)
+    and (.queued[0].data | has("question") | not) and (.queued[0].data | has("answer") | not)
+    and (.cards[0].blocs[1].group | .disabled == false and .queued == true
+         and (.note | test("demande en file") and test("2 décisions")))
+    and ([.cards[0].blocs[1].decisions[].queued] | any | not)
+  ' >/dev/null || fail "the selection did not queue exactly one page request: $out"
+  pass "a selection queues one page request that carries no answer and closes nothing"
+}
+
+# The second page takes the very same payload: no second reader, no second
+# vocabulary, and the same decision block.
+test_the_a_valider_page_groups_every_waiting_decision_oldest_first() {
+  local home out projects
+  home=$(make_home valider)
+  projects=$(jq -n --argjson t "$(empty_project torre Torre)" --argjson c "$(empty_project club Club)" \
+        --argjson y "$(empty_project ydeep YDEEP)" \
+        --argjson recent "$(decision club-recent "Question récente" "" 2026-09-08)" \
+        --argjson old "$(decision club-vieille "Question ancienne" http://localhost:4387/session/x 2026-09-01)" \
+        --argjson undated "$(decision club-sans-date "Question sans date")" \
+        --argjson torre "$(decision torre-un "Question de Torre")" '
+    [ ($t | .missing_from_you = [$torre]),
+      ($c | .missing_from_you = [$recent, $old, $undated]),
+      $y ]')
+  out=$(render "$home" "$projects" '{"workers":2,"decisions":4,"subscriptions":null}' '[]' page=a-valider)
+  printf '%s' "$out" | jq -e '
+    .error == ""
+    and ([.cards[].id]) == ["torre", "club"]
+    and ([.cards[] | .hidden] | any | not)
+    and ([.cards[1].blocs[0].decisions[].key]) == ["club-vieille", "club-recent", "club-sans-date"]
+    and (.cards[1].blocs[0].decisions[0].pageHref == "http://localhost:4387/session/x")
+    and (.badges | map({kind, value})) == [{"kind":"decisions","value":"4"}, {"kind":"workers","value":"2"}]
+  ' >/dev/null || fail "the a valider page did not group every waiting decision oldest first: $out"
+
+  out=$(render "$home" "$projects" '{"workers":2,"decisions":4,"subscriptions":null}' '[]' page=a-valider \
+    click=club/club-vieille/chez-torre)
+  printf '%s' "$out" | jq -e '
+    .calls == ["queuePrompt"]
+    and .queued[0].tag == "choice"
+    and .queued[0].data == {"projet": "club", "decision": "club-vieille", "choix": "chez-torre", "nature": "decision"}
+  ' >/dev/null || fail "the a valider page did not queue a choice the same way: $out"
+
+  out=$(render "$home" "[$(empty_project torre Torre)]" '{"workers":0,"decisions":0,"subscriptions":null}' '[]' page=a-valider)
+  printf '%s' "$out" | jq -e '.cards == [] and (.error == "")' >/dev/null \
+    || fail "the a valider page kept a project that waits on nothing: $out"
+  pass "the a valider page lists every waiting decision by project, oldest first, with the same buttons"
 }
 
 test_a_card_says_what_it_asks_and_admits_a_state_it_does_not_know() {
@@ -308,7 +439,10 @@ test_a_folded_block_keeps_no_body_until_its_toggle_is_clicked
 test_an_empty_project_renders_all_seven_blocks_with_empty_states
 test_the_rail_keeps_payload_order_and_shows_one_project_at_a_time
 test_doing_shows_three_rows_and_folds_the_rest_behind_voir_tout
-test_a_choice_button_queues_a_prompt_for_firstmate_without_a_keyed_answer
+test_a_choice_button_only_queues_and_never_sends_the_queue_itself
+test_a_decision_links_its_page_or_names_the_gap
+test_selecting_decisions_queues_one_page_request_and_never_an_answer
+test_the_a_valider_page_groups_every_waiting_decision_oldest_first
 test_filled_blocks_render_their_content_and_gaps
 test_unassigned_rows_get_their_own_rail_entry
 test_a_narrow_screen_keeps_only_il_manque_de_toi_open

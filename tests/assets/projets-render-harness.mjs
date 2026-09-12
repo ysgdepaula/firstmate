@@ -2,13 +2,17 @@
 // and print what the renderer actually produced, so page behavior is asserted
 // through the real template rather than by reading its source.
 //
-// Usage: node projets-render-harness.mjs <built-page.html> [click=<project-id>/<decision-key>/<choice-value>] [toggle=<project-id>/<bloc-number>] [width=<px>] [lavish=absent|queue-only|reject]
+// Usage: node projets-render-harness.mjs <built-page.html> [click=<project-id>/<decision-key>/<choice-value>]
+//          [pick=<project-id>/<decision-key>[,<decision-key>...]] [create=<project-id>]
+//          [toggle=<project-id>/<bloc-number>] [width=<px>] [lavish=absent|no-queue|queue-throws]
+// click may be repeated by joining choices with a comma:
+//   click=<project-id>/<key>/<value>,<project-id>/<key>/<value>
 // Prints one JSON document:
 //   { error, meta, notice, badges:[{kind,value,label,soft}],
 //     rail:[{id,name,count,on}],
 //     cards:[{id,name,brain,hidden,headline,deadline,team,
-//             blocs:[{num,title,open,empty,doing,scouts,decisions,items,creations,unlinked,cells,labels,more}],gaps:[...]}],
-//     queued:[{prompt,data,tag}], calls:[...] }
+//             blocs:[{num,title,open,empty,doing,scouts,decisions,items,creations,unlinked,cells,labels,more,group}],gaps:[...]}],
+//     queued:[{prompt,data,tag,queueKey}], calls:[...] }
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -31,6 +35,8 @@ class Node {
     this.parentNode = null;
     this.type = "";
     this.href = "";
+    this.checked = false;
+    this.disabled = false;
     this.listeners = {};
   }
   // Like the DOM, text set before children were appended stays in front of them.
@@ -42,7 +48,15 @@ class Node {
   setAttribute(k, v) { this.attributes[k] = v; }
   getAttribute(k) { return this.attributes[k]; }
   addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
-  click() { (this.listeners.click || []).forEach((fn) => fn({ preventDefault() {} })); }
+  click() {
+    if (this.disabled) return;
+    if (this.type === "checkbox") {
+      this.checked = !this.checked;
+      (this.listeners.change || []).forEach((fn) => fn({ target: this }));
+      return;
+    }
+    (this.listeners.click || []).forEach((fn) => fn({ preventDefault() {} }));
+  }
   all() {
     const out = [];
     const walk = (n) => { for (const c of n.children) { out.push(c); walk(c); } };
@@ -75,12 +89,20 @@ globalThis.document = {
 };
 const queued = [];
 const calls = [];
+// sendQueuedPrompts stays on the shim so a page that still reached for it would
+// be recorded in `calls`: the captain sends the queue himself.
+const lavish = {
+  queuePrompt: (prompt, ctx) => {
+    calls.push("queuePrompt");
+    if (opts.lavish === "queue-throws") throw new Error("offline");
+    queued.push({ prompt, data: ctx && ctx.data, tag: ctx && ctx.tag, queueKey: ctx && ctx.queueKey });
+  },
+  sendQueuedPrompts: () => { calls.push("sendQueuedPrompts"); },
+};
+if (opts.lavish === "no-queue") delete lavish.queuePrompt;
 globalThis.window = {
   innerWidth: Number(opts.width || 1400),
-  lavish: opts.lavish === "absent" ? undefined : {
-    queuePrompt: (prompt, ctx) => { calls.push("queuePrompt"); queued.push({ prompt, data: ctx && ctx.data, tag: ctx && ctx.tag }); },
-    sendQueuedPrompts: opts.lavish === "queue-only" ? undefined : () => { calls.push("sendQueuedPrompts"); if (opts.lavish === "reject") return Promise.reject(new Error("offline")); },
-  },
+  lavish: opts.lavish === "absent" ? undefined : lavish,
 };
 globalThis.TextEncoder = TextEncoder;
 
@@ -109,11 +131,26 @@ if (opts.toggle) {
   const btn = bloc && bloc.byClass("toggle")[0];
   if (btn) btn.click();
 }
-if (opts.click) {
-  const [pid, key, value] = opts.click.split("/");
+if (opts.pick) {
+  const [pid, keys] = opts.pick.split("/");
   const card = main.byAttr("data-project", pid)[0];
-  const li = card && card.byAttr("data-decision", key)[0];
-  const btn = li && li.byAttr("data-choice", value)[0];
+  for (const key of keys.split(",")) {
+    const box = card && card.byAttr("data-select", key)[0];
+    if (box) box.click();
+  }
+}
+if (opts.click) {
+  for (const one of opts.click.split(",")) {
+    const [pid, key, value] = one.split("/");
+    const card = main.byAttr("data-project", pid)[0];
+    const li = card && card.byAttr("data-decision", key)[0];
+    const btn = li && li.byAttr("data-choice", value)[0];
+    if (btn) btn.click();
+  }
+}
+if (opts.create) {
+  const card = main.byAttr("data-project", opts.create)[0];
+  const btn = card && card.byAttr("data-create-lavish", opts.create)[0];
   if (btn) btn.click();
 }
 
@@ -145,10 +182,28 @@ const cards = main.children.filter((c) => c.className.split(/\s+/).includes("car
         nature: li.attributes["data-nature"] ?? null,
         ask: li.byClass("ask")[0]?.textContent ?? null,
         choices: li.all().filter((c) => c.attributes["data-choice"]).map((c) => c.attributes["data-choice"]),
+        chosen: li.all().filter((c) => c.attributes["data-choice"] && c.className.split(/\s+/).includes("on"))
+          .map((c) => c.attributes["data-choice"]),
+        page: li.byClass("page")[0]?.textContent ?? null,
+        pageHref: li.byAttr("data-page", li.attributes["data-decision"])[0]?.href ?? null,
+        picked: li.all().filter((c) => c.attributes["data-select"]).map((c) => c.checked),
         message: li.byClass("ok")[0]?.textContent ?? "",
         refused: li.className.split(/\s+/).includes("refused"),
-        sent: li.className.split(/\s+/).includes("sent"),
+        queued: li.className.split(/\s+/).includes("queued"),
       })),
+      group: (() => {
+        const g = body.byClass("group")[0];
+        if (!g) return null;
+        const btn = g.all().find((c) => c.attributes["data-create-lavish"]);
+        return {
+          project: btn?.attributes["data-create-lavish"] ?? null,
+          label: btn?.textContent ?? "",
+          disabled: btn ? btn.disabled : null,
+          note: g.byClass("src")[0]?.textContent ?? "",
+          queued: g.className.split(/\s+/).includes("queued"),
+          refused: g.className.split(/\s+/).includes("refused"),
+        };
+      })(),
       items: body.byClass("tl").flatMap((ul) => ul.children.map((li) => li.textContent)),
       // a cell carries its column label first, then its value
       cells: body.all().filter((c) => c.tagName === "TD").map((td) => td.children.length ? td.children[td.children.length - 1].textContent : td.textContent),

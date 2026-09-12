@@ -31,3 +31,23 @@ def project_epoch:
           (($t.zone[1:3] | tonumber) * 3600 + ($t.zone[4:6] | tonumber) * 60)
           * (if $t.zone[:1] == "+" then 1 else -1 end) end)) catch null) // null
   end;
+# A DECISION PAGE is a review page this home serves itself: a Lavish session
+# (port 4387) or the stable front door (port 4390), on loopback or on the
+# captain's tailnet. That port pair is what distinguishes the page the captain
+# opens to decide from every other link a held call records (a PR, a document).
+# A home that moved its front door keeps its Lavish pages; "Stable page address"
+# in docs/configuration.md owns that port.
+def project_page_url:
+  if (project_url | not) then false
+  else ((try capture("^https?://(?<host>\\[[0-9A-Fa-f:]+\\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(?<port>[0-9]{1,5}))?(?:[/?#].*)?$"; "i") catch null) // null) as $u
+    | if $u == null then false
+      else ($u.host | ascii_downcase) as $h
+      | (($u.port // "") == "4387" or ($u.port // "") == "4390")
+        and ($h == "localhost" or $h == "127.0.0.1" or $h == "[::1]" or ($h | endswith(".ts.net")))
+      end
+  end;
+# Input: the candidate links recorded for one held call, best first. Output: the
+# first one that is a decision page, or null so the page can name the gap.
+def project_page:
+  [ (.[]? | select(type == "string") | select(project_page_url)) ] | .[0]
+  | if . == null then null else {url: .} end;

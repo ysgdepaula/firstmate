@@ -140,7 +140,7 @@ remote homes under one shared snapshot budget and may refresh the parent-side ca
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,title,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
-  decisions_open{id,key,verb,summary,title,owner,repo}, landed{id,what,artifact,owner,repo,date},
+  decisions_open{id,key,verb,summary,title,owner,repo,since,links}, landed{id,what,artifact,owner,repo,date},
   events{id,repo,owner,kind,what,url,at},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
@@ -161,6 +161,12 @@ Opt-in surfaces: --fields bodies|paths|actions|endpoints, --all-in-flight,
 Events default to 5 per task and 20 overall (FM_BEARINGS_EVENTS_PER_TASK /
 FM_BEARINGS_EVENTS), with bounded text; --all-events reveals all available events.
 Raise FM_BEARINGS_PR_LIMIT to expand per-repository open-PR results.
+decisions_open carries, per held captain call, the date it was put to the captain
+  (since, YYYY-MM-DD, null when the row records none) and links: up to five URLs
+  already on record for it, space separated and best first, the backlog row links
+  (its hold reason among them) before the ones in that task's latest recorded
+  status line. They are candidates with no policy attached: each consumer decides
+  which link it can use. links is the empty string when the call records none.
 EOF
 }
 
@@ -384,6 +390,19 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
     (.hold_reason // .blocked_reason // "-") as $base
     | (hold_note) as $note
     | if $note == null then $base else ($note + ": " + $base) end;
+  # Every URL one held captain call has on record, best first: the ones written
+  # on its backlog row (the hold reason among them) and then the ones in the
+  # latest recorded status line of that same task. Candidates only, with no
+  # policy about what they point at: each consumer decides which link it uses.
+  def call_links($row_links; $status_text):
+    [ ($row_links // [])[], (($status_text // "") | scan("https?://[^[:space:])\"<>]+")) ]
+    | map(select(type == "string" and length > 0 and length <= 500))
+    | reduce .[] as $u ([]; if index($u) == null then . + [$u] else . end)
+    | .[:5] | join(" ");
+  def hold_day:
+    if type != "string" then null
+    else ((capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")? // null) | if . == null then null else .d end)
+    end;
   def hold_summary($title; $base):
     (hold_note) as $note
     | if $note == null then (($title + ": " + $base) | trunc(90))
@@ -486,12 +505,16 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
             repo:(.repo // null),
             title:(.title // null),
             doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
+  | (.tasks // []) as $fleet_tasks
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and .hold_bucket != null)
          | select(($all_decisions == 1) or live_captain_call)
          | {id,key:.id,verb:"captain-hold",
-            summary:hold_summary(.title; .hold_reason),title:(.title // null),owner:"(main)",repo:(.repo // null)} ]
+            summary:hold_summary(.title; .hold_reason),title:(.title // null),owner:"(main)",repo:(.repo // null),
+            since:((.hold_set // .since) | hold_day),
+            links:call_links(.links;
+                             ([ $fleet_tasks[] | select(.id == $record.id) | .hints.last_event_text ] | .[0]))} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")
@@ -499,7 +522,8 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
               | {id:($m.id + "/" + .id),key,verb,
                  repo:(.repo // null),local_id:.id,
                  summary:hold_summary((.summary // .id);
-                                      (.reason // "captain decision pending")),owner:$m.id} ]
+                                      (.reason // "captain decision pending")),owner:$m.id,
+                 since:null, links:call_links([]; .reason)} ]
             + [ $m.queued[]?
                 | select($all_decisions == 1 and .hold_kind == "captain")
                 | select(.id as $id
@@ -510,7 +534,8 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
                 | {id:($m.id + "/" + .id),key:.id,verb:"captain-hold",
                    repo:(.repo // null),local_id:.id,
                    summary:hold_summary((.title // .id);
-                                        (.hold_reason // "captain decision pending")),owner:$m.id} ])[] ]) as $decisions_all
+                                        (.hold_reason // "captain decision pending")),owner:$m.id,
+                   since:null, links:call_links([]; .hold_reason)} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
          | select(.structured and projected_deferred_hold) ]

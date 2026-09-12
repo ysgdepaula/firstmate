@@ -4,8 +4,8 @@
 # The captain wants one address that never changes for the projets page and
 # for whatever else the base serves, reachable from every one of his machines
 # by the MagicDNS name, surviving a reboot. bin/fm-projets-serve.py is the
-# server (measured index at /, Lavish session redirect or an explicit unsent
-# fallback at /projets, streamed declared folders at /fichiers/);
+# server (measured index at /, Lavish session redirect or an explicit unqueued
+# fallback at /projets and /a-valider, streamed declared folders at /fichiers/);
 # this script runs it and owns its launchd user agent, which is private
 # material of the home, never tracked: the plist is written under
 # $FM_HOME/config/ and linked from ~/Library/LaunchAgents/ so launchd loads it
@@ -17,7 +17,7 @@
 #   fm-projets-serve.sh uninstall           stop it, unload it, remove the link and the plist
 #   fm-projets-serve.sh start|stop          load or unload the agent without touching the plist
 #   fm-projets-serve.sh status              launchd state plus one real request to the index
-#   fm-projets-serve.sh url                 print the stable base URL (index) and the page URL
+#   fm-projets-serve.sh url                 print the stable base URL (index) and each page URL
 # Each subcommand accepts -h/--help; other arguments exit 2 before service access.
 #
 # The port and the published host name come from config/projets-serve.json
@@ -213,7 +213,8 @@ command_status() {
 
 command_url() {
   printf 'base: %s\n' "$(base_url)"
-  printf 'page: %sprojets\n' "$(base_url)"
+  printf 'projets: %sprojets\n' "$(base_url)"
+  printf 'a-valider: %sa-valider\n' "$(base_url)"
 }
 
 serve_command=${1-}

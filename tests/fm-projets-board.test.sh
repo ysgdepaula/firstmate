@@ -86,9 +86,12 @@ write_snapshot() {  # <path>
   "secondmate_reconcile": [],
   "decisions_open": [
     {"id": "torre-hebergement", "key": "torre-hebergement", "verb": "captain-hold",
-     "summary": "Torre: hebergement: choisir", "title": "Torre : trancher l hebergement", "owner": "(main)", "repo": "agent-platform"},
+     "summary": "Torre: hebergement: choisir", "title": "Torre : trancher l hebergement", "owner": "(main)", "repo": "agent-platform",
+     "since": "2026-09-02",
+     "links": "https://github.com/acme/agent-platform/pull/70 http://ydeep-home-1.tailc2f695.ts.net:4387/session/af61"},
     {"id": "chef-domaine", "key": "chef-domaine", "verb": "captain-hold",
-     "summary": "Chef: basculer le domaine", "title": "Chef: basculer le domaine", "owner": "(main)", "repo": "agent-platform"},
+     "summary": "Chef: basculer le domaine", "title": "Chef: basculer le domaine", "owner": "(main)", "repo": "agent-platform",
+     "since": "2026-09-05", "links": "https://example.test/note"},
     {"id": "chef-rose", "key": "chef-rose", "verb": "captain-hold",
      "summary": "Chef: le rose", "title": "Chef: le rose des Anglades", "owner": "(main)", "repo": null},
     {"id": "sacem-relance", "key": "sacem-relance", "verb": "captain-hold",
@@ -355,6 +358,108 @@ test_render_refuses_malformed_payloads_before_touching_the_page() {
   pass "render refuses malformed payloads before touching the page"
 }
 
+# The captain pressed a choice on a decision whose page he had no way to open.
+# The link must come from what the held call already records, and only a review
+# page this home serves may be offered as one.
+test_compose_carries_the_recorded_decision_page_and_its_date() {
+  local home out
+  home=$(make_home page-link)
+  write_table "$home/config/projets.json"
+  out=$(compose "$home") || fail "compose failed"
+  printf '%s' "$out" | jq -e '
+    (.projects[] | select(.id == "torre") | .missing_from_you[] | select(.key == "torre-hebergement"))
+    | .page == {"url": "http://ydeep-home-1.tailc2f695.ts.net:4387/session/af61"}
+      and .since == "2026-09-02"
+  ' >/dev/null || fail "a held call did not carry the review page it records: $out"
+  printf '%s' "$out" | jq -e '
+    (.projects[] | select(.id == "club") | .missing_from_you[] | select(.key == "chef-domaine"))
+    | .page == null and .since == "2026-09-05"
+  ' >/dev/null || fail "an ordinary link was offered as a decision page: $out"
+  printf '%s' "$out" | jq -e '
+    [ .projects[].missing_from_you[] | select(.key == "chef-rose") | {page, since} ] == [{"page": null, "since": null}]
+  ' >/dev/null || fail "a call recording nothing did not leave the page and the date empty: $out"
+  pass "a decision carries the review page and the date its held call records, and only a real page"
+}
+
+test_render_refuses_a_decision_page_that_is_not_a_page_of_this_home() {
+  local home data rc out
+  home=$(make_home page-refusal)
+  write_table "$home/config/projets.json"
+  data="$home/payload.json"
+  for url in "https://github.com/acme/agent-platform/pull/70" "http://ydeep-home-1.tailc2f695.ts.net:9999/x" "http://evil.test:4387/x"; do
+    compose "$home" > "$data" || fail "compose failed"
+    jq --arg u "$url" '(.projects[] | select(.id == "torre") | .missing_from_you[0].page) = {url: $u}' \
+      "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+    set +e; out=$(run_board "$home" render "$data" 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "a decision page outside this home's own review pages was accepted: $url"
+  done
+  compose "$home" > "$data"
+  jq '(.projects[] | select(.id == "torre") | .missing_from_you[0].page) = {url: "http://localhost:4390/a-valider"}' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" render "$data" >/dev/null || fail "the front door address was refused as a decision page"
+  compose "$home" > "$data"
+  jq '(.projects[] | select(.id == "torre") | .missing_from_you[0].since) = "hier"' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; run_board "$home" render "$data" >/dev/null 2>&1; rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a decision date that is not a calendar day was accepted"
+  pass "render accepts only a review page of this home as a decision link, and only a real date"
+}
+
+# The second page is the same payload seen from the captain's queue rather than
+# from one project: same validation, its own path, its own Lavish source.
+test_the_a_valider_page_has_its_own_path_and_source() {
+  local home data out board sid projets_sid
+  home=$(make_home valider)
+  write_table "$home/config/projets.json"
+  data="$home/payload.json"
+  board="$home/.lavish/a-valider.html"
+  compose "$home" > "$data" || fail "compose failed"
+
+  [ "$(run_board "$home" path)" = "$home/.lavish/projets.html" ] \
+    || fail "the default page path moved"
+  [ "$(run_board "$home" path --page a-valider)" = "$board" ] \
+    || fail "the a valider page path is not the stable home-scoped location"
+  ! run_board "$home" path --page inconnue >/dev/null 2>&1 || fail "an unknown page name was accepted"
+
+  out=$(run_board "$home" build --page a-valider "$data") || fail "the a valider page did not build"
+  assert_contains "$out" "board: $board" "build did not report the a valider path: $out"
+  assert_contains "$out" "served: $board" "build did not establish the a valider Lavish session: $out"
+  assert_contains "$out" "armed: " "the first build did not arm the a valider source: $out"
+  assert_absent "$home/.lavish/projets.html" "building the a valider page also wrote the projects page"
+
+  sid=$(run_lavish_source_id "$home" "$board")
+  run_procevent "$home" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$sid" \
+    || fail "the a valider source is not registered after build"
+  ! run_hold "$home" binding "$sid" >/dev/null 2>&1 \
+    || fail "the a valider source carries a keyed-answer binding"
+
+  # one payload, two pages: each keeps its own identity and its own data slot
+  run_board "$home" render "$data" >/dev/null || fail "the projects page did not render from the same payload"
+  projets_sid=$(run_lavish_source_id "$home" "$home/.lavish/projets.html")
+  [ "$sid" != "$projets_sid" ] || fail "both pages share one source id"
+  for page in "$home/.lavish/projets.html" "$board"; do
+    extract_payload "$page" | jq -e '.schema == "fm-projets-board.v1"' >/dev/null \
+      || fail "$page does not carry a readable payload"
+  done
+  pass "the a valider page builds from the same payload at its own path and its own source"
+}
+
+test_render_refuses_a_template_without_a_decision_block_slot() {
+  local home data rc out
+  home=$(make_home badblock)
+  write_table "$home/config/projets.json"
+  data="$home/payload.json"
+  compose "$home" > "$data" || fail "compose failed"
+  printf '<html><body>\n__FM_PROJETS_BOARD_DATA__\n</body></html>\n' > "$home/no-block.html"
+  set +e
+  out=$(FM_PROJETS_BOARD_TEMPLATE="$home/no-block.html" run_board "$home" render "$data" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a template without the shared decision block was accepted"
+  assert_contains "$out" "decision-block slot" "the refusal did not say what was missing: $out"
+  pass "render refuses a template that carries no shared decision block"
+}
+
 test_render_round_trips_the_payload_and_neutralises_script_closers() {
   local home data board
   home=$(make_home roundtrip)
@@ -602,6 +707,10 @@ test_compose_fills_the_seven_blocks_from_table_and_fleet
 test_compose_without_a_table_uses_repos_and_says_so
 test_compose_refuses_a_malformed_table_and_measured_costs_replace_a_mesurer
 test_render_refuses_malformed_payloads_before_touching_the_page
+test_compose_carries_the_recorded_decision_page_and_its_date
+test_render_refuses_a_decision_page_that_is_not_a_page_of_this_home
+test_the_a_valider_page_has_its_own_path_and_source
+test_render_refuses_a_template_without_a_decision_block_slot
 test_render_round_trips_the_payload_and_neutralises_script_closers
 test_build_serves_then_arms_and_never_binds
 test_build_does_not_arm_when_session_start_fails
