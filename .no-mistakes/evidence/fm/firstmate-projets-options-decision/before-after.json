@@ -1,5 +1,6 @@
 {
-  "baseline": [
+  "scenario": "Same held tasks and correspondence table through the public compose interface",
+  "base": [
     {
       "key": "torre-relance",
       "question": "relancer le fournisseur",
@@ -23,7 +24,7 @@
     },
     {
       "key": "torre-domaine",
-      "question": "le domaine est basculé ?",
+      "question": "Le domaine de la boutique est basculé ?",
       "options": [
         {
           "value": "fait",
@@ -60,7 +61,7 @@
       "local_id": "torre-hebergement"
     }
   ],
-  "current": [
+  "target": [
     {
       "key": "torre-relance",
       "question": "relancer le fournisseur",
@@ -90,7 +91,7 @@
     },
     {
       "key": "torre-domaine",
-      "question": "le domaine est basculé ?",
+      "question": "Le domaine de la boutique est basculé ?",
       "nature": "etat",
       "ask": "je ne sais pas si c’est déjà fait",
       "options": [
@@ -130,6 +131,5 @@
       "owner": "(main)",
       "local_id": "torre-hebergement"
     }
-  ],
-  "comparison": "Identical held tasks and correspondence table: baseline offers c’est fait; current separates decision and unknown state while preserving configured hosting choices."
+  ]
 }

@@ -1,11 +1,15 @@
 {
-  "transport": "In-memory Lavish transport double; no live message sent. Chrome real pointer events.",
+  "surface": "Actual composed HTML rendered in Chrome",
+  "delivery": "Lavish queue/send API intercepted locally; no live message or agent interpretation tested",
+  "viewports": [
+    1400,
+    390
+  ],
   "cards": [
     {
       "key": "torre-relance",
       "nature": "decision",
-      "question": "relancer le fournisseuron le fait, ou on ne le fait pas ?",
-      "ask": "on le fait, ou on ne le fait pas ?",
+      "text": "relancer le fournisseur\non le fait, ou on ne le fait pas ?",
       "buttons": [
         "on y va",
         "on ne le fait pas",
@@ -16,8 +20,7 @@
     {
       "key": "torre-domaine",
       "nature": "etat",
-      "question": "le domaine est basculé ?je ne sais pas si c’est déjà fait",
-      "ask": "je ne sais pas si c’est déjà fait",
+      "text": "Le domaine de la boutique est basculé ?\nje ne sais pas si c’est déjà fait",
       "buttons": [
         "je l’ai fait",
         "pas encore",
@@ -27,8 +30,7 @@
     {
       "key": "torre-hebergement",
       "nature": "decision",
-      "question": "Hébergement : chez toi ou chez Torre ?",
-      "ask": null,
+      "text": "Hébergement : chez toi ou chez Torre ?",
       "buttons": [
         "chez toi",
         "chez Torre"
@@ -37,37 +39,109 @@
   ],
   "clicks": [
     {
-      "text": "Projets · Torre · relancer le fournisseur : on ne le fait pas",
-      "data": {
-        "projet": "torre",
-        "decision": "torre-relance",
-        "choix": "on-ne-le-fait-pas",
-        "nature": "decision"
+      "delivered": {
+        "text": "Projets · Torre · relancer le fournisseur : on ne le fait pas",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-relance",
+          "choix": "on-ne-le-fait-pas",
+          "nature": "decision"
+        }
       },
-      "tag": "choice",
-      "message": "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir."
+      "status": "envoyé à firstmate : on ne le fait pas. Firstmate te reposera la question en chat avant d'agir."
     },
     {
-      "text": "Projets · Torre · le domaine est basculé ? : pas encore",
-      "data": {
-        "projet": "torre",
-        "decision": "torre-domaine",
-        "choix": "pas-encore",
-        "nature": "etat"
+      "delivered": {
+        "text": "Projets · Torre · relancer le fournisseur : pas maintenant",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-relance",
+          "choix": "pas-maintenant",
+          "nature": "decision"
+        }
       },
-      "tag": "choice",
-      "message": "envoyé à firstmate : pas encore. Firstmate te reposera la question en chat avant d'agir."
+      "status": "envoyé à firstmate : pas maintenant. Firstmate te reposera la question en chat avant d'agir."
     },
     {
-      "text": "Projets · Torre · le domaine est basculé ? : je l’ai fait",
-      "data": {
-        "projet": "torre",
-        "decision": "torre-domaine",
-        "choix": "je-l-ai-fait",
-        "nature": "etat"
+      "delivered": {
+        "text": "Projets · Torre · relancer le fournisseur : on en parle",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-relance",
+          "choix": "on-en-parle",
+          "nature": "decision"
+        }
       },
-      "tag": "choice",
-      "message": "envoyé à firstmate : je l’ai fait. Firstmate te reposera la question en chat avant d'agir."
+      "status": "envoyé à firstmate : on en parle. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "delivered": {
+        "text": "Projets · Torre · relancer le fournisseur : on y va",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-relance",
+          "choix": "on-y-va",
+          "nature": "decision"
+        }
+      },
+      "status": "envoyé à firstmate : on y va. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "delivered": {
+        "text": "Projets · Torre · Le domaine de la boutique est basculé ? : je l’ai fait",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-domaine",
+          "choix": "je-l-ai-fait",
+          "nature": "etat"
+        }
+      },
+      "status": "envoyé à firstmate : je l’ai fait. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "delivered": {
+        "text": "Projets · Torre · Le domaine de la boutique est basculé ? : pas encore",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-domaine",
+          "choix": "pas-encore",
+          "nature": "etat"
+        }
+      },
+      "status": "envoyé à firstmate : pas encore. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "delivered": {
+        "text": "Projets · Torre · Le domaine de la boutique est basculé ? : on en parle",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-domaine",
+          "choix": "on-en-parle",
+          "nature": "etat"
+        }
+      },
+      "status": "envoyé à firstmate : on en parle. Firstmate te reposera la question en chat avant d'agir."
+    },
+    {
+      "delivered": {
+        "text": "Projets · Torre · Hébergement : chez toi ou chez Torre ? : chez Torre",
+        "tag": "choice",
+        "data": {
+          "projet": "torre",
+          "decision": "torre-hebergement",
+          "choix": "chez-torre",
+          "nature": "decision"
+        }
+      },
+      "status": "envoyé à firstmate : chez Torre. Firstmate te reposera la question en chat avant d'agir."
     }
-  ]
+  ],
+  "rejectedDelivery": "non transmis : l’envoi a échoué, réessaie dans Lavish"
 }
