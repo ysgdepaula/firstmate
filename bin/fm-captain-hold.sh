@@ -1575,12 +1575,6 @@ command_complete() {
   shift
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] && has_meta=1
-  if [ "$has_meta" = 1 ]; then
-    CAPTAIN_META_LOCK=$(fm_meta_lock_path "$meta") || fail "could not resolve task metadata lock"
-    fm_lock_acquire_wait "$CAPTAIN_META_LOCK"
-    CAPTAIN_META_LOCK_HELD=1
-    [ -f "$meta" ] || fail "task metadata disappeared while recording completion"
-  fi
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
   if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
@@ -1613,6 +1607,7 @@ command_complete() {
       fi
       if [ -n "$CAPTAIN_RESOLVED_ID" ] && [ "$page_urls" != '[]' ]; then
         acquire_task_control_lock "$CAPTAIN_RESOLVED_ID"
+        verify_hold_durable "$CAPTAIN_RESOLVED_ID"
         show=$(task_show "$CAPTAIN_RESOLVED_ID") || fail "cannot read held task $CAPTAIN_RESOLVED_ID"
         if [ "$(show_field_value "$show" state)" != done ] && [ "$(show_field_value "$show" hold_kind)" = captain ]; then
           reason=$(show_field_value "$show" hold_reason)
@@ -1633,6 +1628,26 @@ command_complete() {
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
   fi
+
+  acquire_task_control_lock "$origin"
+  has_meta=0
+  previous=''
+  if [ -f "$meta" ]; then
+    CAPTAIN_META_LOCK=$(fm_meta_lock_path "$meta") || fail "could not resolve task metadata lock"
+    fm_lock_acquire_wait "$CAPTAIN_META_LOCK"
+    CAPTAIN_META_LOCK_HELD=1
+    [ -f "$meta" ] || fail "task metadata disappeared while recording completion"
+    has_meta=1
+    previous=$(meta_value "$meta" decision_keys)
+  fi
+  origin_exists_here "$origin" || fail "origin $origin is no longer owned by the active home $FM_HOME"
+  keys=$(sorted_key_union "$previous" "$supplied")
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    verify_inventory_entry "$origin" "$entry"
+  done <<EOF
+$(printf '%s\n' "$keys" | tr ',' '\n')
+EOF
 
   status_file="$STATE/$origin.status"
   raw_open=$(status_open_decisions "$status_file")

@@ -2977,12 +2977,143 @@ EOF
   pass "completion retains review URLs in the held task across retries and status cleanup"
 }
 
+test_completion_keeps_control_before_metadata() {
+  local home id
+  home=$(make_home completion-locks)
+  id=sample-locks
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la suite" --reason choisir --repo sample >/dev/null || fail "could not hold origin"
+  run_captain "$home" hold retained-call --title "Autre choix" --reason choisir --repo sample >/dev/null || fail "could not hold retained call"
+  printf 'paused: http://localhost:4387/session/locks\nneeds-decision [key=route]: choisir\n' > "$home/state/$id.status"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = hold ] && [ "${2:-}" = --help ]; then
+  touch "$FM_HOME/completion-ready"
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  cat > "$home/cleanup-locks.sh" <<'SH'
+#!/usr/bin/env bash
+set -e
+. "$1/bin/fm-wake-lib.sh"
+control="$FM_HOME/state/.control-$2.lock"
+meta="$FM_HOME/state/$2.meta"
+meta_lock=$(fm_meta_lock_path "$meta")
+fm_lock_acquire_wait "$control"
+trap 'fm_lock_release "$meta_lock"; fm_lock_release "$control"' EXIT
+printf 'ready\n'
+read -r _
+fm_lock_acquire_wait_bounded "$meta_lock" 3
+printf 'decision_keys=retained-call\n' >> "$meta"
+SH
+  python3 - "$ROOT" "$home" "$id" "$TASKS_AXI_BIN" <<'PYLOCK'
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+root, home, task, tasks = sys.argv[1:]
+env = dict(os.environ, FM_HOME=home, FM_STATE_OVERRIDE=home + '/state',
+           FM_DATA_OVERRIDE=home + '/data', FM_CONFIG_OVERRIDE=home + '/config',
+           HOME=home, REAL_TASKS_AXI=tasks, PATH=home + '/fakebin:' + os.environ['PATH'])
+processes = []
+try:
+    cleanup = subprocess.Popen(['bash', home + '/cleanup-locks.sh', root, task], env=env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    processes.append(cleanup)
+    assert cleanup.stdout.readline().strip() == 'ready'
+    complete = subprocess.Popen([root + '/bin/fm-captain-hold.sh', 'complete', task, task],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+    processes.append(complete)
+    deadline = time.monotonic() + 10
+    while not Path(home, 'completion-ready').exists():
+        assert complete.poll() is None and time.monotonic() < deadline, 'completion never reached inventory validation'
+        time.sleep(.02)
+    cleanup.stdin.write('continue\n')
+    cleanup.stdin.flush()
+    _, errors = cleanup.communicate(timeout=8)
+    assert cleanup.returncode == 0, 'cleanup could not acquire metadata while completion waited for control: ' + errors
+    _, errors = complete.communicate(timeout=15)
+    assert complete.returncode == 0, 'completion failed after concurrent metadata update: ' + errors
+finally:
+    for process in processes:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+PYLOCK
+  [ "$?" = 0 ] || fail "completion and cleanup did not obey the shared lock order"
+  run_captain "$home" verify "$id" >/dev/null || fail "concurrent completion inventory is not valid"
+  assert_grep 'decision_keys=retained-call,sample-locks' "$home/state/$id.meta" "completion lost the inventory written while waiting"
+  pass "completion permits control-then-metadata cleanup and rereads concurrent inventory"
+}
+
+test_ipv6_review_pages_survive_extraction_and_completion() {
+  local home id phase
+  home=$(make_home ipv6-pages)
+  id=ipv6-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold IPv6 review"
+  cat > "$home/state/$id.status" <<'EOF'
+paused: [revue](http://[::1]:4387/session/abc), `http://[::1]:4387/session/abc`.
+needs-decision [key=route]: choisir
+EOF
+  for phase in status durable; do
+    if [ "$phase" = durable ]; then
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "IPv6 page completion failed"
+      rm "$home/state/$id.status"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "IPv6 snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "ipv6-review") | .links == "http://[::1]:4387/session/abc"' "$home/snapshot.json" >/dev/null || fail "IPv6 authority brackets were lost ($phase)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "IPv6 composition failed"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "IPv6 render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "ipv6-review") | .pageHref == "http://[::1]:4387/session/abc"' "$home/rendered.json" >/dev/null || fail "IPv6 page link is absent ($phase)"
+  done
+  pass "IPv6 review URLs retain authority brackets in snapshots and durable completion"
+}
+
+test_newest_status_page_precedes_older_fallbacks() {
+  local home id phase
+  home=$(make_home newest-pages)
+  id=newest-review
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --title "Choisir la revue" --reason choisir --repo sample >/dev/null || fail "could not hold versioned review"
+  cat > "$home/state/$id.status" <<'EOF'
+paused: http://localhost:4387/session/draft
+done: http://localhost:4387/session/final
+needs-decision [key=route]: choisir
+EOF
+  for phase in status durable; do
+    if [ "$phase" = durable ]; then
+      run_captain "$home" complete "$id" "$id" >/dev/null || fail "versioned page completion failed"
+      rm "$home/state/$id.status"
+    fi
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" "$BEARINGS" --json --all-decisions > "$home/snapshot.json" || fail "versioned snapshot failed"
+    jq -e '.decisions_open[] | select(.id == "newest-review") | (.links | split(" ")) == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$home/snapshot.json" >/dev/null || fail "status page priority was reversed ($phase)"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$home/snapshot.json" --no-quota > "$home/page.json" || fail "versioned composition failed"
+    FM_HOME="$home" "$ROOT/bin/fm-projets-board.sh" render "$home/page.json" --page a-valider >/dev/null || fail "versioned render failed"
+    node "$ROOT/tests/assets/projets-render-harness.mjs" "$home/.lavish/a-valider.html" > "$home/rendered.json"
+    jq -e '.cards[].blocs[].decisions[] | select(.key == "newest-review") | .pageHref == "http://localhost:4387/session/final"' "$home/rendered.json" >/dev/null || fail "older draft outranked final review ($phase)"
+  done
+  pass "newest status page wins while older URLs survive as completion fallbacks"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
   test_completion_preserves_review_pages_after_status_cleanup
+  test_completion_keeps_control_before_metadata
+  test_ipv6_review_pages_survive_extraction_and_completion
+  test_newest_status_page_precedes_older_fallbacks
   exit 0
 fi
 
 test_completion_preserves_review_pages_after_status_cleanup
+test_completion_keeps_control_before_metadata
+test_ipv6_review_pages_survive_extraction_and_completion
+test_newest_status_page_precedes_older_fallbacks
 test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
