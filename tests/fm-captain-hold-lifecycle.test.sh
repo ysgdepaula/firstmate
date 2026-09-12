@@ -3283,7 +3283,52 @@ test_partial_completion_leaves_unowned_calls_without_pages() {
   pass "partial completion leaves an unassociated call without a page through cleanup"
 }
 
+test_own_status_page_updates_before_recompletion() {
+  local home viewer owner id row_id page before after
+  for owner in main mate; do
+    home=$(make_home "status-update-$owner")
+    id=status-review
+    write_origin_meta "$home" "$id"
+    run_captain "$home" hold "$id" --title 'Choisir la revue' --reason choisir --repo sample >/dev/null || fail "could not hold versioned call"
+    printf 'done: http://localhost:4387/session/draft\n' > "$home/state/$id.status"
+    run_captain "$home" complete "$id" "$id" >/dev/null || fail "could not persist draft"
+    before=$(tasks_in "$home" show "$id" --full)
+    assert_contains "$before" 'http://localhost:4387/session/draft' "draft was not persisted"
+    assert_not_contains "$before" 'http://localhost:4387/session/final' "final was already persisted"
+    printf 'done: http://localhost:4387/session/final\n' >> "$home/state/$id.status"
+    viewer=$home
+    row_id=$id
+    if [ "$owner" = mate ]; then
+      viewer=$(make_home status-update-parent)
+      mkdir -p "$home/bin"
+      printf '# Synthetic secondmate home\n' > "$home/AGENTS.md"
+      printf 'sample-mate\n' > "$home/.fm-secondmate-home"
+      printf -- '- sample-mate - synthetic scope (home: %s; scope: sample reviews; projects: sample; added 2026-07-14)\n' \
+        "$home" > "$viewer/data/secondmates.md"
+      fm_write_secondmate_meta "$viewer/state/sample-mate.meta" "$home" "firstmate:fm-sample-mate" sample
+      PATH="$home/fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null || fail "could not refresh secondmate status page"
+      jq -e '(.decisions_open[] | select(.id == "status-review") | .links == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"])
+        and (.queued[] | select(.id == "status-review") | .links == ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"])' "$home/state/home-summary.json" >/dev/null || fail "secondmate summary did not prefer its new status page"
+      row_id="sample-mate/$id"
+    fi
+    PATH="$viewer/fakebin:$PATH" FM_HOME="$viewer" "$BEARINGS" --json --all-decisions > "$viewer/snapshot.json" || fail "could not rebuild status-page snapshot"
+    jq -e --arg id "$row_id" '.decisions_open[] | select(.id == $id) | (.links | split(" ")) ==
+      ["http://localhost:4387/session/final", "http://localhost:4387/session/draft"]' "$viewer/snapshot.json" >/dev/null || fail "persisted draft outranked final status ($owner)"
+    FM_HOME="$viewer" "$ROOT/bin/fm-projets-board.sh" compose --snapshot "$viewer/snapshot.json" --no-quota > "$viewer/page.json" || fail "status-page composition failed"
+    for page in projets a-valider; do
+      FM_HOME="$viewer" "$ROOT/bin/fm-projets-board.sh" render "$viewer/page.json" --page "$page" >/dev/null || fail "status-page rendering failed"
+      node "$ROOT/tests/assets/projets-render-harness.mjs" "$viewer/.lavish/$page.html" > "$viewer/rendered.json" || fail "status-page renderer failed"
+      jq -e --arg key "${row_id//\//__}" '.cards[].blocs[].decisions[] | select(.key == $key)
+        | .pageHref == "http://localhost:4387/session/final"' "$viewer/rendered.json" >/dev/null || fail "dashboard opened draft before recompletion ($owner, $page)"
+    done
+    after=$(tasks_in "$home" show "$id" --full)
+    [ "$before" = "$after" ] || fail "snapshot changed persisted links ($owner)"
+  done
+  pass "main and secondmate dashboards prefer new own-status pages before recompletion"
+}
+
 if [ "${1:-}" = --completion-pages ]; then
+  test_own_status_page_updates_before_recompletion
   test_partial_completion_leaves_unowned_calls_without_pages
   test_completion_scopes_pages_to_each_call
   test_completion_promotes_only_associated_status_pages
@@ -3297,6 +3342,7 @@ if [ "${1:-}" = --completion-pages ]; then
   exit 0
 fi
 
+test_own_status_page_updates_before_recompletion
 test_partial_completion_leaves_unowned_calls_without_pages
 test_completion_scopes_pages_to_each_call
 test_completion_promotes_only_associated_status_pages

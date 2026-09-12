@@ -508,8 +508,8 @@ MODEL=$(printf '%s' "$SNAP" | jq -L "$SCRIPT_DIR" \
          | {id,key:.id,verb:"captain-hold",
             summary:hold_summary(.title; .hold_reason),title:(.title // null),owner:"(main)",repo:(.repo // null),
             since:((.hold_set // .since) | hold_day),
-            links:call_links((.links // []) +
-                             ([ $fleet_tasks[] | select(.id == $record.id) | .links[]? ]); null)} ]
+            links:call_links(([ $fleet_tasks[] | select(.id == $record.id) | .links[]? ]) +
+                             (.links // []); null)} ]
      + [ (.secondmate_current.records // [])[] as $m
          | ([ $m.decisions_open[]?
               | select(.source == "backlog" and .verb == "captain-hold")

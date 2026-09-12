@@ -1016,7 +1016,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
               (.state == "in_flight" and .current_role == "held"
                and (.id as $id
                     | any($tasks[]; .id == $id and .current_state.state == "working") | not))))
-         | .links = call_link_candidates((.links // []) + ($status_by_id[.id] // []); null) ]) as $queued_all
+         | .links = call_link_candidates(($status_by_id[.id] // []) + (.links // []); null) ]) as $queued_all
     | ([ $queued_all[]
          | select(.captain_actionable == true)
          | {id,repo,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),

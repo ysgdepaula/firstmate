@@ -1180,8 +1180,7 @@ EOF
 
 # A held captain call carries the URLs already on record for it, so a page
 # built from this projection can offer the captain a direct link instead of
-# asking him to answer something he cannot open. Candidates only: the row links
-# first (the hold reason among them), then the latest status line of that task.
+# asking him to answer something he cannot open.
 test_a_captain_call_carries_its_recorded_links_and_date() {
   local home fakebin json
   home=$(make_home call-links)
@@ -1209,7 +1208,7 @@ EOF
     (.decisions_open[] | select(.id == "linked-call")
      | .links == "http://localhost:4387/session/abc" and .since == "2026-07-09")
     and (.decisions_open[] | select(.id == "status-call")
-         | (.links | split(" ")) == ["https://example.test/doc1", "https://example.test/doc2", "https://example.test/doc3", "https://example.test/doc4", "https://example.test/doc5", "http://ydeep.ts.net:4387/session/zed"] and .since == null)
+         | (.links | split(" ")) == ["http://ydeep.ts.net:4387/session/zed", "https://example.test/doc1", "https://example.test/doc2", "https://example.test/doc3", "https://example.test/doc4", "https://example.test/doc5"] and .since == null)
     and (.decisions_open[] | select(.id == "bare-call") | .links == "" and .since == null)
     and (.decisions_open[] | select(.id == "clipped-call") | .links == "")
   ' >/dev/null || fail "a held captain call did not carry the links and date it records: $json"
