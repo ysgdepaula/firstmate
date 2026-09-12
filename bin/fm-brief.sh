@@ -427,10 +427,10 @@ case "$MODE" in
     # The worker owns the push in this mode, so it is the one that has to take
     # the machine-wide publication lock. Under no-mistakes the pipeline owns the
     # push instead, and under local-only nothing is pushed at all.
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.
+    RULE1="1. Never push to the default branch (push only your \`fm/$ID\` branch). Never merge a PR.
    Push through the machine-wide publication lock so your push cannot interleave with another
-   worker'"'"'s: `'"$FM_ROOT"'/bin/fm-push-lock.sh -- git push -u origin fm/'"$ID"'`. It waits for other
-   publications taking this same lock; see the `bin/fm-push-lock.sh` header for what does and does not participate.'
+   worker's: \`$FM_ROOT/bin/fm-push-lock.sh -- git push -u origin fm/$ID\`. It waits for other
+   publications taking this same lock; see the \`bin/fm-push-lock.sh\` header for what does and does not participate."
     ;;
   local-only)
     SETUP2=""
